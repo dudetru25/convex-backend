@@ -1047,12 +1047,32 @@ pub struct StartPushRequest {
 
 impl StartPushRequest {
     pub fn into_project_config(self) -> anyhow::Result<ProjectConfig> {
+        let mut app_def: AppDefinitionConfig = self.app_definition.try_into()?;
+
+        // When a namespace is present, move the primary schema into
+        // additional_schemas with the namespace prefix. This routes the schema
+        // through the composition pipeline so tables get prefixed (e.g.
+        // Catalog_products) and multiple namespaced projects can coexist.
+        if let Some(ref namespace) = self.namespace {
+            if let Some(schema_module) = app_def.schema.take() {
+                app_def.additional_schemas.push(SchemaSource {
+                    namespace: namespace.clone(),
+                    module: schema_module,
+                    allow_override: false,
+                });
+                tracing::info!(
+                    "Routed schema to additional_schemas under namespace '{}'",
+                    namespace
+                );
+            }
+        }
+
         Ok(ProjectConfig {
             config: ConfigMetadata {
                 functions: self.functions,
                 auth_info: vec![],
             },
-            app_definition: self.app_definition.try_into()?,
+            app_definition: app_def,
             component_definitions: self
                 .component_definitions
                 .into_iter()
