@@ -79,6 +79,9 @@ export type PushOptions = {
   pushAllModules: boolean;
   logManager?: LogManager | undefined;
   largeIndexDeletionCheck: LargeIndexDeletionCheck;
+  // Multi-project deployment options
+  namespace?: string | undefined;
+  projectId?: string | undefined;
 };
 
 export async function runCodegen(
@@ -246,6 +249,8 @@ async function startComponentsPushAndCodegen(
     debugNodeApis: boolean;
     largeIndexDeletionCheck: LargeIndexDeletionCheck;
     codegenOnlyThisComponent?: string | undefined;
+    namespace?: string | undefined;
+    projectId?: string | undefined;
   },
 ): Promise<StartPushResponse | null> {
   const convexDir = await getFunctionsDirectoryPath(ctx);
@@ -418,6 +423,7 @@ async function startComponentsPushAndCodegen(
   const appDefinition: AppDefinitionConfig = {
     ...appDefinitionSpecWithoutImpls,
     schema: appImplementation.schema,
+    additionalSchemas: [],
     changedModules,
     unchangedModuleHashes,
     udfServerVersion,
@@ -438,9 +444,33 @@ async function startComponentsPushAndCodegen(
     componentDefinitions.push({
       ...componentDefinition,
       ...impl,
+      additionalSchemas: [],
       udfServerVersion,
     });
   }
+  // Resolve namespace: CLI flag takes priority, then convex.json config
+  const namespace = options.namespace ?? projectConfig.namespace;
+  const projectId =
+    options.projectId ?? projectConfig.projectId ?? (namespace ? projectConfig.functions : undefined);
+
+  // Validate namespace if provided
+  if (namespace) {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(namespace)) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage:
+          `Invalid namespace "${namespace}". Namespaces must start with a letter, ` +
+          `contain only letters, digits, and underscores, and be at most 64 characters.`,
+      });
+    }
+    logMessage(
+      chalkStderr.cyan(
+        `Deploying as namespace "${namespace}" (multi-project mode)`,
+      ),
+    );
+  }
+
   const startPushRequest = {
     adminKey: options.adminKey,
     dryRun: options.dryRun,
@@ -449,6 +479,9 @@ async function startComponentsPushAndCodegen(
     componentDefinitions,
     nodeDependencies: appImplementation.externalNodeDependencies,
     nodeVersion: projectConfig.node.nodeVersion,
+    // Multi-project deployment fields
+    ...(namespace ? { namespace } : {}),
+    ...(projectId ? { projectId } : {}),
   };
   if (options.writePushRequest) {
     const pushRequestPath = path.resolve(options.writePushRequest);

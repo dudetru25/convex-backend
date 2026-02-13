@@ -215,6 +215,26 @@ pub async fn start_push(
         req.admin_key.clone(),
     )
     .await?;
+
+    // Register namespace ownership when multi-project fields are present.
+    // Same project_id on an existing namespace succeeds (multi-dev friendly).
+    // Different project_id on an existing namespace is rejected.
+    if let (Some(namespace), Some(project_id)) = (&req.namespace, &req.project_id) {
+        st.project_registry
+            .register_namespace(namespace.clone(), project_id.clone())
+            .map_err(|e| {
+                anyhow::Error::new(ErrorMetadata::bad_request(
+                    "NamespaceConflict",
+                    e.to_string(),
+                ))
+            })?;
+        tracing::info!(
+            "Namespace '{}' registered for project '{}'",
+            namespace,
+            project_id
+        );
+    }
+
     let config = req.into_project_config().map_err(|e| {
         anyhow::Error::new(ErrorMetadata::bad_request("InvalidConfig", e.to_string()))
     })?;

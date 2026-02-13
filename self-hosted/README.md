@@ -124,6 +124,7 @@ e.g., instead of setting `CONVEX_DEPLOY_KEY`, you'll need to set
 - [Upgrading Convex self-hosted version](./advanced/upgrading.md)
 - [Benchmarking](./advanced/benchmarking.md)
 - [Advanced tuning with knobs](./advanced/knobs.md)
+- [Multi-project deployments](./advanced/multi_project.md)
 
 # Limitations
 

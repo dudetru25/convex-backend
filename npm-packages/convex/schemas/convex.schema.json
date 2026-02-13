@@ -184,6 +184,15 @@
     },
     "authKit": {
       "$ref": "#/definitions/authKitConfig"
+    },
+    "namespace": {
+      "type": "string",
+      "description": "Deploy as a namespaced additional project. When set, all tables from this project will be prefixed with the namespace (e.g. namespace 'ECommerce' creates tables like 'ECommerce_users'). Omit to deploy as the primary standalone project.",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+    },
+    "projectId": {
+      "type": "string",
+      "description": "Project identifier for namespace ownership in multi-project deployments. The first project to claim a namespace owns it. Defaults to the functions directory name if namespace is set."
     }
   },
   "additionalProperties": false

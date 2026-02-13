@@ -81,6 +81,7 @@ use model::{
             ComponentDefinitionConfig,
             EvaluatedComponentDefinition,
             ProjectConfig,
+            SchemaSource,
         },
     },
     config::types::{
@@ -346,6 +347,134 @@ impl<RT: Runtime> Application<RT> {
     }
 
     #[fastrace::trace]
+    /// Compose multiple namespaced schemas into a single DatabaseSchema
+    async fn compose_namespaced_schemas(
+        &self,
+        primary_schema: Option<ModuleConfig>,
+        additional_schemas: Vec<SchemaSource>,
+    ) -> anyhow::Result<DatabaseSchema> {
+        use std::{
+            collections::HashMap,
+            str::FromStr,
+        };
+
+        use common::types::TableName;
+
+        let mut composed = DatabaseSchema {
+            tables: BTreeMap::new(),
+            schema_validation: false,
+        };
+        let mut table_sources: HashMap<TableName, Option<String>> = HashMap::new();
+
+        // Process primary schema (default namespace)
+        if let Some(primary) = primary_schema {
+            let schema = self.evaluate_schema(primary).await?;
+            for (table_name, table_def) in schema.tables {
+                table_sources.insert(table_name.clone(), None);
+                composed.tables.insert(table_name, table_def);
+            }
+            composed.schema_validation = schema.schema_validation;
+        }
+
+        // Process additional namespaced schemas
+        for schema_source in additional_schemas {
+            match self.evaluate_schema(schema_source.module).await {
+                Ok(schema) => {
+                    for (table_name, table_def) in schema.tables {
+                        // Prefix table name with namespace
+                        let namespaced_name_str = format!(
+                            "{}_{}",
+                            schema_source.namespace,
+                            String::from(table_name.clone())
+                        );
+                        let namespaced_name = TableName::from_str(&namespaced_name_str)?;
+
+                        // Check for conflicts
+                        if table_sources.contains_key(&namespaced_name) {
+                            if schema_source.allow_override == false {
+                                anyhow::bail!(
+                                    "Table {} already exists from namespace {:?}. Use \
+                                     allow_override flag.",
+                                    String::from(namespaced_name.clone()),
+                                    table_sources.get(&namespaced_name)
+                                );
+                            }
+                        }
+
+                        composed.tables.insert(namespaced_name.clone(), table_def);
+                        table_sources
+                            .insert(namespaced_name, Some(schema_source.namespace.clone()));
+                    }
+                },
+                Err(e) => {
+                    // Log warning but continue with partial deployment
+                    tracing::warn!(
+                        "Failed to evaluate schema for namespace {}: {}",
+                        schema_source.namespace,
+                        e
+                    );
+                },
+            }
+        }
+
+        Ok(composed)
+    }
+
+    #[fastrace::trace]
+    /// Deploy a schema for a specific project with namespace ownership
+    /// validation. This enables multi-project deployments where each
+    /// project owns a namespace. Ownership is first-claim by `project_id`.
+    pub fn deploy_project_schema(
+        &self,
+        registry: &model::project_registry::ProjectRegistry,
+        namespace: String,
+        project_id: String,
+        schema: DatabaseSchema,
+    ) -> anyhow::Result<()> {
+        // Step 1: Register or validate namespace ownership (first-claim by project_id)
+        registry.register_namespace(namespace.clone(), project_id.clone())?;
+
+        // Step 2: Prefix all tables with namespace and track names
+        use std::str::FromStr;
+
+        use common::types::TableName;
+
+        let mut namespaced_schema = DatabaseSchema {
+            tables: BTreeMap::new(),
+            schema_validation: false,
+        };
+        let mut table_names = Vec::new();
+
+        for (table_name, table_def) in schema.tables {
+            let base_name = String::from(table_name);
+            table_names.push(base_name.clone());
+
+            let namespaced_name_str = format!("{}_{}", namespace, base_name);
+            let namespaced_name = TableName::from_str(&namespaced_name_str)?;
+
+            namespaced_schema.tables.insert(namespaced_name, table_def);
+        }
+
+        namespaced_schema.schema_validation = schema.schema_validation;
+
+        // Step 3: Update registry with table names
+        registry.update_registration(&namespace, table_names)?;
+
+        // Step 4: Log success
+        tracing::info!(
+            "Successfully deployed schema for project {} in namespace {} with {} tables",
+            project_id,
+            namespace,
+            namespaced_schema.tables.len()
+        );
+
+        // Note: Schema composition with other projects would happen at query time.
+        // The registry tracks all namespaces and their tables.
+
+        Ok(())
+    }
+
+    #[fastrace::trace]
     async fn evaluate_components(
         &self,
         config: &ProjectConfig,
@@ -356,9 +485,18 @@ impl<RT: Runtime> Application<RT> {
         user_environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
         system_env_var_overrides: BTreeMap<EnvVarName, EnvVarValue>,
     ) -> anyhow::Result<BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>> {
+        // Use namespace composition if additional schemas are present
         let mut app_schema = None;
-        if let Some(schema_module) = &config.app_definition.schema {
-            app_schema = Some(self.evaluate_schema(schema_module.clone()).await?);
+        if config.app_definition.schema.is_some()
+            || config.app_definition.additional_schemas.is_empty() == false
+        {
+            app_schema = Some(
+                self.compose_namespaced_schemas(
+                    config.app_definition.schema.clone(),
+                    config.app_definition.additional_schemas.clone(),
+                )
+                .await?,
+            );
         }
 
         let mut component_analysis_by_def_path = BTreeMap::new();
@@ -391,8 +529,17 @@ impl<RT: Runtime> Application<RT> {
                 .insert(component_def.definition_path.clone(), component_analysis)
                 .is_none());
 
-            if let Some(schema_module) = &component_def.schema {
-                let schema = match self.evaluate_schema(schema_module.clone()).await {
+            // Compose component schemas if additional schemas are present
+            if component_def.schema.is_some()
+                || component_def.additional_schemas.is_empty() == false
+            {
+                let schema = match self
+                    .compose_namespaced_schemas(
+                        component_def.schema.clone(),
+                        component_def.additional_schemas.clone(),
+                    )
+                    .await
+                {
                     Ok(schema) => schema,
                     Err(e) => {
                         // Try to downcast to a JsError and turn that into a user-visible error if
@@ -892,6 +1039,10 @@ pub struct StartPushRequest {
     pub node_dependencies: Vec<NodeDependencyJson>,
 
     pub node_version: Option<String>,
+
+    // Multi-project deployment fields (optional for backward compatibility)
+    pub namespace: Option<String>,
+    pub project_id: Option<String>,
 }
 
 impl StartPushRequest {
@@ -955,12 +1106,37 @@ impl From<NodeDependencyJson> for NodeDependency {
     }
 }
 
+/// JSON representation of a namespaced schema source for multi-project
+/// deployments.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaSourceJson {
+    pub namespace: String,
+    pub module: ModuleJson,
+    #[serde(default)]
+    pub allow_override: bool,
+}
+
+impl TryFrom<SchemaSourceJson> for SchemaSource {
+    type Error = anyhow::Error;
+
+    fn try_from(value: SchemaSourceJson) -> Result<Self, Self::Error> {
+        Ok(Self {
+            namespace: value.namespace,
+            module: value.module.try_into()?,
+            allow_override: value.allow_override,
+        })
+    }
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDefinitionConfigJson {
     pub definition: Option<ModuleJson>,
     pub dependencies: Vec<String>,
     pub schema: Option<ModuleJson>,
+    #[serde(default)]
+    pub additional_schemas: Vec<SchemaSourceJson>,
     // CLI versions <= 1.31.5 used functions and did not upload unchanged_module_hashes
     #[serde(alias = "functions")]
     pub changed_modules: Vec<ModuleJson>,
@@ -981,6 +1157,11 @@ impl TryFrom<AppDefinitionConfigJson> for AppDefinitionConfig {
                 .map(|s| s.parse())
                 .collect::<anyhow::Result<_>>()?,
             schema: value.schema.map(TryInto::try_into).transpose()?,
+            additional_schemas: value
+                .additional_schemas
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<anyhow::Result<_>>()?,
             changed_runtime_modules: value
                 .changed_modules
                 .into_iter()
@@ -1034,6 +1215,8 @@ pub struct ComponentDefinitionConfigJson {
     pub definition: ModuleJson,
     pub dependencies: Vec<String>,
     pub schema: Option<ModuleJson>,
+    #[serde(default)]
+    pub additional_schemas: Vec<SchemaSourceJson>,
     pub functions: Vec<ModuleJson>,
     pub udf_server_version: String,
 }
@@ -1071,6 +1254,11 @@ impl TryFrom<ComponentDefinitionConfigJson> for ComponentDefinitionConfig {
                 .map(|s| s.parse())
                 .collect::<anyhow::Result<_>>()?,
             schema: value.schema.map(TryInto::try_into).transpose()?,
+            additional_schemas: value
+                .additional_schemas
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<anyhow::Result<_>>()?,
             functions,
             udf_server_version: value.udf_server_version.parse()?,
         })

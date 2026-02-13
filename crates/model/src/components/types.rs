@@ -38,6 +38,39 @@ use crate::{
     udf_config::types::UdfConfig,
 };
 
+/// Represents a schema source with a namespace for multi-schema deployments
+#[derive(Debug, Clone)]
+pub struct SchemaSource {
+    /// Namespace prefix for tables from this schema (e.g., "UserService",
+    /// "Analytics")
+    pub namespace: String,
+    /// The schema module configuration
+    pub module: ModuleConfig,
+    /// Whether this schema can override tables from other sources
+    pub allow_override: bool,
+}
+
+/// Represents a project registration for multi-project deployments.
+/// Each project owns a namespace and can deploy independently.
+/// Ownership is established by `project_id` on first claim -- no separate
+/// deployment key is needed because Convex instance-level auth already gates
+/// access.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectRegistration {
+    /// Unique namespace owned by this project (e.g., "ECommerce",
+    /// "UserService")
+    pub namespace: String,
+    /// Project identifier provided at deploy time (first claim owns the
+    /// namespace)
+    pub project_id: String,
+    /// Timestamp of first deployment
+    pub first_deployed: i64,
+    /// Timestamp of last deployment
+    pub last_deployed: i64,
+    /// List of table names in this namespace (without prefix)
+    pub table_names: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct ProjectConfig {
     pub config: ConfigMetadata,
@@ -63,6 +96,10 @@ pub struct AppDefinitionConfig {
     // Optional schema.js. Not available at runtime.
     pub schema: Option<ModuleConfig>,
 
+    // Additional namespaced schemas for multi-source deployments.
+    // Each schema gets its own namespace to prevent table name conflicts.
+    pub additional_schemas: Vec<SchemaSource>,
+
     // Runtime modules that have changed since the last push.
     // Includes all modules directly available at runtime:
     // - Regular function entry points
@@ -81,8 +118,9 @@ pub struct AppDefinitionConfig {
 
 impl AppDefinitionConfig {
     /// Returns an iterator over all app modules: runtime functions + schema +
-    /// definition. Runtime functions need to be passed in since we may need
-    /// to retrieve the ModuleConfigs for the unchanged module hashes.
+    /// definition + additional namespaced schemas. Runtime functions need to be
+    /// passed in since we may need to retrieve the ModuleConfigs for the
+    /// unchanged module hashes.
     pub fn all_modules<'a>(
         &'a self,
         app_functions: &'a [ModuleConfig],
@@ -90,6 +128,7 @@ impl AppDefinitionConfig {
         app_functions
             .iter()
             .chain(self.schema.iter())
+            .chain(self.additional_schemas.iter().map(|s| &s.module))
             .chain(self.definition.iter())
     }
 }
@@ -108,6 +147,9 @@ pub struct ComponentDefinitionConfig {
     // Optional schema.js. Not available at runtime.
     pub schema: Option<ModuleConfig>,
 
+    // Additional namespaced schemas for multi-source deployments.
+    pub additional_schemas: Vec<SchemaSource>,
+
     // Includes all modules directly available at runtime:
     // - Regular function entry points
     // - http.js
@@ -122,6 +164,7 @@ impl ComponentDefinitionConfig {
     pub fn modules(&self) -> impl Iterator<Item = &ModuleConfig> {
         std::iter::once(&self.definition)
             .chain(self.schema.iter())
+            .chain(self.additional_schemas.iter().map(|s| &s.module))
             .chain(&self.functions)
     }
 }

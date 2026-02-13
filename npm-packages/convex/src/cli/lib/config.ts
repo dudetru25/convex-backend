@@ -99,6 +99,12 @@ export interface ProjectConfig {
 
   // WorkOS AuthKit integration configuration
   authKit?: AuthKitConfig | undefined;
+
+  // Multi-project deployment configuration
+  // When set, deploys as a namespaced additional project instead of standalone.
+  namespace?: string | undefined;
+  // Project identifier for namespace ownership. Defaults to functions directory name.
+  projectId?: string | undefined;
 }
 
 export interface Config {
@@ -177,7 +183,7 @@ export async function getAuthKitEnvironmentConfig(
 }
 
 /** Error parsing ProjectConfig representation. */
-class ParseError extends Error {}
+class ParseError extends Error { }
 
 // WorkOS AuthKit configuration schemas
 const AuthKitConfigureSchema = z.union([
@@ -320,6 +326,20 @@ const createProjectConfigSchema = (strict: boolean) => {
     $schema: z.string().optional(),
     // WorkOS AuthKit integration configuration
     authKit: AuthKitConfigSchema.optional(),
+
+    // Multi-project deployment configuration
+    namespace: z
+      .string()
+      .optional()
+      .describe(
+        "Deploy as a namespaced additional project. Tables will be prefixed with this namespace.",
+      ),
+    projectId: z
+      .string()
+      .optional()
+      .describe(
+        "Project identifier for namespace ownership. Defaults to the functions directory name.",
+      ),
 
     // Deprecated fields that have been deprecated for years, only here so we
     // know it's safe to delete them.
@@ -560,7 +580,7 @@ export async function readProjectConfig(ctx: Context): Promise<{
     } else {
       logFailure(
         `Error: Unable to read project config file "${configPath}"\n` +
-          "  Are you running this command from the root directory of a Convex project? If so, run `npx convex dev` first.",
+        "  Are you running this command from the root directory of a Convex project? If so, run `npx convex dev` first.",
       );
       if (err instanceof Error) {
         logError(chalkStderr.red(err.message));
@@ -903,10 +923,10 @@ export async function handlePushConfigError(
   deploymentName: string | null,
   deployment:
     | {
-        deploymentUrl: string;
-        adminKey: string;
-        deploymentNotice: string;
-      }
+      deploymentUrl: string;
+      adminKey: string;
+      deploymentNotice: string;
+    }
     | undefined,
   _deploymentType: DeploymentType | undefined,
 ): Promise<never> {

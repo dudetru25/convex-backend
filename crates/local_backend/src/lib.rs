@@ -119,6 +119,8 @@ pub struct LocalAppState {
     pub instance_name: String,
     pub application: Application<ProdRuntime>,
     pub zombify_rx: async_broadcast::Receiver<()>,
+    // Persistent project registry for multi-project namespace ownership.
+    pub project_registry: Arc<model::project_registry::ProjectRegistry>,
 }
 
 impl LocalAppState {
@@ -271,12 +273,31 @@ pub async fn make_app(
         runtime.spawn_background("beacon_worker", beacon_future);
     }
 
+    // Initialize the persistent project registry.
+    // Derive data directory from the db_spec path (for SQLite) or fall back to
+    // the DATA_DIR env var or current directory.
+    let data_dir = std::env::var("DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::path::Path::new(&config.db_spec)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf()
+        });
+    let project_registry = Arc::new(
+        model::project_registry::ProjectRegistry::with_persistence(data_dir).unwrap_or_else(|e| {
+            tracing::warn!("Failed to load project registry, starting fresh: {}", e);
+            model::project_registry::ProjectRegistry::new()
+        }),
+    );
+
     let app_state = LocalAppState {
         origin,
         site_origin: config.convex_site_url()?,
         instance_name,
         application,
         zombify_rx,
+        project_registry,
     };
 
     Ok(app_state)

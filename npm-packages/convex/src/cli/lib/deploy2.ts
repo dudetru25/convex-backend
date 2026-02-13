@@ -400,6 +400,8 @@ export async function deployToDeployment(
     liveComponentSources?: boolean | undefined;
     skipWorkosCheck?: boolean | undefined;
     allowDeletingLargeIndexes: boolean;
+    namespace?: string | undefined;
+    projectId?: string | undefined;
   },
 ) {
   const { url, adminKey } = credentials;
@@ -448,8 +450,18 @@ export async function deployToDeployment(
     largeIndexDeletionCheck: options.allowDeletingLargeIndexes
       ? "has confirmation"
       : "ask for confirmation",
+    namespace: options.namespace,
+    projectId: options.projectId,
   };
-  showSpinner(`Deploying to ${url}...${options.dryRun ? " [dry run]" : ""}`);
+  if (options.namespace) {
+    showSpinner(
+      `Deploying namespace "${options.namespace}" to ${url}...${options.dryRun ? " [dry run]" : ""}`,
+    );
+  } else {
+    showSpinner(
+      `Deploying to ${url}...${options.dryRun ? " [dry run]" : ""}`,
+    );
+  }
   await runPush(ctx, pushOptions);
   logFinishedStep(
     `${

@@ -332,6 +332,8 @@ async function deployToExistingDeployment(
     envFile?: string | undefined;
     skipWorkosCheck?: boolean | undefined;
     allowDeletingLargeIndexes: boolean;
+    namespace?: string | undefined;
+    projectId?: string | undefined;
   },
 ) {
   const selectionWithinProject = deploymentSelectionWithinProjectFromOptions({

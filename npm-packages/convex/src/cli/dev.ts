@@ -148,6 +148,21 @@ Same format as .env.local or .env files, and overrides them.`,
   .addOption(new Option("--local-cloud-port <port>").hideHelp())
   .addOption(new Option("--local-site-port <port>").hideHelp())
   .addOption(new Option("--local-backend-version <version>").hideHelp())
+  .addOption(
+    new Option(
+      "--namespace <namespace>",
+      "Deploy as a namespaced additional project. Tables will be prefixed " +
+        "with this namespace (e.g. --namespace ECommerce). " +
+        "Omit to deploy as the primary standalone project.",
+    ),
+  )
+  .addOption(
+    new Option(
+      "--project-id <projectId>",
+      "Project identifier for namespace ownership in multi-project deployments. " +
+        "Defaults to the functions directory name.",
+    ),
+  )
   .addOption(new Option("--local-force-upgrade").default(false).hideHelp())
   .addOption(
     new Option(

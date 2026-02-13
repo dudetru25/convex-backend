@@ -23,6 +23,10 @@ export const startPushRequest = looseObject({
   nodeDependencies: z.array(nodeDependency),
 
   nodeVersion: z.optional(z.string()),
+
+  // Multi-project deployment fields (optional for backward compatibility)
+  namespace: z.optional(z.string()),
+  projectId: z.optional(z.string()),
 });
 export type StartPushRequest = z.infer<typeof startPushRequest>;
 

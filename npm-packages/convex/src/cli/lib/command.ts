@@ -63,6 +63,8 @@ declare module "@commander-js/extra-typings" {
         debug?: boolean;
         writePushRequest?: string;
         liveComponentSources?: boolean;
+        namespace?: string;
+        projectId?: string;
       }
     >;
 
@@ -229,6 +231,8 @@ export async function normalizeDevOptions(
     liveComponentSources?: boolean;
     pushAllModules?: boolean;
     while?: string;
+    namespace?: string | undefined;
+    projectId?: string | undefined;
   },
 ): Promise<{
   verbose: boolean;
@@ -247,6 +251,8 @@ export async function normalizeDevOptions(
   debugNodeApis: boolean;
   liveComponentSources: boolean;
   pushAllModules: boolean;
+  namespace?: string | undefined;
+  projectId?: string | undefined;
 }> {
   if (cmdOptions.runComponent && !cmdOptions.run) {
     return await ctx.crash({
@@ -300,6 +306,8 @@ export async function normalizeDevOptions(
     debugNodeApis: !!cmdOptions.debugNodeApis,
     liveComponentSources: !!cmdOptions.liveComponentSources,
     pushAllModules: !!cmdOptions.pushAllModules,
+    namespace: cmdOptions.namespace,
+    projectId: cmdOptions.projectId,
   };
 }
 
@@ -354,6 +362,21 @@ Command.prototype.addDeployOptions = function () {
       )
         .default(false)
         .hideHelp(),
+    )
+    .addOption(
+      new Option(
+        "--namespace <namespace>",
+        "Deploy as a namespaced additional project. Tables will be prefixed " +
+          "with this namespace (e.g. --namespace ECommerce creates ECommerce_users). " +
+          "Omit to deploy as the primary standalone project.",
+      ),
+    )
+    .addOption(
+      new Option(
+        "--project-id <projectId>",
+        "Project identifier for namespace ownership in multi-project deployments. " +
+          "First project to claim a namespace owns it. Defaults to the functions directory name.",
+      ),
     );
 };
 

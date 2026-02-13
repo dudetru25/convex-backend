@@ -228,6 +228,7 @@ pub mod log_sinks;
 mod metrics;
 pub mod migrations;
 pub mod modules;
+pub mod project_registry;
 pub mod scheduled_jobs;
 pub mod session_requests;
 pub mod snapshot_imports;

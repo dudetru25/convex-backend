@@ -41,6 +41,17 @@ Convex. Check out our [self-hosting guide](./self-hosted/README.md) for detailed
 instructions. Community support for self-hosting is available in the
 `#self-hosted` channel on [Discord](https://discord.gg/convex).
 
+## Multi-Project Deployments
+
+This fork adds support for deploying multiple projects to a single self-hosted
+Convex instance, each with its own namespaced schema. Tables from each project
+are automatically prefixed to prevent naming conflicts, and a persistent project
+registry manages namespace ownership across deploys.
+
+See the [multi-project guide](./self-hosted/advanced/multi_project.md) for
+detailed setup instructions, CLI flags, namespace rules, and Docker deployment
+steps.
+
 ## Community & Support
 
 - Join our [Discord community](https://discord.gg/convex) for help and
@@ -74,7 +85,6 @@ See [BUILD.md](./BUILD.md).
 ## Repository layout
 
 - `crates/` contains Rust code
-
   - Main binary
     - `local_backend/` is an application server on top of the `Runtime`. This is
       the serving edge for the Convex cloud.
