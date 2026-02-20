@@ -755,9 +755,9 @@ pub static APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT: LazyLock<Duration> =
     });
 
 /// The maximum number of writes per second allowed for mutations.
-/// Default 64 MiB
+/// Default 16 MiB
 pub static MAX_BYTES_WRITTEN_PER_SECOND: LazyLock<u64> =
-    LazyLock::new(|| env_config("MAX_BYTES_WRITTEN_PER_SECOND", 64 * 1024 * 1024));
+    LazyLock::new(|| env_config("MAX_BYTES_WRITTEN_PER_SECOND", 16 * 1024 * 1024));
 
 /// The time window (in milliseconds) used to track write throughput.
 pub static WRITE_THROUGHPUT_WINDOW: LazyLock<Duration> =
@@ -913,7 +913,11 @@ pub static MYSQL_CHUNK_SIZE: LazyLock<usize> =
 
 /// Which encoding version to use for newly written documents
 pub static MYSQL_DOCUMENT_ENCODING: LazyLock<u8> =
-    LazyLock::new(|| env_config("MYSQL_DOCUMENT_ENCODING", 0));
+    LazyLock::new(|| env_config("MYSQL_DOCUMENT_ENCODING", 1));
+
+/// How many times to retry MySQL queries that fail with operational errors.
+pub static MYSQL_MAX_QUERY_RETRIES: LazyLock<u32> =
+    LazyLock::new(|| env_config("MYSQL_MAX_QUERY_RETRIES", 1));
 
 /// Maximum number of connections to Postgres
 pub static POSTGRES_MAX_CONNECTIONS: LazyLock<usize> =
@@ -1092,7 +1096,7 @@ pub static FUNRUN_INITIAL_PERMIT_TIMEOUT: LazyLock<Duration> =
 ///
 /// You can check go/num-instances-with-lambdas
 pub static AWS_LAMBDA_DEPLOY_SPLAY: LazyLock<Duration> =
-    LazyLock::new(|| Duration::from_secs(env_config("AWS_LAMBDA_DEPLOY_SPLAY_SECONDS", 240000)));
+    LazyLock::new(|| Duration::from_secs(env_config("AWS_LAMBDA_DEPLOY_SPLAY_SECONDS", 86400)));
 
 /// How long of a window to debounce static lambda deployments. Don't allow too
 /// many static deploys in a small window to protect the infrastructure.

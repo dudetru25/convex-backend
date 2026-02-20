@@ -429,7 +429,9 @@ export async function selectRegionOrUseDefault(
   ctx: Context,
   selectedTeam: TeamResponse,
 ) {
-  const noDefaultRegionMessage = `Configure a default region for your team at ${chalkStderr.bold(`https://dashboard.convex.dev/t/${selectedTeam.slug}/settings`)}`;
+  const noDefaultRegionMessage = chalkStderr.gray(
+    `Tip: you can configure a default region for your team at ${chalkStderr.underline(`https://dashboard.convex.dev/t/${selectedTeam.slug}/settings`)}`,
+  );
   if (!process.stdin.isTTY) {
     // Use the team default in non-interactive terminals
     if (!selectedTeam.defaultRegion) {
@@ -459,14 +461,24 @@ export async function selectRegion(
       },
     )
   ).data!;
+  const choices = regionsResponse.items
+    .filter((item) => Boolean(item.available))
+    .map((item) => ({
+      name: item.displayName,
+      value: item.name,
+    }))
+    .sort((a, b) => {
+      // Show US region first if it exists
+      if (a.value === "aws-us-east-1") return -1;
+      if (b.value === "aws-us-east-1") return 1;
+      return 0;
+    });
   return await promptOptions(ctx, {
-    message: "Dev deployment region:",
-    choices: regionsResponse.items
-      .filter((item) => Boolean(item.available))
-      .map((item) => ({
-        name: item.displayName,
-        value: item.name,
-      })),
+    message: "Where should this dev deployment run?",
+    suffix: `\n${chalkStderr.gray(
+      "See https://www.convex.dev/pricing for pricing",
+    )}`,
+    choices,
   });
 }
 

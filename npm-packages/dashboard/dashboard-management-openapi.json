@@ -4380,6 +4380,10 @@
         "format": "int64",
         "minimum": 0
       },
+      "DeploymentReference": {
+        "type": "string",
+        "description": "An identifier that uniquely identifies this deployment within the project."
+      },
       "DeploymentResponse": {
         "oneOf": [
           {
@@ -4392,6 +4396,7 @@
               "projectId",
               "region",
               "isDefault",
+              "reference",
               "kind"
             ],
             "properties": {
@@ -4407,6 +4412,12 @@
                   {
                     "$ref": "#/components/schemas/MemberId"
                   }
+                ]
+              },
+              "dashboardEditConfirmation": {
+                "type": [
+                  "boolean",
+                  "null"
                 ]
               },
               "deploymentType": {
@@ -4439,6 +4450,9 @@
               },
               "projectId": {
                 "$ref": "#/components/schemas/ProjectId"
+              },
+              "reference": {
+                "$ref": "#/components/schemas/DeploymentReference"
               },
               "region": {
                 "$ref": "#/components/schemas/RegionName"

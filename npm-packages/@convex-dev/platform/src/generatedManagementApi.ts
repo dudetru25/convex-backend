@@ -411,6 +411,8 @@ export interface components {
         };
         /** Format: int64 */
         DeploymentId: number;
+        /** @description An identifier that uniquely identifies this deployment within the project. */
+        DeploymentReference: string;
         DeploymentRegionMetadata: {
             available: boolean;
             displayName: string;
@@ -420,6 +422,7 @@ export interface components {
             /** Format: int64 */
             createTime: number;
             creator?: null | components["schemas"]["MemberId"];
+            dashboardEditConfirmation?: boolean | null;
             deploymentType: components["schemas"]["DeploymentType"];
             id: components["schemas"]["DeploymentId"];
             isDefault: components["schemas"]["IsDefaultDeployment"];
@@ -428,6 +431,7 @@ export interface components {
             name: string;
             previewIdentifier?: null | components["schemas"]["PreviewDeploymentIdentifier"];
             projectId: components["schemas"]["ProjectId"];
+            reference: components["schemas"]["DeploymentReference"];
             region: components["schemas"]["RegionName"];
         } | {
             /** Format: int64 */
@@ -475,6 +479,15 @@ export interface components {
             /** @description The class to use for this deployment. If not provided, the default
              *     deployment class for your team will be used. */
             class?: string | null;
+            /** @description An identifier that uniquely identifies this deployment within the
+             *     project. By providing a reference, you can create multiple dev and prod
+             *     deployments in the project. If you don’t provide a reference, the
+             *     endpoint will create the default production deployment for the project,
+             *     or the default development deployment for the member that creates it
+             *     (i.e. the deployment used by default when running `npx convex deploy`
+             *     or `npx convex dev` respectively). When not providing a reference,
+             *     a reference will be automatically generated. */
+            reference?: string | null;
             region?: null | components["schemas"]["RegionName"];
             type: components["schemas"]["CreateDeploymentType"];
         };
@@ -550,6 +563,11 @@ export interface components {
              */
             createTime: number;
             creator?: null | components["schemas"]["MemberId"];
+            /** @description Controls whether the dashboard requires a confirmation before
+             *     allowing edits during a browser session for this deployment.
+             *     If not set, defaults to true for prod deployments and false
+             *     for dev and preview deployments. */
+            dashboardEditConfirmation?: boolean | null;
             /** @description The type of this deployment. */
             deploymentType: components["schemas"]["DeploymentType"];
             id: components["schemas"]["DeploymentId"];
@@ -566,6 +584,9 @@ export interface components {
             previewIdentifier?: null | components["schemas"]["PreviewDeploymentIdentifier"];
             /** @description The project this deployment belongs to. */
             projectId: components["schemas"]["ProjectId"];
+            /** @description An identifier that uniquely identifies this deployment within the
+             *     project. */
+            reference: components["schemas"]["DeploymentReference"];
             /** @description The region where this deployment is hosted. */
             region: components["schemas"]["RegionName"];
         } | {
@@ -616,6 +637,8 @@ export interface components {
             /** @description This shortened version of the name used in Convex Dashboard URLs. */
             slug: components["schemas"]["ProjectSlug"];
             teamId: components["schemas"]["TeamId"];
+            /** @description The slug of the team that owns this project. */
+            teamSlug: components["schemas"]["TeamSlug"];
         };
         PlatformTokenDetailsResponse: {
             /**
@@ -663,6 +686,7 @@ export interface components {
             /** @description The role of the team member */
             role: components["schemas"]["Role"];
         };
+        TeamSlug: string;
     };
     responses: never;
     parameters: never;
@@ -675,6 +699,7 @@ export type CreateDeploymentType = components['schemas']['CreateDeploymentType']
 export type DeploymentClass = components['schemas']['DeploymentClass'];
 export type DeploymentClassMetadata = components['schemas']['DeploymentClassMetadata'];
 export type DeploymentId = components['schemas']['DeploymentId'];
+export type DeploymentReference = components['schemas']['DeploymentReference'];
 export type DeploymentRegionMetadata = components['schemas']['DeploymentRegionMetadata'];
 export type DeploymentResponse = components['schemas']['DeploymentResponse'];
 export type DeploymentType = components['schemas']['DeploymentType'];
@@ -706,6 +731,7 @@ export type RequestDestination = components['schemas']['RequestDestination'];
 export type Role = components['schemas']['Role'];
 export type TeamId = components['schemas']['TeamId'];
 export type TeamMember = components['schemas']['TeamMember'];
+export type TeamSlug = components['schemas']['TeamSlug'];
 export type $defs = Record<string, never>;
 export interface operations {
     "create project": {
@@ -762,6 +788,11 @@ export interface operations {
                 /** @description If true, include local deployments in the response (filtered to only
                  *     show local deployments created by the requesting team member). */
                 includeLocal?: boolean;
+                /** @description If true, only include default deployments. If false, only include
+                 *     non-default deployments. */
+                isDefault?: boolean | null;
+                /** @description Only include deployments of the given deployment type. */
+                deploymentType?: null | components["schemas"]["DeploymentType"];
             };
             header?: never;
             path: {
