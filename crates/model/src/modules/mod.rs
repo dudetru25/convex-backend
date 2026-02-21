@@ -123,6 +123,7 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
         modules: Vec<ModuleConfig>,
         source_package_id: Option<SourcePackageId>,
         mut analyze_results: BTreeMap<CanonicalizedModulePath, AnalyzedModule>,
+        namespace: Option<String>,
     ) -> anyhow::Result<ModuleDiff> {
         if modules.iter().any(|c| c.path.is_system()) {
             anyhow::bail!("You cannot push functions under the '_system/' directory.");
@@ -130,11 +131,22 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
 
         let mut added_modules = BTreeSet::new();
 
-        // Add new modules.
+        // When deploying with a namespace, only consider existing modules
+        // that belong to this namespace (path prefix) for deletion.
+        // Modules from other namespaces are left untouched.
+        let namespace_prefix = namespace.as_ref().map(|ns| format!("{}/", ns));
+
         let mut remaining_modules: BTreeMap<_, _> = self
             .get_application_metadata(component)
             .await?
             .into_iter()
+            .filter(|module| {
+                if let Some(ref prefix) = namespace_prefix {
+                    module.path.as_str().starts_with(prefix.as_str())
+                } else {
+                    true
+                }
+            })
             .map(|module| (module.path.clone(), module.id()))
             .collect();
         for module in modules {
@@ -144,14 +156,12 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
                 added_modules.insert(path.clone());
             }
             let analyze_result = if !path.is_deps() {
-                // We expect AnalyzeResult to always be set for non-dependency modules.
                 let analyze_result = analyze_results.remove(&path).context(format!(
                     "Missing analyze result for module {}",
                     path.as_str()
                 ))?;
                 Some(analyze_result)
             } else {
-                // We don't analyze dependencies.
                 None
             };
             self.put(

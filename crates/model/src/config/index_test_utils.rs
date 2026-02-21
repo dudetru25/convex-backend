@@ -147,6 +147,7 @@ pub async fn apply_config(
             None,
             BTreeMap::new(),
             schema_id,
+            None,
         )
         .await?;
     db.commit(tx).await?;

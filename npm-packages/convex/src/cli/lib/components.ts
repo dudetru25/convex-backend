@@ -1,3 +1,4 @@
+import * as nodeFs from "node:fs";
 import path from "path";
 import { Context } from "../../bundler/context.js";
 import {
@@ -413,12 +414,12 @@ async function startComponentsPushAndCodegen(
 
   const { unchangedModuleHashes, changedModules } = options.pushAllModules
     ? {
-        unchangedModuleHashes: [],
-        changedModules: appImplementation.functions,
-      }
+      unchangedModuleHashes: [],
+      changedModules: appImplementation.functions,
+    }
     : await parentSpan.enterAsync("getUnchangedModuleHashesFromServer", () =>
-        getUnchangedModuleHashesFromServer(ctx, appImplementation, options),
-      );
+      getUnchangedModuleHashesFromServer(ctx, appImplementation, options),
+    );
 
   const appDefinition: AppDefinitionConfig = {
     ...appDefinitionSpecWithoutImpls,
@@ -467,6 +468,92 @@ async function startComponentsPushAndCodegen(
     logMessage(
       chalkStderr.cyan(
         `Deploying as namespace "${namespace}" (multi-project mode)`,
+      ),
+    );
+
+    // Extract table names from the ORIGINAL schema.ts/schema.js source,
+    // not the bundled output (which may be split into _deps/ chunks by
+    // esbuild making the entry point hard to identify).
+    const schemaTs = path.resolve(projectConfig.functions, "schema.ts");
+    const schemaJs = path.resolve(projectConfig.functions, "schema.js");
+    const originalSchemaPath = nodeFs.existsSync(schemaTs)
+      ? schemaTs
+      : nodeFs.existsSync(schemaJs)
+        ? schemaJs
+        : null;
+
+    if (originalSchemaPath) {
+      const originalSchema = nodeFs.readFileSync(originalSchemaPath, "utf-8");
+      const tableNamePattern =
+        /([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*defineTable/g;
+      const tableNames: string[] = [];
+      let match;
+      while ((match = tableNamePattern.exec(originalSchema)) !== null) {
+        if (!match[1].startsWith("_")) {
+          tableNames.push(match[1]);
+        }
+      }
+
+      if (tableNames.length > 0) {
+        const prefix = `${namespace}/`;
+        const rewriteSource = (src: string): string => {
+          for (const tableName of tableNames) {
+            src = src.replace(
+              new RegExp(`"${tableName}"`, "g"),
+              `"${prefix}${tableName}"`,
+            );
+            src = src.replace(
+              new RegExp(`'${tableName}'`, "g"),
+              `'${prefix}${tableName}'`,
+            );
+          }
+          return src;
+        };
+
+        if (appImplementation.schema) {
+          appImplementation.schema.source = rewriteSource(
+            appImplementation.schema.source,
+          );
+        }
+
+        for (const mod of changedModules) {
+          if (mod.path.startsWith("_deps/")) {
+            continue;
+          }
+          mod.source = rewriteSource(mod.source);
+        }
+        logMessage(
+          chalkStderr.gray(
+            `  Prefixed ${tableNames.length} table names: ${tableNames.join(", ")}`,
+          ),
+        );
+      }
+    }
+
+    // Prefix function module paths so each namespace gets its own function
+    // space and deploying one service doesn't overwrite another's functions.
+    // e.g. "products.js" → "Catalog/products.js" so the endpoint becomes
+    // "Catalog/products:list" instead of "products:list".
+    const pathPrefix = `${namespace}/`;
+    const skipPathPrefix = (p: string) =>
+      p === "http.js" ||
+      p === "crons.js" ||
+      p === "auth.config.js";
+    for (const mod of changedModules) {
+      if (skipPathPrefix(mod.path)) {
+        continue;
+      }
+      mod.path = `${pathPrefix}${mod.path}`;
+    }
+    for (const hashMod of unchangedModuleHashes) {
+      if (skipPathPrefix(hashMod.path)) {
+        continue;
+      }
+      hashMod.path = `${pathPrefix}${hashMod.path}`;
+    }
+    logMessage(
+      chalkStderr.gray(
+        `  Prefixed function paths with "${pathPrefix}"`,
       ),
     );
   }
@@ -673,10 +760,9 @@ export async function runComponentsPush(
     );
 
     logFinishedStep(
-      `Remote config ${
-        options.dryRun ? "would" : "will"
+      `Remote config ${options.dryRun ? "would" : "will"
       } be overwritten with the following changes:\n  ` +
-        diffString.replace(/\n/g, "\n  "),
+      diffString.replace(/\n/g, "\n  "),
     );
   }
 

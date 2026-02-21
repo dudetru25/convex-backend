@@ -46,6 +46,7 @@ use database::{
     BootstrapComponentsModel,
     IndexModel,
     OccRetryStats,
+    SchemaModel,
     Token,
     WriteSource,
     SCHEMAS_TABLE,
@@ -205,6 +206,7 @@ impl<RT: Runtime> Application<RT> {
             analysis: evaluated_components,
             app,
             schema_change,
+            namespace: config.namespace.clone(),
         };
         Ok(StartPushResult {
             response: resp,
@@ -381,10 +383,10 @@ impl<RT: Runtime> Application<RT> {
         for schema_source in additional_schemas {
             match self.evaluate_schema(schema_source.module).await {
                 Ok(schema) => {
-                    for (table_name, table_def) in schema.tables {
+                    for (table_name, mut table_def) in schema.tables {
                         // Prefix table name with namespace
                         let namespaced_name_str = format!(
-                            "{}_{}",
+                            "{}/{}",
                             schema_source.namespace,
                             String::from(table_name.clone())
                         );
@@ -402,6 +404,10 @@ impl<RT: Runtime> Application<RT> {
                             }
                         }
 
+                        // Update the inner table_name so it survives JSON round-trip.
+                        // DatabaseSchemaJson serialization uses table_name from the
+                        // TableDefinition, not the BTreeMap key.
+                        table_def.table_name = namespaced_name.clone();
                         composed.tables.insert(namespaced_name.clone(), table_def);
                         table_sources
                             .insert(namespaced_name, Some(schema_source.namespace.clone()));
@@ -446,13 +452,14 @@ impl<RT: Runtime> Application<RT> {
         };
         let mut table_names = Vec::new();
 
-        for (table_name, table_def) in schema.tables {
+        for (table_name, mut table_def) in schema.tables {
             let base_name = String::from(table_name);
             table_names.push(base_name.clone());
 
-            let namespaced_name_str = format!("{}_{}", namespace, base_name);
+            let namespaced_name_str = format!("{}/{}", namespace, base_name);
             let namespaced_name = TableName::from_str(&namespaced_name_str)?;
 
+            table_def.table_name = namespaced_name.clone();
             namespaced_schema.tables.insert(namespaced_name, table_def);
         }
 
@@ -498,6 +505,68 @@ impl<RT: Runtime> Application<RT> {
                 )
                 .await?,
             );
+        }
+
+        // When deploying with a namespace, prefix ALL tables in the composed
+        // schema with the namespace, then merge with the existing active schema
+        // to preserve tables from other namespaces.
+        if let Some(ref namespace) = config.namespace {
+            use std::str::FromStr;
+
+            use common::types::TableName;
+
+            if let Some(ref mut new_schema) = app_schema {
+                // Step 1: Prefix all tables that don't already have the namespace prefix.
+                // compose_namespaced_schemas handles additional_schemas, but the
+                // primary schema tables arrive unprefixed.
+                let prefix = format!("{}/", namespace);
+                let old_tables = std::mem::take(&mut new_schema.tables);
+                for (table_name, mut table_def) in old_tables {
+                    let name_str = String::from(table_name.clone());
+                    if name_str.starts_with(&prefix) {
+                        new_schema.tables.insert(table_name, table_def);
+                    } else {
+                        let prefixed_str = format!("{}{}", prefix, name_str);
+                        let prefixed_name = TableName::from_str(&prefixed_str)?;
+                        table_def.table_name = prefixed_name.clone();
+                        new_schema.tables.insert(prefixed_name, table_def);
+                    }
+                }
+
+                tracing::info!(
+                    "Prefixed schema tables with namespace '{}': {} tables.",
+                    namespace,
+                    new_schema.tables.len(),
+                );
+
+                // Step 2: Merge with existing active schema, keeping tables from
+                // other namespaces and dropping stale entries for this namespace.
+                let mut tx = self.begin(Identity::system()).await?;
+                let existing = SchemaModel::new(&mut tx, TableNamespace::Global)
+                    .get_by_state(SchemaState::Active)
+                    .await?;
+                drop(tx);
+                if let Some((_id, existing_schema)) = existing {
+                    for (table_name, table_def) in &existing_schema.tables {
+                        let name_str = String::from(table_name.clone());
+                        if name_str.starts_with(&prefix) == false {
+                            new_schema
+                                .tables
+                                .entry(table_name.clone())
+                                .or_insert(table_def.clone());
+                        }
+                    }
+                    if existing_schema.schema_validation {
+                        new_schema.schema_validation = true;
+                    }
+                    tracing::info!(
+                        "Merged existing tables from active schema (stripped '{}' prefix). Final \
+                         schema has {} tables.",
+                        namespace,
+                        new_schema.tables.len(),
+                    );
+                }
+            }
         }
 
         let mut component_analysis_by_def_path = BTreeMap::new();
@@ -853,6 +922,7 @@ impl<RT: Runtime> Application<RT> {
                                 udf_config_by_definition,
                                 &start_push.schema_change,
                                 modules_by_definition,
+                                start_push.namespace.clone(),
                             )
                             .await?;
 
@@ -954,6 +1024,7 @@ impl<RT: Runtime> Application<RT> {
                     udf_config: udf_config.clone(),
                     source_package,
                     analyze_results: analyze_results.clone(),
+                    namespace: None,
                 },
             )
             .await?;
@@ -1089,6 +1160,7 @@ impl StartPushRequest {
                 .map(NodeDependency::from)
                 .collect(),
             node_version: self.node_version.map(|v| v.parse()).transpose()?,
+            namespace: self.namespace,
         })
     }
 }
@@ -1108,6 +1180,8 @@ pub struct StartPushResponse {
     pub app: CheckedComponent,
 
     pub schema_change: SchemaChange,
+
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug)]

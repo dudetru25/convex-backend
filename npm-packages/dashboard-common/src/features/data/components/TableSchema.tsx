@@ -128,7 +128,7 @@ function insertOtherTablesComment(tableName: string, code: string): string {
 
   // Use a token to find the start of the table definition
   // assumes that the string 'tableName: defineTable' is unique in the file
-  const tableNameToken = `${tableName}: defineTable`;
+  const tableNameToken = `"${tableName}": defineTable`;
   const tableStartIndex = splitLines.findIndex((value) =>
     value.trim().includes(tableNameToken),
   );

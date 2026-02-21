@@ -41,7 +41,13 @@ impl FromStr for TableName {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        check_valid_identifier(s)?;
+        if s.contains('/') {
+            for segment in s.split('/') {
+                check_valid_identifier(segment)?;
+            }
+        } else {
+            check_valid_identifier(s)?;
+        }
         Ok(Self(s.to_owned()))
     }
 }

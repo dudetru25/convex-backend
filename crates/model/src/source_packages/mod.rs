@@ -99,15 +99,15 @@ impl<'a, RT: Runtime> SourcePackageModel<'a, RT> {
             source_package_ids.push(module.source_package_id);
         }
 
-        // If there are no modules - then return None
-        let Some(source_package_id) = source_package_ids.pop() else {
+        if source_package_ids.is_empty() {
             return Ok(None);
-        };
+        }
 
-        // They should all match
-        anyhow::ensure!(source_package_ids
-            .into_iter()
-            .all(|id| &id == &source_package_id));
+        // With multi-namespace deployments, modules from different namespaces
+        // may have different source_package_ids. Return the most recent one.
+        source_package_ids.sort();
+        source_package_ids.dedup();
+        let source_package_id = source_package_ids.pop().unwrap();
 
         Ok(Some(self.get(source_package_id).await?))
     }

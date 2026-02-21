@@ -273,6 +273,19 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
             .map(|schema| &schema.tables)
             .unwrap_or(&empty);
         let mut index_diff: IndexDiff = self.get_index_diff(namespace, tables_in_schema).await?;
+        if index_diff.added.is_empty() == false {
+            let added_names: Vec<_> = index_diff
+                .added
+                .iter()
+                .map(|idx| format!("{}", idx.name))
+                .collect();
+            tracing::warn!(
+                "get_full_index_diff: {} unexpected new indexes: {:?}. Schema has {} tables.",
+                added_names.len(),
+                added_names,
+                tables_in_schema.len(),
+            );
+        }
         anyhow::ensure!(index_diff.added.is_empty(), "Expected no new indexes");
 
         // Find all indexes that are being replaced by their pending variant to count as

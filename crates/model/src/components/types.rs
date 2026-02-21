@@ -83,6 +83,11 @@ pub struct ProjectConfig {
 
     // Version of Node.js to use in the node executor.
     pub node_version: Option<NodeVersion>,
+
+    /// When set, this push is for a namespaced additional project.
+    /// Tables will be prefixed and the schema will be merged accumulatively
+    /// with other namespaces.
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug)]

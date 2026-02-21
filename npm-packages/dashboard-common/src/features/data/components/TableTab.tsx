@@ -6,21 +6,25 @@ import { sidebarLinkClassNames } from "@common/elements/Sidebar";
 import { Tooltip } from "@ui/Tooltip";
 import { useIsOverflowing } from "@common/lib/useIsOverflowing";
 import { cn } from "@ui/cn";
+import { TableDocIcon } from "@common/elements/icons";
 
 export function TableTab({
   selectedTable,
   table,
+  displayName,
   onSelectTable,
   isMissingFromSchema,
 }: {
   selectedTable: string | null;
   table: string;
+  displayName?: string;
   onSelectTable?: () => void;
   isMissingFromSchema?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const isOverflowing = useIsOverflowing(ref);
   const { pathname, query } = useRouter();
+  const label = displayName ?? table;
 
   return (
     <Tooltip
@@ -63,9 +67,10 @@ export function TableTab({
             )}
             onClick={() => onSelectTable?.()}
           >
-            <div className="flex w-full max-w-full items-start gap-0.5">
+            <div className="flex w-full max-w-full items-center gap-1.5">
+              <TableDocIcon className="size-3.5 shrink-0 text-content-tertiary" />
               <div className="shrink truncate" ref={ref}>
-                {table}
+                {label}
               </div>
               {isMissingFromSchema && (
                 <div className="font-sans text-sm">*</div>

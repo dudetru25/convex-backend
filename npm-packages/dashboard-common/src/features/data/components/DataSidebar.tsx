@@ -1,7 +1,9 @@
 import { CubeIcon, MagnifyingGlassIcon, PlusIcon } from "@radix-ui/react-icons";
+import { FolderIcon, FolderOpenIcon } from "@heroicons/react/24/outline";
+import { Disclosure, DisclosureButton, DisclosurePanel } from "@headlessui/react";
 import { useMutation } from "convex/react";
 import classNames from "classnames";
-import { useContext, useState } from "react";
+import { useContext, useMemo, useState } from "react";
 import udfs from "@common/udfs";
 import { useInvalidateShapes } from "@common/features/data/lib/api";
 import { TextInput } from "@ui/TextInput";
@@ -19,6 +21,97 @@ import { useNents } from "@common/lib/useNents";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { toast } from "@common/lib/utils";
 
+type TableGroup = {
+  namespace: string;
+  tables: string[];
+};
+
+function groupTablesByNamespace(
+  tableNames: string[],
+): { groups: TableGroup[]; ungrouped: string[] } {
+  const namespaceMap = new Map<string, string[]>();
+  const ungrouped: string[] = [];
+
+  for (const name of tableNames) {
+    const slashIdx = name.indexOf("/");
+    if (slashIdx !== -1) {
+      const ns = name.substring(0, slashIdx);
+      const existing = namespaceMap.get(ns) ?? [];
+      existing.push(name);
+      namespaceMap.set(ns, existing);
+    } else {
+      ungrouped.push(name);
+    }
+  }
+
+  const groups: TableGroup[] = Array.from(namespaceMap.entries())
+    .sort(([a], [b]) => a.toLowerCase().localeCompare(b.toLowerCase()))
+    .map(([namespace, tables]) => ({ namespace, tables }));
+
+  return { groups, ungrouped };
+}
+
+function NamespaceFolder({
+  group,
+  selectedTable,
+  onSelectTable,
+  schema,
+}: {
+  group: TableGroup;
+  selectedTable: string | null;
+  onSelectTable?: () => void;
+  schema: ReturnType<typeof useActiveSchema>;
+}) {
+  const hasSelectedChild = group.tables.some((t) => t === selectedTable);
+
+  return (
+    <Disclosure defaultOpen={hasSelectedChild || true}>
+      {({ open }) => (
+        <div>
+          <DisclosureButton
+            className={classNames(
+              "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium text-content-primary",
+              "hover:bg-util-accent/20 focus-visible:ring-0 focus-visible:outline-hidden",
+            )}
+          >
+            <div className="w-4 shrink-0">
+              {open ? (
+                <FolderOpenIcon className="size-4 text-content-tertiary" />
+              ) : (
+                <FolderIcon className="size-4 text-content-tertiary" />
+              )}
+            </div>
+            <span className="truncate">{group.namespace}</span>
+            <span
+              className={classNames(
+                "ml-auto shrink-0 rounded-full px-1.5 py-0.5",
+                "text-[10px] font-semibold leading-none tracking-wide uppercase",
+                "bg-util-accent/15 text-content-secondary",
+              )}
+            >
+              app
+            </span>
+          </DisclosureButton>
+          <DisclosurePanel>
+            <div className="ml-3 flex flex-col gap-0.5 border-l border-border-transparent pl-1">
+              {group.tables.map((table) => (
+                <TableTab
+                  key={table}
+                  table={table}
+                  displayName={table.substring(group.namespace.length + 1)}
+                  isMissingFromSchema={isTableMissingFromSchema(table, schema)}
+                  selectedTable={selectedTable}
+                  onSelectTable={onSelectTable}
+                />
+              ))}
+            </div>
+          </DisclosurePanel>
+        </div>
+      )}
+    </Disclosure>
+  );
+}
+
 export function DataSidebar({
   tableData,
   onSelectTable,
@@ -35,6 +128,17 @@ export function DataSidebar({
   const [searchQuery, setSearchQuery] = useState("");
   const searchQueryLowercase = searchQuery.toLowerCase();
   const schema = useActiveSchema();
+
+  const filteredTables = useMemo(() => {
+    const all = Array.from(tables.keys())
+      .filter(
+        (r) =>
+          !searchQueryLowercase ||
+          r.toLowerCase().includes(searchQueryLowercase),
+      )
+      .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    return groupTablesByNamespace(all);
+  }, [tables, searchQueryLowercase]);
 
   return (
     <div
@@ -67,23 +171,24 @@ export function DataSidebar({
       )}
       <div className="scrollbar flex-1 overflow-auto px-3 py-1">
         <div className="flex flex-col gap-0.5">
-          {Array.from(tables.keys())
-            .filter(
-              (r) =>
-                !searchQueryLowercase ||
-                r.toLowerCase().includes(searchQueryLowercase),
-            )
-            // Case insensitive sort
-            .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
-            .map((table) => (
-              <TableTab
-                key={table}
-                table={table}
-                isMissingFromSchema={isTableMissingFromSchema(table, schema)}
-                selectedTable={selectedTable}
-                onSelectTable={onSelectTable}
-              />
-            ))}
+          {filteredTables.groups.map((group) => (
+            <NamespaceFolder
+              key={group.namespace}
+              group={group}
+              selectedTable={selectedTable}
+              onSelectTable={onSelectTable}
+              schema={schema}
+            />
+          ))}
+          {filteredTables.ungrouped.map((table) => (
+            <TableTab
+              key={table}
+              table={table}
+              isMissingFromSchema={isTableMissingFromSchema(table, schema)}
+              selectedTable={selectedTable}
+              onSelectTable={onSelectTable}
+            />
+          ))}
         </div>
         <CreateNewTable tableData={tableData} onTableCreated={onTableCreated} />
       </div>

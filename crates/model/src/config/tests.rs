@@ -106,6 +106,7 @@ async fn test_config(rt: TestRuntime) -> anyhow::Result<()> {
                 },
             },
             None,
+            None,
         )
         .await?;
     database.commit(tx).await?;
@@ -180,6 +181,7 @@ async fn test_config_large_modules(rt: TestRuntime) -> anyhow::Result<()> {
             }),
             analyzed_result,
             None,
+            None,
         )
         .await?;
     database.commit(tx).await?;
@@ -211,6 +213,7 @@ async fn test_config_delete_auth_info(rt: TestRuntime) -> anyhow::Result<()> {
             None, // source storage key
             BTreeMap::new(),
             None,
+            None,
         )
         .await?;
     database.commit(tx).await?;
@@ -227,6 +230,7 @@ async fn test_config_delete_auth_info(rt: TestRuntime) -> anyhow::Result<()> {
             UdfConfig::new_for_test(&rt, "1000.0.0".parse()?),
             None, // source package
             BTreeMap::new(),
+            None,
             None,
         )
         .await?;
@@ -259,6 +263,7 @@ async fn test_schema_in_deployment_audit_log(rt: TestRuntime) -> anyhow::Result<
             None,
             btreemap! {},
             None,
+            None,
         )
         .await?;
     database.commit(tx).await?;
@@ -277,6 +282,7 @@ async fn test_schema_in_deployment_audit_log(rt: TestRuntime) -> anyhow::Result<
             None,
             btreemap! {},
             Some(first_schema_id),
+            None,
         )
         .await?;
     database.commit(tx).await?;
@@ -305,6 +311,7 @@ async fn test_schema_in_deployment_audit_log(rt: TestRuntime) -> anyhow::Result<
             None,
             btreemap! {},
             Some(second_schema_id),
+            None,
         )
         .await?;
     database.commit(tx).await?;
@@ -323,6 +330,7 @@ async fn test_schema_in_deployment_audit_log(rt: TestRuntime) -> anyhow::Result<
             UdfConfig::new_for_test(&rt, "1000.0.0".parse()?),
             None,
             btreemap! {},
+            None,
             None,
         )
         .await?;

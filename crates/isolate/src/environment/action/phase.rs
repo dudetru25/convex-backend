@@ -4,7 +4,6 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Context;
 use common::{
     components::{
         ComponentId,
@@ -160,13 +159,10 @@ impl<RT: Runtime> ActionPhase<RT> {
             .map(|c| ChaCha12Rng::from_seed(c.import_phase_rng_seed));
         let import_time_unix_timestamp = udf_config.as_ref().map(|c| c.import_phase_unix_timestamp);
 
-        let (module_metadata, source_package) = timeout
+        let module_metadata = timeout
             .with_release_permit(PauseReason::LoadResources, async {
                 let module_metadata = ModuleModel::new(&mut tx)
                     .get_all_metadata(component_id)
-                    .await?;
-                let source_package = SourcePackageModel::new(&mut tx, component_id.into())
-                    .get_latest()
                     .await?;
                 let loaded_resources = ComponentsModel::new(&mut tx)
                     .preload_resources(component_id)
@@ -175,22 +171,33 @@ impl<RT: Runtime> ActionPhase<RT> {
                     let mut resources = resources.lock();
                     *resources = loaded_resources;
                 }
-                Ok((module_metadata, source_package))
+                Ok(module_metadata)
             })
             .await?;
 
         let modules = timeout
             .with_release_permit(PauseReason::LoadModuleSource, async {
                 let mut modules = BTreeMap::new();
+                let mut source_package_cache = BTreeMap::new();
                 for metadata in module_metadata {
                     if metadata.path.is_system() {
                         continue;
                     }
                     let path = metadata.path.clone();
+                    let sp_id = metadata.source_package_id;
+                    let source_package = match source_package_cache.get(&sp_id) {
+                        Some(sp) => sp,
+                        None => {
+                            let sp = SourcePackageModel::new(&mut tx, component_id.into())
+                                .get(sp_id)
+                                .await?;
+                            source_package_cache.entry(sp_id).or_insert(sp)
+                        },
+                    };
                     let module = module_loader
                         .get_module_with_metadata(
                             metadata.clone(),
-                            source_package.clone().context("source package not found")?,
+                            source_package.clone(),
                         )
                         .await?;
                     modules.insert(path, (metadata.into_value(), module));

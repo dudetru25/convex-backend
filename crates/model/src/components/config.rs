@@ -421,6 +421,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
         udf_config_by_definition: BTreeMap<DeveloperDocumentId, UdfConfig>,
         schema_change: &SchemaChange,
         modules_by_definition: BTreeMap<DeveloperDocumentId, NewModules>,
+        namespace: Option<String>,
     ) -> anyhow::Result<BTreeMap<ComponentPath, ComponentDiff>> {
         let definition_id_by_path = BootstrapComponentsModel::new(self.tx)
             .load_all_definitions()
@@ -479,6 +480,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                         &modules_by_definition,
                         &udf_config_by_definition,
                         schema_id,
+                        namespace.clone(),
                     )
                     .await?
                 },
@@ -491,6 +493,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                         &modules_by_definition,
                         &udf_config_by_definition,
                         schema_id,
+                        namespace.clone(),
                     )
                     .await?
                 },
@@ -527,6 +530,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
         modules_by_definition: &BTreeMap<DeveloperDocumentId, NewModules>,
         udf_config_by_definition: &BTreeMap<DeveloperDocumentId, UdfConfig>,
         schema_id: Option<ResolvedDocumentId>,
+        namespace: Option<String>,
     ) -> anyhow::Result<(DeveloperDocumentId, ComponentDiff)> {
         let modules = modules_by_definition
             .get(&metadata.definition_id)
@@ -553,6 +557,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                 modules.modules.clone(),
                 Some(source_package_id),
                 modules.analyze_results.clone(),
+                namespace,
             )
             .await?;
         let cron_diff = CronModel::new(self.tx, component_id)
@@ -593,6 +598,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
         modules_by_definition: &BTreeMap<DeveloperDocumentId, NewModules>,
         udf_config_by_definition: &BTreeMap<DeveloperDocumentId, UdfConfig>,
         schema_id: Option<ResolvedDocumentId>,
+        namespace: Option<String>,
     ) -> anyhow::Result<(DeveloperDocumentId, ComponentDiff)> {
         let component_id = if existing.parent_and_name().is_none() {
             ComponentId::Root
@@ -620,6 +626,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                 modules.modules.clone(),
                 Some(source_package_id),
                 modules.analyze_results.clone(),
+                namespace,
             )
             .await?;
         let cron_diff = CronModel::new(self.tx, component_id)
@@ -674,7 +681,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
             .replace(existing.id(), unmounted_metadata.try_into()?)
             .await?;
         let module_diff = ModuleModel::new(self.tx)
-            .apply(component_id, vec![], None, BTreeMap::new())
+            .apply(component_id, vec![], None, BTreeMap::new(), None)
             .await?;
         let cron_diff = CronModel::new(self.tx, component_id)
             .apply(&BTreeMap::new())

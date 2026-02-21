@@ -163,7 +163,7 @@ function displayObjectSchema(object: Record<string, ObjectFieldType>): string {
   return `{${Object.keys(object)
     .map((key) => {
       const valueType = displayObjectFieldSchema(object[key]);
-      return `${key}: ${valueType}`;
+      return `"${key}": ${valueType}`;
     })
     .join(",")}}`;
 }
@@ -293,7 +293,7 @@ function displayTableDefinition(tableDefinition: TableDefinition): string {
   const documentType = displayDocumentType(
     tableDefinition.documentType ?? { type: "any" },
   );
-  return `${tableDefinition.tableName}: defineTable(${documentType}
+  return `"${tableDefinition.tableName}": defineTable(${documentType}
   )${
     displayIndexes(tableDefinition.indexes, "active") +
     displayIndexes(tableDefinition.stagedDbIndexes ?? [], "staged") +

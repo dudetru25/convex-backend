@@ -105,6 +105,7 @@ impl TryFrom<StartPushResponse> for SerializedStartPushResponse {
                 .collect::<anyhow::Result<_>>()?,
             app: value.app.try_into()?,
             schema_change: value.schema_change.try_into()?,
+            namespace: value.namespace,
         })
     }
 }
@@ -149,6 +150,7 @@ impl TryFrom<SerializedStartPushResponse> for StartPushResponse {
                 .collect::<anyhow::Result<_>>()?,
             app: value.app.try_into()?,
             schema_change: value.schema_change.try_into()?,
+            namespace: value.namespace,
         })
     }
 }
@@ -171,6 +173,9 @@ pub struct SerializedStartPushResponse {
 
     // Schema changes.
     schema_change: SerializedSchemaChange,
+
+    #[serde(default)]
+    namespace: Option<String>,
 }
 
 impl TryFrom<EvaluatePushResponse> for SerializedEvaluatePushResponse {

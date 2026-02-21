@@ -452,6 +452,7 @@ pub struct ApplyConfigArgs {
     pub udf_config: UdfConfig,
     pub source_package: SourcePackage,
     pub analyze_results: BTreeMap<CanonicalizedModulePath, AnalyzedModule>,
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1939,6 +1940,7 @@ impl<RT: Runtime> Application<RT> {
             udf_config,
             source_package,
             analyze_results,
+            namespace,
         }: ApplyConfigArgs,
     ) -> anyhow::Result<(ConfigMetadataAndSchema, Vec<DeploymentAuditLogEvent>)> {
         let schema_id = schema_id
@@ -1973,6 +1975,7 @@ impl<RT: Runtime> Application<RT> {
                 Some(source_package),
                 analyze_results,
                 schema_id,
+                namespace,
             )
             .await?;
 

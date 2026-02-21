@@ -73,6 +73,7 @@ impl<'a, RT: Runtime> ConfigModel<'a, RT> {
         source_package: Option<SourcePackage>,
         analyze_results: BTreeMap<CanonicalizedModulePath, AnalyzedModule>,
         schema_id: Option<ResolvedDocumentId>,
+        namespace: Option<String>,
     ) -> anyhow::Result<(ConfigDiff, Option<DatabaseSchema>)> {
         // TODO: Move this check up to `Application`.
         if !(self.tx.identity().is_admin() || self.tx.identity().is_system()) {
@@ -101,7 +102,7 @@ impl<'a, RT: Runtime> ConfigModel<'a, RT> {
             .await?;
 
         let module_diff = ModuleModel::new(self.tx)
-            .apply(self.component, modules, source_package_id, analyze_results)
+            .apply(self.component, modules, source_package_id, analyze_results, namespace)
             .await?;
 
         // Update auth info.
