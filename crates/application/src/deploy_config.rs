@@ -428,61 +428,6 @@ impl<RT: Runtime> Application<RT> {
     }
 
     #[fastrace::trace]
-    /// Deploy a schema for a specific project with namespace ownership
-    /// validation. This enables multi-project deployments where each
-    /// project owns a namespace. Ownership is first-claim by `project_id`.
-    pub fn deploy_project_schema(
-        &self,
-        registry: &model::project_registry::ProjectRegistry,
-        namespace: String,
-        project_id: String,
-        schema: DatabaseSchema,
-    ) -> anyhow::Result<()> {
-        // Step 1: Register or validate namespace ownership (first-claim by project_id)
-        registry.register_namespace(namespace.clone(), project_id.clone())?;
-
-        // Step 2: Prefix all tables with namespace and track names
-        use std::str::FromStr;
-
-        use common::types::TableName;
-
-        let mut namespaced_schema = DatabaseSchema {
-            tables: BTreeMap::new(),
-            schema_validation: false,
-        };
-        let mut table_names = Vec::new();
-
-        for (table_name, mut table_def) in schema.tables {
-            let base_name = String::from(table_name);
-            table_names.push(base_name.clone());
-
-            let namespaced_name_str = format!("{}/{}", namespace, base_name);
-            let namespaced_name = TableName::from_str(&namespaced_name_str)?;
-
-            table_def.table_name = namespaced_name.clone();
-            namespaced_schema.tables.insert(namespaced_name, table_def);
-        }
-
-        namespaced_schema.schema_validation = schema.schema_validation;
-
-        // Step 3: Update registry with table names
-        registry.update_registration(&namespace, table_names)?;
-
-        // Step 4: Log success
-        tracing::info!(
-            "Successfully deployed schema for project {} in namespace {} with {} tables",
-            project_id,
-            namespace,
-            namespaced_schema.tables.len()
-        );
-
-        // Note: Schema composition with other projects would happen at query time.
-        // The registry tracks all namespaces and their tables.
-
-        Ok(())
-    }
-
-    #[fastrace::trace]
     async fn evaluate_components(
         &self,
         config: &ProjectConfig,
