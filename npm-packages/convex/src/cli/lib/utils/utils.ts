@@ -16,7 +16,7 @@ import {
   logWarning,
 } from "../../../bundler/log.js";
 import { version } from "../../version.js";
-import { Project } from "../api.js";
+import type { CloudDeploymentType, Project } from "../api.js";
 import { promptOptions, promptSearch, promptYesNo } from "./prompts.js";
 import {
   bigBrainEnableFeatureMetadata,
@@ -421,6 +421,7 @@ export async function selectDevDeploymentType(
 export async function selectRegionOrUseDefault(
   ctx: Context,
   selectedTeam: TeamResponse,
+  deploymentType: CloudDeploymentType,
 ) {
   const noDefaultRegionMessage = chalkStderr.gray(
     `Tip: you can configure a default region for your team at ${chalkStderr.underline(`https://dashboard.convex.dev/t/${selectedTeam.slug}/settings`)}`,
@@ -433,7 +434,8 @@ export async function selectRegionOrUseDefault(
     return selectedTeam.defaultRegion ?? null;
   }
   const selectedRegionName =
-    selectedTeam.defaultRegion ?? (await selectRegion(ctx, selectedTeam.id));
+    selectedTeam.defaultRegion ??
+    (await selectRegion(ctx, selectedTeam.id, deploymentType));
   if (!selectedTeam.defaultRegion) {
     logMessage(noDefaultRegionMessage);
   }
@@ -443,6 +445,7 @@ export async function selectRegionOrUseDefault(
 export async function selectRegion(
   ctx: Context,
   teamId: number,
+  deploymentType: CloudDeploymentType,
 ): Promise<string | null> {
   const regionsResponse = (
     await typedPlatformClient(ctx).GET(
@@ -467,7 +470,7 @@ export async function selectRegion(
       return 0;
     });
   return await promptOptions(ctx, {
-    message: "Where should this dev deployment run?",
+    message: `Where should this ${deploymentType} deployment run?`,
     suffix: `\n${chalkStderr.gray(
       "See https://www.convex.dev/pricing for pricing",
     )}`,
@@ -497,7 +500,7 @@ export async function hasProject(
 }
 
 export async function hasProjects(ctx: Context) {
-  return !!(await bigBrainAPI({ ctx, method: "GET", url: `has_projects` }));
+  return !!(await bigBrainAPI({ ctx, method: "GET", path: `has_projects` }));
 }
 
 export async function validateOrSelectProject(
@@ -717,12 +720,12 @@ export async function bigBrainFetch(ctx: Context): Promise<typeof fetch> {
 export async function bigBrainAPI<T = any>({
   ctx,
   method,
-  url,
+  path,
   data,
 }: {
   ctx: Context;
   method: "GET" | "POST" | "HEAD";
-  url: string;
+  path: string;
   data?: any;
 }): Promise<T> {
   const dataString =
@@ -735,7 +738,7 @@ export async function bigBrainAPI<T = any>({
     return await bigBrainAPIMaybeThrows({
       ctx,
       method,
-      url,
+      path,
       data: dataString,
     });
   } catch (err: unknown) {
@@ -811,12 +814,12 @@ export const typedPlatformClient =
 export async function bigBrainAPIMaybeThrows({
   ctx,
   method,
-  url,
+  path,
   data,
 }: {
   ctx: Context;
   method: "GET" | "POST" | "HEAD";
-  url: string;
+  path: string;
   data?: any;
 }): Promise<any> {
   const fetch = await bigBrainFetch(ctx);
@@ -828,7 +831,7 @@ export async function bigBrainAPIMaybeThrows({
       : typeof data === "string"
         ? data
         : JSON.stringify(data);
-  const res = await fetch(new URL(url, BIG_BRAIN_URL), {
+  const res = await fetch(new URL(path, BIG_BRAIN_URL), {
     method,
     ...(dataString ? { body: dataString } : {}),
     headers:

@@ -2384,7 +2384,7 @@
             "in": "query",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/InstanceName"
+              "$ref": "#/components/schemas/CloudDeploymentName"
             },
             "style": "form"
           },
@@ -3597,7 +3597,8 @@
           "retrieveProjectWorkosEnvironmentCredentials",
           "enableSSO",
           "disableSSO",
-          "updateSSO"
+          "updateSSO",
+          "updateDeployment"
         ]
       },
       "AuditLogActor": {
@@ -3660,6 +3661,25 @@
                 "properties": {
                   "team_id": {
                     "$ref": "#/components/schemas/TeamId"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "app"
+            ],
+            "properties": {
+              "app": {
+                "type": "object",
+                "required": [
+                  "client_id"
+                ],
+                "properties": {
+                  "client_id": {
+                    "type": "string"
                   }
                 }
               }
@@ -4057,12 +4077,16 @@
             "$ref": "#/components/schemas/DeploymentId"
           },
           "sourceDeploymentName": {
-            "$ref": "#/components/schemas/InstanceName"
+            "$ref": "#/components/schemas/CloudDeploymentName"
           },
           "state": {
             "type": "string"
           }
         }
+      },
+      "CloudDeploymentName": {
+        "type": "string",
+        "description": "Example instance names:\n\ntall-sheep-123\n\ntest-tall-sheep-123  # Prefix of test for internal testing"
       },
       "ConfigurePeriodicBackupArgs": {
         "type": "object",
@@ -4397,6 +4421,7 @@
               "region",
               "isDefault",
               "reference",
+              "deploymentClass",
               "kind"
             ],
             "properties": {
@@ -4420,8 +4445,20 @@
                   "null"
                 ]
               },
+              "deploymentClass": {
+                "type": "string",
+                "description": "The deployment class for this deployment."
+              },
               "deploymentType": {
                 "$ref": "#/components/schemas/DeploymentType"
+              },
+              "expiresAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "Timestamp in milliseconds when this deployment will be\ndeleted. Preview deployments have this set by default unless\noverridden."
               },
               "id": {
                 "$ref": "#/components/schemas/DeploymentId"
@@ -4434,6 +4471,13 @@
                 "enum": [
                   "cloud"
                 ]
+              },
+              "lastDeployTime": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
               },
               "name": {
                 "type": "string"
@@ -4456,6 +4500,13 @@
               },
               "region": {
                 "$ref": "#/components/schemas/RegionName"
+              },
+              "sendLogsToClient": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "Whether to send function logs to the client. If `null`, the\ndeployment-type default is used (true for dev/preview, false for\nprod)."
               }
             }
           },
@@ -5085,10 +5136,6 @@
             }
           }
         ]
-      },
-      "InstanceName": {
-        "type": "string",
-        "description": "Example instance names:\n\ntall-sheep-123\n\ntest-tall-sheep-123  # Prefix of test for internal testing"
       },
       "InvitationEligibleEmailsResponse": {
         "type": "object",
@@ -6001,7 +6048,11 @@
         }
       },
       "RegionName": {
-        "type": "string"
+        "type": "string",
+        "enum": [
+          "aws-us-east-1",
+          "aws-eu-west-1"
+        ]
       },
       "RegisterOauthAppArgs": {
         "type": "object",
@@ -6833,7 +6884,7 @@
             "type": "string"
           },
           "instanceName": {
-            "$ref": "#/components/schemas/InstanceName"
+            "$ref": "#/components/schemas/CloudDeploymentName"
           },
           "requestDestination": {
             "$ref": "#/components/schemas/RequestDestination"

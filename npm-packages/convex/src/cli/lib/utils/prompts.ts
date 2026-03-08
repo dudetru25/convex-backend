@@ -14,7 +14,6 @@ function handlePromptError(ctx: Context) {
   return async (error: unknown): Promise<never> => {
     if (error instanceof Error && error.name === "ExitPromptError") {
       // User pressed Ctrl+C — exit silently with code 130 (standard for SIGINT)
-      // eslint-disable-next-line no-process-exit
       process.exit(130);
     }
     return ctx.crash({
@@ -37,6 +36,27 @@ export const promptString = async (
     return input({
       message: options.message,
       ...(options.default !== undefined ? { default: options.default } : {}),
+    }).catch(handlePromptError(ctx));
+  } else {
+    return ctx.crash({
+      exitCode: 1,
+      errorType: "fatal",
+      printedMessage: `Cannot prompt for input in non-interactive terminals. (${options.message})`,
+    });
+  }
+};
+
+export const promptSecret = async (
+  ctx: Context,
+  options: {
+    message: string;
+  },
+): Promise<string> => {
+  if (process.stdin.isTTY) {
+    return input({
+      message: options.message,
+      transformer: (val, { isFinal }) =>
+        isFinal ? "*".repeat(val.length) : val,
     }).catch(handlePromptError(ctx));
   } else {
     return ctx.crash({

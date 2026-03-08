@@ -44,13 +44,13 @@
     "postcss": "^8.4.19",
     "@radix-ui/react-icons": "~1.3.0",
     "react-cookie": "~7.2.2",
-    "posthog-js": "~1.313.0",
+    "posthog-js": "~1.336.0",
     "dotenv": "^16.4.7",
     "@docusaurus/plugin-content-docs": "~3.9.1",
     "copy-text-to-clipboard": "^3.2.0",
     "degit": "^2.8.4",
     "docusaurus-plugin-openapi-docs": "~4.5.1",
-    "docusaurus-theme-openapi-docs": "~4.5.1",
+    "docusaurus-theme-openapi-docs": "~4.7.0",
     "sonner": "^2.0.0"
   },
   "devDependencies": {

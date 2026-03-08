@@ -15,7 +15,7 @@ import {
   Share1Icon,
 } from "@radix-ui/react-icons";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
-import { ProjectDetails, TeamResponse } from "generatedApi";
+import { DeploymentResponse, ProjectDetails, TeamResponse } from "generatedApi";
 import {
   PROVISION_DEV_PAGE_NAME,
   PROVISION_PROD_PAGE_NAME,
@@ -31,7 +31,7 @@ export function DeploymentMenuOptions({
 }: {
   team: TeamResponse;
   project: ProjectDetails;
-  deployments: PlatformDeploymentResponse[];
+  deployments: (PlatformDeploymentResponse | DeploymentResponse)[];
 }) {
   const member = useProfile();
   const router = useRouter();
@@ -69,6 +69,7 @@ export function DeploymentMenuOptions({
         name: d.name,
         creator: whose?.name || whose?.email || "Teammate",
         isDefault: d.isDefault,
+        reference: d.reference,
       };
     })
     .sort((a, b) => {
@@ -144,7 +145,7 @@ export function DeploymentMenuOptions({
               key={prodDeployment.name}
               label={
                 <DeploymentOption
-                  identifier={prodDeployment.name}
+                  identifier={prodDeployment.reference}
                   name={prodDeployment.name}
                 />
               }
@@ -231,7 +232,11 @@ export function DeploymentMenuOptions({
               key={customDeployment.name}
               label={
                 <DeploymentOption
-                  identifier={customDeployment.name}
+                  identifier={
+                    customDeployment.kind === "cloud"
+                      ? customDeployment.reference
+                      : "" // should never happen
+                  }
                   name={customDeployment.name}
                 />
               }
@@ -266,7 +271,7 @@ export function DeploymentMenuOptions({
             key={d.name}
             label={
               <DeploymentOption
-                identifier={`${d.creator}'s dev`}
+                identifier={d.isDefault ? `${d.creator}'s dev` : d.reference}
                 name={d.name}
               />
             }
@@ -301,7 +306,7 @@ function AllPersonalDeployments({
 }: {
   project: ProjectDetails;
   team: TeamResponse;
-  deployments: PlatformDeploymentResponse[];
+  deployments: (PlatformDeploymentResponse | DeploymentResponse)[];
 }) {
   const member = useProfile();
   const router = useRouter();
@@ -315,7 +320,7 @@ function AllPersonalDeployments({
   const currentView = router.asPath.split("?")[0].split("/").slice(5).join("/");
   const allDevDeployments = sortDevDeployments(
     deployments.filter(
-      (d: PlatformDeploymentResponse) =>
+      (d: PlatformDeploymentResponse | DeploymentResponse) =>
         d.deploymentType === "dev" && d.creator === member?.id,
     ),
   );
@@ -357,7 +362,13 @@ function AllPersonalDeployments({
             }
             label={
               <DeploymentOption
-                identifier={`${d.kind === "local" ? `${d.deviceName}` : "Development (Cloud)"}`}
+                identifier={
+                  d.kind === "local"
+                    ? d.deviceName
+                    : d.isDefault
+                      ? "Development (Cloud)"
+                      : d.reference
+                }
                 name={d.kind === "local" ? `Port ${d.port}` : d.name}
               />
             }
@@ -369,7 +380,9 @@ function AllPersonalDeployments({
   );
 }
 
-function sortDevDeployments(deployments: PlatformDeploymentResponse[]) {
+function sortDevDeployments(
+  deployments: (PlatformDeploymentResponse | DeploymentResponse)[],
+) {
   return deployments.sort((a, b) => {
     // Sort inactive local deployments to the end
     if (a.kind === "local" && !a.isActive) {

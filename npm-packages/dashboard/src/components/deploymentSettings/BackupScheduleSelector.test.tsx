@@ -11,14 +11,16 @@ import {
 
 const deployment: PlatformDeploymentResponse = {
   kind: "cloud",
+  class: "s16",
   id: 1,
   name: "joyful-capybara-123",
+  deploymentUrl: "https://joyful-capybara-123.convex.cloud",
   deploymentType: "prod",
   createTime: Date.now(),
   projectId: 1,
   creator: 1,
   previewIdentifier: null,
-  region: "us-east-2",
+  region: "aws-us-east-1",
   isDefault: true,
   reference: "production",
 };

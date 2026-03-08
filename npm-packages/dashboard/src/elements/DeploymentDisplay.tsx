@@ -11,7 +11,11 @@ import { useRememberLastViewedDeploymentForProject } from "hooks/useLastViewed";
 import { cn } from "@ui/cn";
 import { useRouter } from "next/router";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
-import { ProjectDetails, DeploymentType } from "generatedApi";
+import {
+  ProjectDetails,
+  DeploymentType,
+  DeploymentResponse,
+} from "generatedApi";
 import { Button } from "@ui/Button";
 import { ContextMenu } from "@common/features/data/components/ContextMenu";
 import { DeploymentMenuOptions } from "components/header/ProjectSelector/DeploymentMenuOptions";
@@ -111,6 +115,13 @@ export function DeploymentDisplay({ project }: { project: ProjectDetails }) {
       : whose?.name || whose?.email || "Teammate";
 
   const isProjectSettings = router.route.endsWith("/[project]/settings");
+  const isProvisionProd = router.route.endsWith(
+    `/[project]/${PROVISION_PROD_PAGE_NAME}`,
+  );
+  const isProvisionDev = router.route.endsWith(
+    `/[project]/${PROVISION_DEV_PAGE_NAME}`,
+  );
+  const isProvisionPage = isProvisionProd || isProvisionDev;
   const team = useCurrentTeam();
   const currentProject = useCurrentProject();
 
@@ -212,6 +223,52 @@ export function DeploymentDisplay({ project }: { project: ProjectDetails }) {
           <GearIcon className="size-4 min-w-4" />
           <span className="max-w-24 truncate sm:contents">
             Project settings
+          </span>
+          <CaretSortIcon className="ml-auto size-5 bg-transparent" />
+          <ContextMenu target={menuTarget} onClose={closeMenu}>
+            <DeploymentMenuOptions
+              team={team}
+              project={currentProject}
+              deployments={deployments}
+            />
+          </ContextMenu>
+        </Button>
+      </div>
+    ) : null
+  ) : isProvisionPage ? (
+    team && currentProject ? (
+      <div
+        key="provisionDeployment"
+        className="my-2 mr-px flex grow items-stretch overflow-visible rounded-full bg-background-secondary"
+      >
+        <Button
+          variant="unstyled"
+          className={cn(
+            "flex h-full items-center gap-2 rounded-full px-3",
+            "border border-dashed",
+            "truncate text-sm font-medium transition-opacity hover:opacity-80",
+            menuTarget && "opacity-80",
+            isProvisionProd
+              ? "border-purple-600 bg-purple-100/50 text-purple-600 dark:border-purple-100 dark:bg-purple-700/50 dark:text-purple-100"
+              : "border-green-600 bg-green-100/50 text-green-600 dark:border-green-400 dark:bg-green-900/50 dark:text-green-400",
+          )}
+          ref={buttonRef}
+          tabIndex={0}
+          role="button"
+          aria-haspopup="menu"
+          aria-expanded={!!menuTarget}
+          onClick={openMenu}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") openMenu(e as any);
+          }}
+        >
+          {isProvisionProd ? (
+            <SignalIcon className="size-4 min-w-4" />
+          ) : (
+            <CommandLineIcon className="size-4 min-w-4" />
+          )}
+          <span className="max-w-32 truncate sm:contents">
+            {isProvisionProd ? "Production" : "Development (Cloud)"}
           </span>
           <CaretSortIcon className="ml-auto size-5 bg-transparent" />
           <ContextMenu target={menuTarget} onClose={closeMenu}>
@@ -424,7 +481,7 @@ export function getDeploymentLabel({
   deployment,
   whoseName,
 }: {
-  deployment: PlatformDeploymentResponse;
+  deployment: PlatformDeploymentResponse | DeploymentResponse;
   whoseName: string | null; // null = mine
 }): string {
   switch (deployment.deploymentType) {

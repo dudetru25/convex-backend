@@ -51,6 +51,7 @@ use common::{
         ParsedDocument,
         ResolvedDocument,
     },
+    index::IndexKeyBytes,
     interval::Interval,
     knobs::{
         DEFAULT_DOCUMENTS_PAGE_SIZE,
@@ -75,7 +76,10 @@ use common::{
         RetentionValidator,
         TimestampRange,
     },
-    query::Order,
+    query::{
+        CursorPosition,
+        Order,
+    },
     runtime::{
         RateLimiter,
         Runtime,
@@ -906,7 +910,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             self.snapshot.index_registry.clone(),
             Arc::new(NoInMemoryIndexes),
             self.snapshot.table_registry.table_mapping().clone(),
-            self.persistence_snapshot.clone(),
+            Arc::new(self.persistence_snapshot.clone()),
             None,
         );
 
@@ -1535,6 +1539,39 @@ impl<RT: Runtime> Database<RT> {
         self.reader.version()
     }
 
+    pub async fn index_page(
+        &self,
+        ts: RepeatableTimestamp,
+        index_id: IndexId,
+        tablet_id: TabletId,
+        interval: &Interval,
+        order: Order,
+        max_size: usize,
+    ) -> anyhow::Result<(
+        Vec<(IndexKeyBytes, Timestamp, PackedDocument)>,
+        CursorPosition,
+    )> {
+        let snapshot = self.snapshot_manager.lock().snapshot(*ts)?;
+        let persistence_snapshot =
+            RepeatablePersistence::new(self.reader.clone(), ts, self.retention_validator())
+                .read_snapshot(ts)?;
+        let db_index_snapshot = DatabaseIndexSnapshot::new(
+            snapshot.index_registry,
+            Arc::new(snapshot.in_memory_indexes),
+            snapshot.table_registry.table_mapping().clone(),
+            Arc::new(persistence_snapshot),
+            None,
+        );
+        let (results, cursor) = db_index_snapshot
+            .index_page(index_id, tablet_id, interval, order, max_size)
+            .await?;
+        let entries = results
+            .into_iter()
+            .map(|(key, ts, doc)| (key, ts, doc.pack()))
+            .collect();
+        Ok((entries, cursor))
+    }
+
     pub fn now_ts_for_reads(&self) -> RepeatableTimestamp {
         let snapshot_manager = self.snapshot_manager.lock();
         snapshot_manager.latest_ts()
@@ -1773,12 +1810,14 @@ impl<RT: Runtime> Database<RT> {
                 snapshot.index_registry.clone(),
                 Arc::new(snapshot.in_memory_indexes),
                 snapshot.table_registry.table_mapping().clone(),
-                RepeatablePersistence::new(
-                    self.reader.clone(),
-                    repeatable_ts,
-                    self.retention_manager.clone(),
-                )
-                .read_snapshot(repeatable_ts)?,
+                Arc::new(
+                    RepeatablePersistence::new(
+                        self.reader.clone(),
+                        repeatable_ts,
+                        self.retention_manager.clone(),
+                    )
+                    .read_snapshot(repeatable_ts)?,
+                ),
                 index_cache,
             ),
             Arc::new(TextIndexManagerSnapshot::new(
@@ -2580,11 +2619,13 @@ impl ConflictingReadWithWriteSource {
             )
         });
 
+        let write_source = self.write_source.0.as_ref().map(|s| s.to_string());
+
         if !table_name.is_system() {
             let metadata = ErrorMetadata::user_occ(
                 Some(table_name.into()),
                 Some(self.read.id.developer_id.encode()),
-                self.write_source.0.as_ref().map(|s| s.to_string()),
+                write_source,
                 occ_msg,
                 write_ts_val,
             );
@@ -2617,7 +2658,7 @@ impl ConflictingReadWithWriteSource {
                 tracing::error!("Read of {index} occurred at {stack_trace}");
             }
         };
-        let metadata = ErrorMetadata::system_occ(write_ts_val);
+        let metadata = ErrorMetadata::system_occ(write_ts_val, write_source);
         anyhow::anyhow!(formatted).context(metadata)
     }
 }

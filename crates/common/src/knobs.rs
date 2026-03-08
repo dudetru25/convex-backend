@@ -705,7 +705,7 @@ pub static DATABASE_UDF_SYSTEM_TIMEOUT: LazyLock<Duration> =
 
 /// Timeout on the time it takes to analyze code during a push.
 pub static ISOLATE_ANALYZE_USER_TIMEOUT: LazyLock<Duration> =
-    LazyLock::new(|| Duration::from_secs(env_config("ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS", 2)));
+    LazyLock::new(|| Duration::from_secs(env_config("ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS", 4)));
 
 /// Increasing the size of the queue helps us deal with bursty requests. This is
 /// a CoDel queue [https://queue.acm.org/detail.cfm?id=2209336], which will
@@ -985,12 +985,6 @@ pub static UDF_USE_FUNRUN: LazyLock<bool> = LazyLock::new(|| env_config("UDF_USE
 pub static VECTOR_BACKUP_REQUEST_DELAY_MILLIS: LazyLock<Duration> =
     LazyLock::new(|| Duration::from_millis(env_config("VECTOR_BACKUP_REQUEST_DELAY_MILLIS", 30)));
 
-/// Whether to shard vector search queries by segment for better cache locality.
-/// When enabled, each segment is routed to a searchlight node via rendezvous
-/// hashing on the segment's storage key.
-pub static VECTOR_SEARCH_SHARD_BY_SEGMENT: LazyLock<bool> =
-    LazyLock::new(|| env_config("VECTOR_SEARCH_SHARD_BY_SEGMENT", true));
-
 /// Whether to use prepared statements or not in Persistence.
 pub static DATABASE_USE_PREPARED_STATEMENTS: LazyLock<bool> =
     LazyLock::new(|| env_config("DATABASE_USE_PREPARED_STATEMENTS", false));
@@ -1075,6 +1069,11 @@ pub static SEARCHLIGHT_CLUSTER_NAME: LazyLock<String> = LazyLock::new(|| {
         String::from("searchlight-default"),
     )
 });
+
+/// Percentage of index read traffic (0-100) that funrun sends to conductor
+/// via the IndexRangeAtTs RPC instead of reading from persistence directly.
+pub static FUNRUN_INDEX_READS_TO_CONDUCTOR_PERCENT: LazyLock<usize> =
+    LazyLock::new(|| env_config("FUNRUN_INDEX_READS_TO_CONDUCTOR_PERCENT", 0));
 
 /// The maximum number of CPU cores that can be used simultaneously by the
 /// isolates. Zero means no limit.
@@ -1548,3 +1547,7 @@ pub static HTTP_CACHE_SIZE: LazyLock<u64> =
 
 /// Maximum number of environment variables that can be stored.
 pub static ENV_VAR_LIMIT: LazyLock<usize> = LazyLock::new(|| env_config("ENV_VAR_LIMIT", 1000));
+
+/// If set, disable the /metrics endpoint
+pub static DISABLE_METRICS_ENDPOINT: LazyLock<bool> =
+    LazyLock::new(|| env_config("DISABLE_METRICS_ENDPOINT", false));

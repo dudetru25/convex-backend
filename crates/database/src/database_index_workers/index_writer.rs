@@ -6,7 +6,6 @@ use std::{
     fmt::Display,
     num::NonZeroU32,
     sync::Arc,
-    time::Duration,
 };
 
 use common::{
@@ -166,6 +165,7 @@ pub struct TabletBackfillProgress {
     pub num_docs_indexed: u64,
     pub backfill_bytes_read: u64,
     pub backfill_bytes_written: u64,
+    pub phase: String,
 }
 
 impl<RT: Runtime> IndexWriter<RT> {
@@ -489,10 +489,6 @@ impl<RT: Runtime> IndexWriter<RT> {
         revision_pairs: impl Stream<Item = RevisionPair>,
         index_selector: &IndexSelector,
     ) -> anyhow::Result<()> {
-        let mut last_logged = self.runtime.system_time();
-        let mut last_checkpointed = self.runtime.system_time();
-        let mut last_logged_entries_written = 0;
-        let mut num_entries_written = 0;
         let should_send_progress = self.progress_tx.is_some();
         let approx_num_indexes = match index_selector {
             // We choose an arbitrary number of indexes because the revision stream can include
@@ -530,13 +526,14 @@ impl<RT: Runtime> IndexWriter<RT> {
                         ));
                     }
                 }
-                let size = u32::try_from(index_updates.len())?;
+                let num_entries_written = u32::try_from(index_updates.len())?;
+                let docs_in_chunk = chunk.len() as u64;
                 // N.B: it's possible to end up with no entries if we're
                 // backfilling forward through historical documents that have no
                 // present indexes in `index_registry`.
-                if let Some(size) = NonZeroU32::new(size) {
+                if let Some(num_entries_written) = NonZeroU32::new(num_entries_written) {
                     while let Err(not_until) = rate_limiter
-                        .check_n(size)
+                        .check_n(num_entries_written)
                         .expect("RateLimiter capacity impossibly small")
                     {
                         let delay = not_until.wait_time_from(self.runtime.monotonic_now().into());
@@ -546,22 +543,22 @@ impl<RT: Runtime> IndexWriter<RT> {
                         .write(&[], &index_updates, ConflictStrategy::Overwrite)
                         .await?;
                 }
-                anyhow::Ok((u64::from(size), cursor, bytes_read, bytes_written))
+                anyhow::Ok((docs_in_chunk, cursor, bytes_read, bytes_written))
             })
             .buffered(*INDEX_BACKFILL_WORKERS);
         pin_mut!(updates);
 
-        let mut num_docs_indexed = 0;
+        let mut last_checkpointed = self.runtime.system_time();
+        let mut num_docs_indexed_since_progress_reported = 0;
         let mut backfill_bytes_read = 0;
         let mut backfill_bytes_written = 0u64;
         let mut last_cursor = None;
         while let Some(result) = updates.next().await {
-            let (entries_written, cursor, bytes_read, bytes_written) = result?;
+            let (docs_in_chunk, cursor, bytes_read, bytes_written) = result?;
             if cursor.is_some() {
                 last_cursor = cursor;
             }
-            num_docs_indexed += entries_written;
-            num_entries_written += entries_written;
+            num_docs_indexed_since_progress_reported += docs_in_chunk;
             backfill_bytes_written += bytes_written;
             backfill_bytes_read += bytes_read;
             if let Some(tx) = self.progress_tx.as_ref()
@@ -572,12 +569,13 @@ impl<RT: Runtime> IndexWriter<RT> {
                     tablet_id: cursor.table(),
                     index_ids: index_selector.index_ids().collect(),
                     cursor,
-                    num_docs_indexed,
+                    num_docs_indexed: num_docs_indexed_since_progress_reported,
                     backfill_bytes_read,
                     backfill_bytes_written,
+                    phase: phase.clone(),
                 })
                 .await?;
-                num_docs_indexed = 0;
+                num_docs_indexed_since_progress_reported = 0;
                 backfill_bytes_written = 0;
                 backfill_bytes_read = 0;
                 last_checkpointed = self.runtime.system_time();
@@ -585,17 +583,6 @@ impl<RT: Runtime> IndexWriter<RT> {
                     .pause_client()
                     .wait(UPDATE_BACKFILL_PROGRESS_LABEL)
                     .await;
-            }
-            if last_logged.elapsed()? >= Duration::from_secs(60) {
-                let now = self.runtime.system_time();
-                tracing::info!(
-                    "Backfilled {num_entries_written} rows of index {index_selector} {phase} ({} \
-                     rows/s)",
-                    (num_entries_written - last_logged_entries_written) as f64
-                        / (now.duration_since(last_logged).unwrap_or_default()).as_secs_f64(),
-                );
-                last_logged = now;
-                last_logged_entries_written = num_entries_written;
             }
         }
         // Flush any remaining accumulated bytes that weren't sent during the loop
@@ -607,16 +594,14 @@ impl<RT: Runtime> IndexWriter<RT> {
                 tablet_id: cursor.table(),
                 index_ids: index_selector.index_ids().collect(),
                 cursor,
-                num_docs_indexed,
+                num_docs_indexed: num_docs_indexed_since_progress_reported,
                 backfill_bytes_read,
                 backfill_bytes_written,
+                phase: phase.clone(),
             })
             .await?;
         }
-
-        tracing::info!(
-            "Done backfilling {num_entries_written} rows of index {index_selector} {phase}",
-        );
+        tracing::info!("Done backfilling indexes: {index_selector} {phase}",);
         Ok(())
     }
 

@@ -65,6 +65,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project_id}/deployment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get deployment in project by id
+         * @description Get a deployment within a project by reference, default production
+         *     deployment, or default dev deployment for the calling user.
+         */
+        get: operations["get deployment in project by project id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id_or_slug}/projects/{project_slug}/deployment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get deployment in project by slug
+         * @description Get a deployment within a project identified by team and project slug,
+         *     by reference, default production deployment, or default dev deployment
+         *     for the calling user.
+         */
+        get: operations["get deployment in project by project slug"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project_id}/delete": {
         parameters: {
             query?: never;
@@ -185,24 +228,11 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Update deployment settings
-         * @description Modifies settings for an existing deployment. Fields that are not
-         *     provided will be left unchanged.
-         *
-         *     The following fields can be modified through this API:
-         *
-         *     - `reference`: the reference of the deployment. When provided, must match
-         *       the following rules:
-         *       - be unique across deployment references in the project
-         *       - 3 to 100 characters (included)
-         *       - only lowercase letters, numbers, "-"" and "/"
-         *       - not follow the deployment name format [a-z]+-[a-z]+-[0-9]+ (e.g.
-         *         "happy-capybara-123")
-         *       - not start with "local-""
-         *       - not be one of the following reserved keywords: "prod", "dev", "cloud",
-         *         "local", "default", "name", "new", "existing", "deployment", "preview"
+         * Update deployment
+         * @description Updates properties of an existing deployment. Only the fields provided in
+         *     the request body are modified; omitted fields are left unchanged.
          */
-        patch: operations["update deployment settings"];
+        patch: operations["update deployment"];
         trace?: never;
     };
     "/teams/{team_id}/list_deployment_classes": {
@@ -237,6 +267,46 @@ export interface paths {
          * @description Lists the available deployment regions for a team.
          */
         get: operations["list deployment regions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/list_deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List deployments for team
+         * @description Lists deployments for a team with pagination, sorting, and filtering.
+         */
+        get: operations["list deployments for team"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/list_local_deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List local deployments
+         * @description Lists the local deployments for a team.
+         */
+        get: operations["list local deployments for team"];
         put?: never;
         post?: never;
         delete?: never;
@@ -308,6 +378,70 @@ export interface paths {
          *     the deploy key.
          */
         post: operations["delete deploy key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/create_preview_deploy_key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create preview deploy key
+         * @description Create a preview deploy key like "preview:team-slug:project-slug|ey..."
+         *     which can be used with the Convex CLI to create and manage preview
+         *     deployments within the project.
+         */
+        post: operations["create preview deploy key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/list_preview_deploy_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List preview deploy keys
+         * @description Lists all preview deploy keys for the specified project.
+         */
+        get: operations["list preview deploy keys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/delete_preview_deploy_key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete preview deploy key
+         * @description Deletes a preview deploy key for the specified project. The `id` in the
+         *     request body can be the full preview deploy key (with prefix), encoded
+         *     token, or the name of the preview deploy key.
+         */
+        post: operations["delete preview deploy key"];
         delete?: never;
         options?: never;
         head?: never;
@@ -420,7 +554,7 @@ export interface components {
         /** @description Encrypted admin key */
         AdminKey: string;
         /** @enum {string} */
-        CreateDeploymentType: "dev" | "prod";
+        CreateDeploymentType: "dev" | "prod" | "preview" | "custom";
         /** @enum {string} */
         DeploymentClass: "s16" | "s256" | "d1024";
         DeploymentClassMetadata: {
@@ -436,41 +570,6 @@ export interface components {
             displayName: string;
             name: components["schemas"]["RegionName"];
         };
-        DeploymentResponse: {
-            /** Format: int64 */
-            createTime: number;
-            creator?: null | components["schemas"]["MemberId"];
-            dashboardEditConfirmation?: boolean | null;
-            deploymentType: components["schemas"]["DeploymentType"];
-            id: components["schemas"]["DeploymentId"];
-            isDefault: components["schemas"]["IsDefaultDeployment"];
-            /** @enum {string} */
-            kind: "cloud";
-            name: string;
-            previewIdentifier?: null | components["schemas"]["PreviewDeploymentIdentifier"];
-            projectId: components["schemas"]["ProjectId"];
-            reference: components["schemas"]["DeploymentReference"];
-            region: components["schemas"]["RegionName"];
-        } | {
-            /** Format: int64 */
-            createTime: number;
-            creator: components["schemas"]["MemberId"];
-            deploymentType: components["schemas"]["DeploymentType"];
-            deviceName: components["schemas"]["DeviceName"];
-            /** Format: int64 */
-            id: number;
-            isActive: boolean;
-            isDefault: components["schemas"]["IsDefaultDeployment"];
-            /** @enum {string} */
-            kind: "local";
-            /** Format: int64 */
-            lastUpdateTime: number;
-            name: string;
-            /** Format: int32 */
-            port: number;
-            previewIdentifier?: null | components["schemas"]["PreviewDeploymentIdentifier"];
-            projectId: components["schemas"]["ProjectId"];
-        };
         /** @enum {string} */
         DeploymentType: "dev" | "prod" | "preview" | "custom";
         DeviceName: string;
@@ -483,10 +582,18 @@ export interface components {
         ListDeploymentRegionsResponse: {
             items: components["schemas"]["DeploymentRegionMetadata"][];
         };
+        ListLocalDeploymentsResponse: {
+            items: components["schemas"]["PlatformDeploymentResponse"][];
+        };
         /** Format: int64 */
         MemberId: number;
-        ModifyDeploymentSettingsArgs: {
-            reference?: string | null;
+        PaginatedDeploymentsResponse: {
+            items: components["schemas"]["PlatformDeploymentResponse"][];
+            pagination: components["schemas"]["PaginationMetadata"];
+        };
+        PaginationMetadata: {
+            hasMore: boolean;
+            nextCursor?: string | null;
         };
         PlatformCreateDeployKeyArgs: {
             /** @description Name for the deploy key. */
@@ -511,6 +618,14 @@ export interface components {
             reference?: string | null;
             region?: null | components["schemas"]["RegionName"];
             type: components["schemas"]["CreateDeploymentType"];
+        };
+        PlatformCreatePreviewDeployKeyArgs: {
+            /** @description Name for the preview deploy key. */
+            name: string;
+        };
+        PlatformCreatePreviewDeployKeyResponse: {
+            /** @description The generated preview deploy key. */
+            previewDeployKey: components["schemas"]["AdminKey"];
         };
         PlatformCreateProjectArgs: {
             /** @description When creating a deployment, the class to use for the deployment.
@@ -562,6 +677,11 @@ export interface components {
              *     token's unique name. */
             id: string;
         };
+        PlatformDeletePreviewDeployKeyArgs: {
+            /** @description The token to delete. This can be the secret value of the token or the
+             *     token's unique name. */
+            id: string;
+        };
         PlatformDeployKeyResponse: {
             /**
              * Format: int64
@@ -578,6 +698,8 @@ export interface components {
             name: string;
         };
         PlatformDeploymentResponse: {
+            /** @description The deployment class for this deployment. */
+            class: string;
             /**
              * Format: int64
              * @description Timestamp in milliseconds when this deployment was created.
@@ -591,6 +713,15 @@ export interface components {
             dashboardEditConfirmation?: boolean | null;
             /** @description The type of this deployment. */
             deploymentType: components["schemas"]["DeploymentType"];
+            /** @description The full backend URL for this deployment (e.g. "https://joyful-capybara-123.convex.cloud" or "https://calm-cow-456.eu-west-1.convex.cloud"). This is always a `.convex.cloud` URL, even when the deployment is using custom domains. To get the canonical URL, use [`/get_canonical_urls`](https://docs.convex.dev/deployment-api/get-canonical-urls). */
+            deploymentUrl: string;
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds when this deployment will be
+             *     deleted. Preview deployments have this set by default unless
+             *     overridden.
+             */
+            expiresAt?: number | null;
             id: components["schemas"]["DeploymentId"];
             /** @description For prod deployments, whether they are the default prod deployment
              *     of the project. For dev deployments, whether they are the default
@@ -599,6 +730,12 @@ export interface components {
             isDefault: components["schemas"]["IsDefaultDeployment"];
             /** @enum {string} */
             kind: "cloud";
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds of the last deploy to this deployment, if
+             *     any.
+             */
+            lastDeployTime?: number | null;
             /** @description The readable identifier for this deployment, something like
              *     playful-otter-123. */
             name: string;
@@ -610,6 +747,10 @@ export interface components {
             reference: components["schemas"]["DeploymentReference"];
             /** @description The region where this deployment is hosted. */
             region: components["schemas"]["RegionName"];
+            /** @description Whether to send function logs to the client. If `null`, the
+             *     deployment-type default is used (true for dev/preview, false for
+             *     prod). */
+            sendLogsToClient?: boolean | null;
         } | {
             /**
              * Format: int64
@@ -642,6 +783,10 @@ export interface components {
         PlatformListCustomDomainsResponse: {
             /** @description List of custom domains configured for this deployment. */
             domains: components["schemas"]["PlatformCustomDomainResponse"][];
+        };
+        PlatformListPreviewDeployKeysResponse: {
+            /** @description The list of preview deploy keys. */
+            items: components["schemas"]["PlatformDeployKeyResponse"][];
         };
         PlatformListTeamMembersResponse: {
             items: components["schemas"]["TeamMember"][];
@@ -686,12 +831,47 @@ export interface components {
             /** @enum {string} */
             type: "projectToken";
         };
+        PlatformUpdateDeploymentArgs: {
+            /** @description Controls whether the dashboard requires a confirmation before allowing
+             *     edits during a browser session for this deployment. If set to `null`,
+             *     the setting is reset to the default behavior (true for prod deployments,
+             *     false for dev and preview deployments). If set to `true` or `false`, the
+             *     setting is explicitly overridden. */
+            dashboardEditConfirmation?: boolean | null;
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds when this deployment will be deleted.
+             *     Preview deployments have this set by default unless overridden.
+             *     Must be at least 30 minutes in the future and cannot exceed the
+             *     team's preview deployment retention days entitlement from now.
+             *     Set to `null` to clear the expiration.
+             */
+            expiresAt?: number | null;
+            /** @description The reference of the deployment. When provided, must match the following
+             *     rules:
+             *       - be unique across deployment references in the project
+             *       - 3 to 100 characters (included)
+             *       - only lowercase letters, numbers, "-"" and "/"
+             *       - not follow the deployment name format [a-z]+-[a-z]+-[0-9]+ (e.g.
+             *         "happy-capybara-123")
+             *       - not start with "local-""
+             *       - not be one of the following reserved keywords: "prod", "dev",
+             *         "cloud", "local", "default", "name", "new", "existing",
+             *         "deployment", "preview" */
+            reference?: string | null;
+            /** @description Whether to send function logs to the client. If set to `null`, the
+             *     setting is reset to the deployment-type default (true for dev/preview,
+             *     false for prod). If set to `true` or `false`, the setting is explicitly
+             *     overridden. */
+            sendLogsToClient?: boolean | null;
+        };
         PreviewDeploymentIdentifier: string;
         /** Format: int64 */
         ProjectId: number;
         ProjectName: string;
         ProjectSlug: string;
-        RegionName: string;
+        /** @enum {string} */
+        RegionName: "aws-us-east-1" | "aws-eu-west-1";
         /** @enum {string} */
         RequestDestination: "convexCloud" | "convexSite";
         /** @enum {string} */
@@ -722,28 +902,34 @@ export type DeploymentClassMetadata = components['schemas']['DeploymentClassMeta
 export type DeploymentId = components['schemas']['DeploymentId'];
 export type DeploymentReference = components['schemas']['DeploymentReference'];
 export type DeploymentRegionMetadata = components['schemas']['DeploymentRegionMetadata'];
-export type DeploymentResponse = components['schemas']['DeploymentResponse'];
 export type DeploymentType = components['schemas']['DeploymentType'];
 export type DeviceName = components['schemas']['DeviceName'];
 export type IsDefaultDeployment = components['schemas']['IsDefaultDeployment'];
 export type ListDeploymentClassesResponse = components['schemas']['ListDeploymentClassesResponse'];
 export type ListDeploymentRegionsResponse = components['schemas']['ListDeploymentRegionsResponse'];
+export type ListLocalDeploymentsResponse = components['schemas']['ListLocalDeploymentsResponse'];
 export type MemberId = components['schemas']['MemberId'];
-export type ModifyDeploymentSettingsArgs = components['schemas']['ModifyDeploymentSettingsArgs'];
+export type PaginatedDeploymentsResponse = components['schemas']['PaginatedDeploymentsResponse'];
+export type PaginationMetadata = components['schemas']['PaginationMetadata'];
 export type PlatformCreateDeployKeyArgs = components['schemas']['PlatformCreateDeployKeyArgs'];
 export type PlatformCreateDeployKeyResponse = components['schemas']['PlatformCreateDeployKeyResponse'];
 export type PlatformCreateDeploymentArgs = components['schemas']['PlatformCreateDeploymentArgs'];
+export type PlatformCreatePreviewDeployKeyArgs = components['schemas']['PlatformCreatePreviewDeployKeyArgs'];
+export type PlatformCreatePreviewDeployKeyResponse = components['schemas']['PlatformCreatePreviewDeployKeyResponse'];
 export type PlatformCreateProjectArgs = components['schemas']['PlatformCreateProjectArgs'];
 export type PlatformCreateProjectResponse = components['schemas']['PlatformCreateProjectResponse'];
 export type PlatformCustomDomainResponse = components['schemas']['PlatformCustomDomainResponse'];
 export type PlatformDeleteCustomDomainArgs = components['schemas']['PlatformDeleteCustomDomainArgs'];
 export type PlatformDeleteDeployKeyArgs = components['schemas']['PlatformDeleteDeployKeyArgs'];
+export type PlatformDeletePreviewDeployKeyArgs = components['schemas']['PlatformDeletePreviewDeployKeyArgs'];
 export type PlatformDeployKeyResponse = components['schemas']['PlatformDeployKeyResponse'];
 export type PlatformDeploymentResponse = components['schemas']['PlatformDeploymentResponse'];
 export type PlatformListCustomDomainsResponse = components['schemas']['PlatformListCustomDomainsResponse'];
+export type PlatformListPreviewDeployKeysResponse = components['schemas']['PlatformListPreviewDeployKeysResponse'];
 export type PlatformListTeamMembersResponse = components['schemas']['PlatformListTeamMembersResponse'];
 export type PlatformProjectDetails = components['schemas']['PlatformProjectDetails'];
 export type PlatformTokenDetailsResponse = components['schemas']['PlatformTokenDetailsResponse'];
+export type PlatformUpdateDeploymentArgs = components['schemas']['PlatformUpdateDeploymentArgs'];
 export type PreviewDeploymentIdentifier = components['schemas']['PreviewDeploymentIdentifier'];
 export type ProjectId = components['schemas']['ProjectId'];
 export type ProjectName = components['schemas']['ProjectName'];
@@ -831,6 +1017,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlatformDeploymentResponse"][];
+                };
+            };
+        };
+    };
+    "get deployment in project by project id": {
+        parameters: {
+            query?: {
+                /** @description The reference of the deployment to retrieve. */
+                reference?: null | components["schemas"]["DeploymentReference"];
+                /** @description If true, retrieve the default production deployment. */
+                defaultProd?: boolean | null;
+                /** @description If true, retrieve the default dev deployment for the calling user. */
+                defaultDev?: boolean | null;
+            };
+            header?: never;
+            path: {
+                /** @description Project ID */
+                project_id: components["schemas"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformDeploymentResponse"];
+                };
+            };
+        };
+    };
+    "get deployment in project by project slug": {
+        parameters: {
+            query?: {
+                /** @description The reference of the deployment to retrieve. */
+                reference?: null | components["schemas"]["DeploymentReference"];
+                /** @description If true, retrieve the default production deployment. */
+                defaultProd?: boolean | null;
+                /** @description If true, retrieve the default dev deployment for the calling user. */
+                defaultDev?: boolean | null;
+            };
+            header?: never;
+            path: {
+                /** @description Team ID or slug */
+                team_id_or_slug: string;
+                /** @description Project slug */
+                project_slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformDeploymentResponse"];
                 };
             };
         };
@@ -964,12 +1210,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeploymentResponse"];
+                    "application/json": components["schemas"]["PlatformDeploymentResponse"];
                 };
             };
         };
     };
-    "update deployment settings": {
+    "update deployment": {
         parameters: {
             query?: never;
             header?: never;
@@ -981,7 +1227,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ModifyDeploymentSettingsArgs"];
+                "application/json": components["schemas"]["PlatformUpdateDeploymentArgs"];
             };
         };
         responses: {
@@ -1033,6 +1279,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListDeploymentRegionsResponse"];
+                };
+            };
+        };
+    };
+    "list deployments for team": {
+        parameters: {
+            query?: {
+                /** @description Cursor for pagination */
+                cursor?: string;
+                /** @description Max results per page (default: 100, max: 100) */
+                limit?: number;
+                /** @description Sort field: createTime, lastDeployTime, reference */
+                sort_by?: string;
+                /** @description Sort order: asc, desc */
+                sort_order?: string;
+                /** @description Filter by type: dev, prod, preview, custom */
+                deployment_type?: string;
+                /** @description Search by deployment name or reference */
+                q?: string;
+                /** @description Filter by project ID */
+                project_id?: components["schemas"]["ProjectId"];
+                /** @description Filter by creator member ID */
+                creator?: components["schemas"]["MemberId"];
+                /** @description Filter by default deployment status */
+                is_default?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: components["schemas"]["TeamId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedDeploymentsResponse"];
+                };
+            };
+        };
+    };
+    "list local deployments for team": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: components["schemas"]["TeamId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListLocalDeploymentsResponse"];
                 };
             };
         };
@@ -1098,6 +1407,78 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PlatformDeleteDeployKeyArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "create preview deploy key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                project_id: components["schemas"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformCreatePreviewDeployKeyArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformCreatePreviewDeployKeyResponse"];
+                };
+            };
+        };
+    };
+    "list preview deploy keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                project_id: components["schemas"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformListPreviewDeployKeysResponse"];
+                };
+            };
+        };
+    };
+    "delete preview deploy key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                project_id: components["schemas"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformDeletePreviewDeployKeyArgs"];
             };
         };
         responses: {

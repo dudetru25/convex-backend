@@ -1960,7 +1960,7 @@ export interface components {
             referralCode: components["schemas"]["ReferralCode"];
         };
         /** @enum {string} */
-        AuditLogAction: "joinTeam" | "createTeam" | "updateTeam" | "deleteTeam" | "createProject" | "transferProject" | "receiveProject" | "updateProject" | "deleteProject" | "createProjectEnvironmentVariable" | "updateProjectEnvironmentVariable" | "deleteProjectEnvironmentVariable" | "createDeployment" | "deleteDeployment" | "inviteMember" | "cancelMemberInvitation" | "removeMember" | "updateMemberRole" | "updateMemberProjectRole" | "updatePaymentMethod" | "updateBillingContact" | "updateBillingAddress" | "createSubscription" | "resumeSubscription" | "cancelSubscription" | "changeSubscriptionPlan" | "createTeamAccessToken" | "updateTeamAccessToken" | "deleteTeamAccessToken" | "viewTeamAccessToken" | "createCustomDomain" | "deleteCustomDomain" | "startManualCloudBackup" | "restoreFromCloudBackup" | "configurePeriodicBackup" | "disablePeriodicBackup" | "deleteCloudBackup" | "disableTeamExceedingSpendingLimits" | "setSpendingLimit" | "applyReferralCode" | "createOAuthApplication" | "updateOAuthApplication" | "deleteOAuthApplication" | "verifyOAuthApplication" | "generateOAuthClientSecret" | "createWorkosTeam" | "createWorkosEnvironment" | "deleteWorkosEnvironment" | "retrieveWorkosEnvironmentCredentials" | "disconnectWorkosTeam" | "inviteWorkosTeamMember" | "createProjectWorkosEnvironment" | "deleteProjectWorkosEnvironment" | "retrieveProjectWorkosEnvironmentCredentials" | "enableSSO" | "disableSSO" | "updateSSO";
+        AuditLogAction: "joinTeam" | "createTeam" | "updateTeam" | "deleteTeam" | "createProject" | "transferProject" | "receiveProject" | "updateProject" | "deleteProject" | "createProjectEnvironmentVariable" | "updateProjectEnvironmentVariable" | "deleteProjectEnvironmentVariable" | "createDeployment" | "deleteDeployment" | "inviteMember" | "cancelMemberInvitation" | "removeMember" | "updateMemberRole" | "updateMemberProjectRole" | "updatePaymentMethod" | "updateBillingContact" | "updateBillingAddress" | "createSubscription" | "resumeSubscription" | "cancelSubscription" | "changeSubscriptionPlan" | "createTeamAccessToken" | "updateTeamAccessToken" | "deleteTeamAccessToken" | "viewTeamAccessToken" | "createCustomDomain" | "deleteCustomDomain" | "startManualCloudBackup" | "restoreFromCloudBackup" | "configurePeriodicBackup" | "disablePeriodicBackup" | "deleteCloudBackup" | "disableTeamExceedingSpendingLimits" | "setSpendingLimit" | "applyReferralCode" | "createOAuthApplication" | "updateOAuthApplication" | "deleteOAuthApplication" | "verifyOAuthApplication" | "generateOAuthClientSecret" | "createWorkosTeam" | "createWorkosEnvironment" | "deleteWorkosEnvironment" | "retrieveWorkosEnvironmentCredentials" | "disconnectWorkosTeam" | "inviteWorkosTeamMember" | "createProjectWorkosEnvironment" | "deleteProjectWorkosEnvironment" | "retrieveProjectWorkosEnvironmentCredentials" | "enableSSO" | "disableSSO" | "updateSSO" | "updateDeployment";
         /** @description Represents the `ValidatedActor` equivalent for audit logs. This identifies
          *     who executed an AuditLogEvent */
         AuditLogActor: "system" | {
@@ -2071,9 +2071,15 @@ export interface components {
             requestedTime: number;
             snapshotId?: string | null;
             sourceDeploymentId: components["schemas"]["DeploymentId"];
-            sourceDeploymentName: components["schemas"]["InstanceName"];
+            sourceDeploymentName: components["schemas"]["CloudDeploymentName"];
             state: string;
         };
+        /** @description Example instance names:
+         *
+         *     tall-sheep-123
+         *
+         *     test-tall-sheep-123  # Prefix of test for internal testing */
+        CloudDeploymentName: string;
         ConfigurePeriodicBackupArgs: {
             cronspec: string;
             /** Format: int64 */
@@ -2161,16 +2167,31 @@ export interface components {
             createTime: number;
             creator?: null | components["schemas"]["MemberId"];
             dashboardEditConfirmation?: boolean | null;
+            /** @description The deployment class for this deployment. */
+            deploymentClass: string;
             deploymentType: components["schemas"]["DeploymentType"];
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds when this deployment will be
+             *     deleted. Preview deployments have this set by default unless
+             *     overridden.
+             */
+            expiresAt?: number | null;
             id: components["schemas"]["DeploymentId"];
             isDefault: components["schemas"]["IsDefaultDeployment"];
             /** @enum {string} */
             kind: "cloud";
+            /** Format: int64 */
+            lastDeployTime?: number | null;
             name: string;
             previewIdentifier?: null | components["schemas"]["PreviewDeploymentIdentifier"];
             projectId: components["schemas"]["ProjectId"];
             reference: components["schemas"]["DeploymentReference"];
             region: components["schemas"]["RegionName"];
+            /** @description Whether to send function logs to the client. If `null`, the
+             *     deployment-type default is used (true for dev/preview, false for
+             *     prod). */
+            sendLogsToClient?: boolean | null;
         } | {
             /** Format: int64 */
             createTime: number;
@@ -2333,12 +2354,6 @@ export interface components {
             /** @enum {string} */
             kind: "Local";
         };
-        /** @description Example instance names:
-         *
-         *     tall-sheep-123
-         *
-         *     test-tall-sheep-123  # Prefix of test for internal testing */
-        InstanceName: string;
         InvitationEligibleEmailsResponse: {
             /** @description The admin email used to create this team's WorkOS account (always
              *     eligible for re-invitation) */
@@ -2577,7 +2592,8 @@ export interface components {
             referrals: components["schemas"]["TeamName"][];
             referredBy?: null | components["schemas"]["TeamName"];
         };
-        RegionName: string;
+        /** @enum {string} */
+        RegionName: "aws-us-east-1" | "aws-eu-west-1";
         RegisterOauthAppArgs: {
             appName: components["schemas"]["AppName"];
             redirectUris: string[];
@@ -2796,7 +2812,7 @@ export interface components {
             /** Format: int64 */
             creationTime: number;
             domain: string;
-            instanceName: components["schemas"]["InstanceName"];
+            instanceName: components["schemas"]["CloudDeploymentName"];
             requestDestination: components["schemas"]["RequestDestination"];
             /** Format: int64 */
             verificationTime?: number | null;
@@ -2875,6 +2891,7 @@ export type CheckOauthAppArgs = components['schemas']['CheckOauthAppArgs'];
 export type CheckProjectEnvironmentHealthRequest = components['schemas']['CheckProjectEnvironmentHealthRequest'];
 export type CloudBackupId = components['schemas']['CloudBackupId'];
 export type CloudBackupResponse = components['schemas']['CloudBackupResponse'];
+export type CloudDeploymentName = components['schemas']['CloudDeploymentName'];
 export type ConfigurePeriodicBackupArgs = components['schemas']['ConfigurePeriodicBackupArgs'];
 export type CreateInvitationArgs = components['schemas']['CreateInvitationArgs'];
 export type CreateProjectArgs = components['schemas']['CreateProjectArgs'];
@@ -2918,7 +2935,6 @@ export type GetTokenInfoResponse = components['schemas']['GetTokenInfoResponse']
 export type HasAssociatedWorkOsTeamResponse = components['schemas']['HasAssociatedWorkOSTeamResponse'];
 export type IdentityResponse = components['schemas']['IdentityResponse'];
 export type InstanceAuthForDashboardInteractionsResponse = components['schemas']['InstanceAuthForDashboardInteractionsResponse'];
-export type InstanceName = components['schemas']['InstanceName'];
 export type InvitationEligibleEmailsResponse = components['schemas']['InvitationEligibleEmailsResponse'];
 export type InvitationResponse = components['schemas']['InvitationResponse'];
 export type InviteWorkOsTeamMemberRequest = components['schemas']['InviteWorkOSTeamMemberRequest'];
@@ -4947,7 +4963,7 @@ export interface operations {
                 from?: string;
                 to?: string;
                 projectId?: components["schemas"]["ProjectId"];
-                deploymentName?: components["schemas"]["InstanceName"];
+                deploymentName?: components["schemas"]["CloudDeploymentName"];
                 componentPath?: string;
                 udfId?: string;
                 tableName?: string;

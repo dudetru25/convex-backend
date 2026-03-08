@@ -51,6 +51,7 @@ export const ProductionCloud: Story = {
   args: {
     deployment: {
       kind: "cloud",
+      class: "s16",
       name: "happy-animal-123",
       deploymentType: "prod",
       createTime: Date.now() - 2 * 60 * 60 * 1000, // 2 hours ago
@@ -58,7 +59,7 @@ export const ProductionCloud: Story = {
       id: 100,
       projectId: 1,
       isDefault: true,
-      region: "us-east-1",
+      region: "aws-us-east-1",
     } as PlatformDeploymentResponse,
   },
 };
@@ -68,6 +69,7 @@ export const DevelopmentCloudMine: Story = {
   args: {
     deployment: {
       kind: "cloud",
+      class: "s16",
       name: "clever-otter-456",
       deploymentType: "dev",
       createTime: Date.now() - 30 * 60 * 1000, // 30 minutes ago
@@ -75,7 +77,7 @@ export const DevelopmentCloudMine: Story = {
       id: 101,
       projectId: 1,
       isDefault: true,
-      region: "us-east-1",
+      region: "aws-us-east-1",
     } as PlatformDeploymentResponse,
     whoseName: null, // null means it's mine
   },
@@ -86,6 +88,7 @@ export const DevelopmentCloudTeammate: Story = {
   args: {
     deployment: {
       kind: "cloud",
+      class: "s16",
       name: "playful-koala-789",
       deploymentType: "dev",
       createTime: Date.now() - 4 * 60 * 60 * 1000, // 4 hours ago
@@ -93,7 +96,7 @@ export const DevelopmentCloudTeammate: Story = {
       id: 102,
       projectId: 1,
       isDefault: false,
-      region: "us-east-1",
+      region: "aws-us-east-1",
     } as PlatformDeploymentResponse,
     whoseName: "Bob Smith",
   },
@@ -121,6 +124,7 @@ export const Preview: Story = {
   args: {
     deployment: {
       kind: "cloud",
+      class: "s16",
       name: "preview-feature-123",
       deploymentType: "preview",
       createTime: Date.now() - 1 * 60 * 60 * 1000, // 1 hour ago
@@ -128,7 +132,7 @@ export const Preview: Story = {
       id: 103,
       projectId: 1,
       isDefault: false,
-      region: "us-east-1",
+      region: "aws-us-east-1",
       previewIdentifier: "feature-branch-xyz",
     } as PlatformDeploymentResponse,
   },
@@ -139,6 +143,7 @@ export const Custom: Story = {
   args: {
     deployment: {
       kind: "cloud",
+      class: "s16",
       name: "custom-staging-789",
       deploymentType: "custom",
       createTime: Date.now() - 24 * 60 * 60 * 1000, // 1 day ago
@@ -146,7 +151,7 @@ export const Custom: Story = {
       id: 104,
       projectId: 1,
       isDefault: false,
-      region: "eu-west-1",
+      region: "aws-eu-west-1",
     } as PlatformDeploymentResponse,
   },
 };
@@ -157,6 +162,7 @@ export const UntitledProject: Story = {
     project: projectUntitled,
     deployment: {
       kind: "cloud",
+      class: "s16",
       name: "wonderful-panda-999",
       deploymentType: "prod",
       createTime: Date.now() - 3 * 60 * 60 * 1000, // 3 hours ago
@@ -164,7 +170,7 @@ export const UntitledProject: Story = {
       id: 105,
       projectId: 2,
       isDefault: true,
-      region: "us-east-1",
+      region: "aws-us-east-1",
     } as PlatformDeploymentResponse,
   },
 };
@@ -179,6 +185,7 @@ export const LongProjectName: Story = {
     },
     deployment: {
       kind: "cloud",
+      class: "s16",
       name: "happy-animal-123",
       deploymentType: "dev",
       createTime: Date.now() - 5 * 60 * 1000, // 5 minutes ago
@@ -186,7 +193,7 @@ export const LongProjectName: Story = {
       id: 106,
       projectId: 1,
       isDefault: true,
-      region: "ap-southeast-2",
+      region: "aws-us-east-1",
     } as PlatformDeploymentResponse,
   },
 };
@@ -196,6 +203,7 @@ export const OldDeployment: Story = {
   args: {
     deployment: {
       kind: "cloud",
+      class: "s16",
       name: "ancient-tortoise-111",
       deploymentType: "prod",
       createTime: Date.now() - 365 * 24 * 60 * 60 * 1000, // 1 year ago
@@ -203,7 +211,7 @@ export const OldDeployment: Story = {
       id: 107,
       projectId: 1,
       isDefault: true,
-      region: "us-west-2",
+      region: "aws-eu-west-1",
     } as PlatformDeploymentResponse,
   },
 };

@@ -1,5 +1,4 @@
 import { useRouter } from "next/router";
-import { useCallback } from "react";
 import { useInitialData } from "hooks/useServerSideData";
 import { useProfile } from "./profile";
 import { useCurrentProject } from "./projects";
@@ -7,7 +6,6 @@ import {
   useBBQuery,
   useManagementApiMutation,
   useManagementApiQuery,
-  useMutate,
 } from "./api";
 
 export function useDeployments(projectId?: number) {
@@ -96,6 +94,27 @@ export function useProvisionDeployment(projectId: number) {
   });
 }
 
+export function useModifyDeploymentSettings({
+  deploymentName,
+  projectId,
+}: {
+  deploymentName: string | undefined;
+  projectId: number | undefined;
+}) {
+  return useManagementApiMutation({
+    path: "/deployments/{deployment_name}",
+    pathParams: {
+      deployment_name: deploymentName ?? "",
+    },
+    method: "patch",
+    mutateKey: `/projects/{project_id}/list_deployments`,
+    mutatePathParams: {
+      project_id: projectId ?? 0,
+    },
+    successToast: "Deployment reference updated successfully",
+  });
+}
+
 export function useDeploymentRegions(teamId: number | undefined) {
   const { data, isLoading } = useManagementApiQuery({
     path: "/teams/{team_id}/list_deployment_regions",
@@ -137,22 +156,5 @@ export function useDeleteDeployment(
     redirectTo: settingsUrl,
   });
 
-  const mutateBBApi = useMutate();
-
-  return useCallback(async () => {
-    await deleteDeployment();
-    // Manually revalidate the BB API instances list
-    await mutateBBApi(
-      [
-        "/projects/{project_id}/instances",
-        {
-          params: {
-            path: { project_id: projectId.toString() },
-          },
-        },
-      ],
-      undefined,
-      { revalidate: true },
-    );
-  }, [deleteDeployment, mutateBBApi, projectId]);
+  return deleteDeployment;
 }

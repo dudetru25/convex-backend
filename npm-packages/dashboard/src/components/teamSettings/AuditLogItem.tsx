@@ -19,6 +19,7 @@ import {
   MemberResponse,
   AuditLogAction,
   AuditLogEventResponse,
+  DeploymentResponse,
 } from "generatedApi";
 import { captureMessage } from "@sentry/nextjs";
 import startCase from "lodash/startCase";
@@ -290,6 +291,18 @@ function EntryAction({
           />
         </span>
       );
+    case "updateDeployment": {
+      return (
+        <span>
+          updated deployment{" "}
+          {metadata.current?.deploymentName && (
+            <span className="font-semibold">
+              {metadata.current.deploymentName}
+            </span>
+          )}
+        </span>
+      );
+    }
     case "createProjectEnvironmentVariable":
     case "updateProjectEnvironmentVariable":
     case "deleteProjectEnvironmentVariable":
@@ -782,7 +795,9 @@ function AuditLogItemActor({
   );
 }
 
-function deploymentDisplayName(deployment: PlatformDeploymentResponse) {
+function deploymentDisplayName(
+  deployment: PlatformDeploymentResponse | DeploymentResponse,
+) {
   switch (deployment.deploymentType) {
     case "prod":
       return "a production deployment";

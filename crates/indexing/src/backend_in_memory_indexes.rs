@@ -40,7 +40,6 @@ use common::{
         IndexKey,
         IndexKeyBytes,
     },
-    instrument,
     interval::{
         EndRef,
         Interval,
@@ -48,7 +47,10 @@ use common::{
         StartIncluded,
     },
     knobs::TRANSACTION_MAX_READ_SIZE_BYTES,
-    persistence::PersistenceSnapshot,
+    persistence::{
+        LatestDocument,
+        PersistenceSnapshot,
+    },
     query::{
         CursorPosition,
         Order,
@@ -96,6 +98,7 @@ use crate::{
         IndexedDocument,
     },
     metrics::{
+        index_page_timer,
         log_index_cache_cleared,
         log_transaction_cache_query,
     },
@@ -114,6 +117,80 @@ pub trait InMemoryIndexes: Send + Sync {
         tablet_id: TabletId,
         table_name: TableName,
     ) -> anyhow::Result<Option<Vec<(IndexKeyBytes, Timestamp, MemoryDocument)>>>;
+}
+
+pub struct IndexEntry {
+    pub key: IndexKeyBytes,
+    pub ts: Timestamp,
+    pub value: PackedDocument,
+}
+
+pub struct IndexPage {
+    pub entries: Vec<IndexEntry>,
+    pub cursor: CursorPosition,
+}
+#[async_trait]
+pub trait IndexReader: Send + Sync {
+    async fn index_page(
+        &self,
+        index_id: IndexId,
+        tablet_id: TabletId,
+        interval: &Interval,
+        order: Order,
+        max_results: usize,
+    ) -> anyhow::Result<IndexPage>;
+
+    fn timestamp(&self) -> RepeatableTimestamp;
+}
+
+#[async_trait]
+impl IndexReader for PersistenceSnapshot {
+    async fn index_page(
+        &self,
+        index_id: IndexId,
+        tablet_id: TabletId,
+        interval: &Interval,
+        order: Order,
+        max_results: usize,
+    ) -> anyhow::Result<IndexPage> {
+        let timer = index_page_timer("local");
+        let result = async {
+            let mut stream = PersistenceSnapshot::index_scan(
+                self,
+                index_id,
+                tablet_id,
+                interval,
+                order,
+                max_results,
+            );
+            let mut entries = vec![];
+            while let Some(result) = stream.next().await {
+                let (key, LatestDocument { ts, value, .. }) = result?;
+                entries.push(IndexEntry {
+                    key,
+                    ts,
+                    value: PackedDocument::pack(&value),
+                });
+                if entries.len() >= max_results {
+                    let cursor = CursorPosition::After(entries.last().unwrap().key.clone());
+                    return Ok(IndexPage { entries, cursor });
+                }
+            }
+            Ok(IndexPage {
+                entries,
+                cursor: CursorPosition::End,
+            })
+        }
+        .await;
+        if result.is_ok() {
+            timer.finish();
+        }
+        result
+    }
+
+    fn timestamp(&self) -> RepeatableTimestamp {
+        PersistenceSnapshot::timestamp(self)
+    }
 }
 
 /// [`BackendInMemoryIndexes`] maintains in-memory database indexes. With the
@@ -518,7 +595,7 @@ pub struct DatabaseIndexSnapshot {
     in_memory_indexes: Arc<dyn InMemoryIndexes>,
     table_mapping: ReadOnly<TableMapping>,
 
-    persistence: PersistenceSnapshot,
+    reader: Arc<dyn IndexReader>,
 
     // Cache results reads from the snapshot. The snapshot is immutable and thus
     // we don't have to do any invalidation.
@@ -547,7 +624,7 @@ impl DatabaseIndexSnapshot {
         index_registry: IndexRegistry,
         in_memory_indexes: Arc<dyn InMemoryIndexes>,
         table_mapping: TableMapping,
-        persistence_snapshot: PersistenceSnapshot,
+        reader: Arc<dyn IndexReader>,
         cache: Option<TimestampedIndexCache>,
     ) -> Self {
         let cache = cache
@@ -557,7 +634,7 @@ impl DatabaseIndexSnapshot {
             index_registry: ReadOnly::new(index_registry),
             in_memory_indexes,
             table_mapping: ReadOnly::new(table_mapping),
-            persistence: persistence_snapshot,
+            reader,
             cache,
         }
     }
@@ -736,7 +813,7 @@ impl DatabaseIndexSnapshot {
                             matches!(result, DatabaseIndexSnapshotCacheResult::CacheMiss(_))
                         });
                         let fut = Self::fetch_cache_misses(
-                            self.persistence.clone(),
+                            self.reader.clone(),
                             index_id,
                             (*range_request).clone(),
                             cache_results,
@@ -800,7 +877,7 @@ impl DatabaseIndexSnapshot {
     }
 
     async fn fetch_cache_misses(
-        persistence: PersistenceSnapshot,
+        reader: Arc<dyn IndexReader>,
         index_id: IndexId,
         range_request: RangeRequest,
         cache_results: Vec<DatabaseIndexSnapshotCacheResult>,
@@ -828,21 +905,18 @@ impl DatabaseIndexSnapshot {
                         traced = true;
                     }
                     // Query persistence.
-                    let mut stream = persistence.index_scan(
-                        index_id,
-                        *range_request.index_name.table(),
-                        &interval,
-                        range_request.order,
-                        range_request.max_size,
-                    );
-                    while let Some((key, rev)) =
-                        instrument!(b"Persistence::try_next", stream.try_next()).await?
-                    {
-                        cache_miss_results.push((rev.ts, PackedDocument::pack(&rev.value)));
-                        results.push((key, rev.ts, rev.value.into()));
-                        if results.len() >= range_request.max_size {
-                            break;
-                        }
+                    let index_page = reader
+                        .index_page(
+                            index_id,
+                            *range_request.index_name.table(),
+                            &interval,
+                            range_request.order,
+                            range_request.max_size,
+                        )
+                        .await?;
+                    for entry in index_page.entries {
+                        cache_miss_results.push((entry.ts, entry.value.clone()));
+                        results.push((entry.key, entry.ts, LazyDocument::Packed(entry.value)));
                     }
                 },
             }
@@ -859,7 +933,54 @@ impl DatabaseIndexSnapshot {
     }
 
     pub fn timestamp(&self) -> RepeatableTimestamp {
-        self.persistence.timestamp()
+        self.reader.timestamp()
+    }
+
+    /// Scan a page of the index, checking in-memory indexes first and falling
+    /// back to the persistence reader. Unlike `range_batch`, this skips the
+    /// per-transaction cache. Later this will be served by the IndexCache.
+    pub async fn index_page(
+        &self,
+        index_id: IndexId,
+        tablet_id: TabletId,
+        interval: &Interval,
+        order: Order,
+        max_size: usize,
+    ) -> anyhow::Result<(
+        Vec<(IndexKeyBytes, Timestamp, LazyDocument)>,
+        CursorPosition,
+    )> {
+        // Try to serve from in-memory indexes.
+        let table_name = self.table_mapping.tablet_to_name()(tablet_id)?;
+        if let Some(range) = self
+            .in_memory_indexes
+            .range(index_id, interval, order, tablet_id, table_name)
+            .await?
+        {
+            let results = range
+                .into_iter()
+                .take(max_size)
+                .map(|(key, ts, doc)| (key, ts, LazyDocument::Memory(doc)))
+                .collect::<Vec<_>>();
+            let cursor = if results.len() >= max_size {
+                CursorPosition::After(results.last().unwrap().0.clone())
+            } else {
+                CursorPosition::End
+            };
+            return Ok((results, cursor));
+        }
+
+        // Fall back to persistence reader.
+        let index_page = self
+            .reader
+            .index_page(index_id, tablet_id, interval, order, max_size)
+            .await?;
+        let results = index_page
+            .entries
+            .into_iter()
+            .map(|IndexEntry { key, ts, value }| (key, ts, LazyDocument::Packed(value)))
+            .collect();
+        Ok((results, index_page.cursor))
     }
 }
 
@@ -1239,7 +1360,7 @@ mod cache_tests {
 
     fn interval_gte(value: f64) -> anyhow::Result<Interval> {
         Ok(Interval {
-            start: StartIncluded(values_to_bytes(&[Some(val!(value))]).into()),
+            start: StartIncluded(values_to_bytes::<false>(&[Some(val!(value))]).into()),
             end: End::Unbounded,
         })
     }
@@ -1332,7 +1453,7 @@ mod cache_tests {
             vec![d(key2.clone(), ts2, doc2.clone())]
         );
         // Empty sub-interval also cached.
-        let interval_eq_35 = Interval::prefix(values_to_bytes(&[Some(val!(35.0))]).into());
+        let interval_eq_35 = Interval::prefix(values_to_bytes::<false>(&[Some(val!(35.0))]).into());
         assert_eq!(f.cache.get(index_id, &interval_eq_35, Order::Asc), vec![]);
         // Super-interval partially cached.
         let interval_gt_16 = interval_gte(16.0)?;
@@ -1341,7 +1462,7 @@ mod cache_tests {
             vec![
                 cache_miss(Interval {
                     start: interval_gt_16.start.clone(),
-                    end: End::Excluded(values_to_bytes(&[Some(val!(18.0))]).into())
+                    end: End::Excluded(values_to_bytes::<false>(&[Some(val!(18.0))]).into())
                 }),
                 d(key1.clone(), ts1, doc1.clone()),
                 d(key2.clone(), ts2, doc2.clone()),
@@ -1355,7 +1476,7 @@ mod cache_tests {
                 d(key1, ts1, doc1),
                 cache_miss(Interval {
                     start: interval_gt_16.start.clone(),
-                    end: End::Excluded(values_to_bytes(&[Some(val!(18.0))]).into())
+                    end: End::Excluded(values_to_bytes::<false>(&[Some(val!(18.0))]).into())
                 }),
             ]
         );
@@ -1823,13 +1944,11 @@ impl LazyDocument {
         }
     }
 
-    pub fn approximate_size(&self) -> usize {
+    pub fn size(&self) -> usize {
         match self {
             LazyDocument::Resolved(doc) => doc.size(),
-            // This is the size of the PackedValue representation, not the
-            // proper size of the ConvexValue
-            LazyDocument::Packed(doc) => doc.value().size(),
-            LazyDocument::Memory(doc) => doc.packed_document.value().size(),
+            LazyDocument::Packed(doc) => doc.size(),
+            LazyDocument::Memory(doc) => doc.packed_document.size(),
         }
     }
 
@@ -1838,6 +1957,14 @@ impl LazyDocument {
             LazyDocument::Resolved(doc) => doc.id(),
             LazyDocument::Packed(doc) => doc.id(),
             LazyDocument::Memory(doc) => doc.packed_document.id(),
+        }
+    }
+
+    pub fn pack(self) -> PackedDocument {
+        match self {
+            LazyDocument::Resolved(doc) => PackedDocument::pack(&doc),
+            LazyDocument::Packed(doc) => doc,
+            LazyDocument::Memory(doc) => doc.packed_document,
         }
     }
 }

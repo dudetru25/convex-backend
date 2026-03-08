@@ -1,7 +1,6 @@
 import React, { ReactNode } from "react";
 import { ConvexLogo } from "@common/elements/ConvexLogo";
 import { GoogleAnalytics } from "elements/GoogleAnalytics";
-import { Flourish } from "components/login/Flourish";
 
 type LayoutProps = {
   children: ReactNode;
@@ -13,7 +12,7 @@ export function LoginLayout({ children }: LayoutProps) {
       <GoogleAnalytics />
 
       <div className="flex h-full flex-col items-center">
-        <div className="z-20 flex flex-1 flex-col items-center justify-center px-12">
+        <div className="z-20 flex flex-1 flex-col items-center justify-center px-4 sm:px-12">
           <div className="mb-8">
             <ConvexLogo />
           </div>
@@ -21,7 +20,6 @@ export function LoginLayout({ children }: LayoutProps) {
         </div>
         <div className="h-14" />
       </div>
-      <Flourish />
     </div>
   );
 }

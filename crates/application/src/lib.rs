@@ -75,6 +75,7 @@ use common::{
     },
     document::{
         DocumentUpdate,
+        PackedDocument,
         ParsedDocument,
         CREATION_TIME_FIELD_PATH,
     },
@@ -86,6 +87,8 @@ use common::{
         fetch::FetchClient,
         RequestDestination,
     },
+    index::IndexKeyBytes,
+    interval::Interval,
     knobs::{
         APPLICATION_MAX_CONCURRENT_UPLOADS,
         ENABLE_INDEX_BACKFILL,
@@ -94,20 +97,23 @@ use common::{
         MAX_USER_MODULES,
     },
     log_lines::LogLines,
-    log_streaming::LogSender,
+    log_streaming::{
+        LogEvent,
+        LogSender,
+        StructuredLogEvent,
+    },
     paths::FieldPath,
     persistence::Persistence,
     query::{
+        CursorPosition,
         IndexRange,
         IndexRangeExpression,
         Order,
     },
     query_journal::QueryJournal,
     runtime::{
-        shutdown_and_join,
         JoinSet,
         Runtime,
-        SpawnHandle,
         UnixTimestamp,
     },
     schemas::{
@@ -121,7 +127,6 @@ use common::{
         AllowedVisibility,
         ConvexOrigin,
         ConvexSite,
-        CursorMs,
         EnvVarName,
         EnvVarValue,
         FullyQualifiedObjectKey,
@@ -135,7 +140,6 @@ use common::{
         RepeatableTimestamp,
         TableName,
         Timestamp,
-        UdfIdentifier,
         UdfType,
     },
     RequestId,
@@ -172,7 +176,6 @@ use fastrace::{
     Span,
 };
 use file_storage::{
-    FileRangeStream,
     FileStorage,
     FileStream,
 };
@@ -182,10 +185,6 @@ use fivetran_destination::{
         DeleteType,
     },
     constants::FIVETRAN_PRIMARY_KEY_INDEX_DESCRIPTOR,
-};
-use function_log::{
-    FunctionExecution,
-    FunctionExecutionPart,
 };
 use function_runner::FunctionRunner;
 use futures::stream::BoxStream;
@@ -265,6 +264,7 @@ use model::{
     file_storage::{
         types::FileStorageEntry,
         FileStorageId,
+        FileStorageModel,
     },
     fivetran_import::FivetranImportModel,
     migrations::MigrationWorker,
@@ -340,10 +340,7 @@ use sync_types::{
     SerializedQueryJournal,
 };
 use system_table_cleanup::SystemTableCleanupWorker;
-use table_summary_worker::{
-    TableSummaryClient,
-    TableSummaryWorker,
-};
+use table_summary_worker::TableSummaryWorker;
 use tokio::sync::{
     oneshot,
     Semaphore,
@@ -357,11 +354,6 @@ use udf::{
     HttpActionRequest,
     HttpActionResponseStreamer,
     HttpActionResult,
-};
-use udf_metrics::{
-    MetricsWindow,
-    Percentile,
-    Timeseries,
 };
 use usage_gauges_tracking_worker::UsageGaugesTrackingWorker;
 use usage_tracking::{
@@ -386,12 +378,7 @@ use vector::{
 use crate::{
     application_function_runner::ApplicationFunctionRunner,
     exports::worker::ExportWorker,
-    function_log::{
-        FunctionExecutionLog,
-        TableRate,
-        UdfMetricSummary,
-        UdfRate,
-    },
+    function_log::FunctionExecutionLog,
     log_visibility::LogVisibility,
     module_cache::ModuleCache,
     redaction::{
@@ -426,6 +413,7 @@ mod streaming_export;
 mod system_table_cleanup;
 mod table_summary_worker;
 pub mod valid_identifier;
+mod worker_handles;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers;
@@ -433,9 +421,12 @@ pub mod test_helpers;
 mod tests;
 
 pub use crate::cache::QueryCache;
-use crate::metrics::{
-    log_external_deps_package,
-    log_source_package_size_bytes_total,
+use crate::{
+    metrics::{
+        log_external_deps_package,
+        log_source_package_size_bytes_total,
+    },
+    worker_handles::WorkerHandles,
 };
 
 pub struct ConfigMetadataAndSchema {
@@ -563,22 +554,10 @@ pub struct Application<RT: Runtime> {
     file_storage: FileStorage<RT>,
     application_storage: ApplicationStorage,
     usage_counter: UsageCounter,
-    usage_gauges_tracking_worker: UsageGaugesTrackingWorker,
     usage_event_logger: Arc<dyn UsageEventLogger>,
     key_broker: KeyBroker,
     instance_name: String,
-    scheduled_job_runner: ScheduledJobRunner,
-    cron_job_executor: Arc<Mutex<Box<dyn SpawnHandle>>>,
-    index_worker: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
-    fast_forward_worker: Arc<Mutex<Box<dyn SpawnHandle>>>,
-    search_worker: Arc<Mutex<SearchIndexWorkers>>,
-    search_and_vector_bootstrap_worker: Arc<Mutex<Box<dyn SpawnHandle>>>,
-    table_summary_worker: TableSummaryClient,
-    schema_worker: Arc<Mutex<Box<dyn SpawnHandle>>>,
-    snapshot_import_worker: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
-    export_worker: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
-    system_table_cleanup_worker: Arc<Mutex<Box<dyn SpawnHandle>>>,
-    migration_worker: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
+    workers: WorkerHandles,
     log_visibility: Arc<dyn LogVisibility<RT>>,
     module_cache: ModuleCache<RT>,
     system_env_var_names: HashSet<EnvVarName>,
@@ -847,6 +826,22 @@ impl<RT: Runtime> Application<RT> {
             instance_name.clone(),
         );
 
+        let workers = WorkerHandles {
+            usage_gauges_tracking_worker,
+            scheduled_job_runner,
+            cron_job_executor,
+            index_worker,
+            fast_forward_worker,
+            search_worker,
+            search_and_vector_bootstrap_worker,
+            table_summary_worker,
+            schema_worker,
+            snapshot_import_worker,
+            export_worker,
+            system_table_cleanup_worker,
+            migration_worker,
+        };
+
         Ok(Self {
             runtime,
             database,
@@ -856,21 +851,9 @@ impl<RT: Runtime> Application<RT> {
             application_storage,
             usage_event_logger,
             usage_counter,
-            usage_gauges_tracking_worker,
             key_broker,
-            scheduled_job_runner,
-            cron_job_executor,
             instance_name,
-            index_worker,
-            fast_forward_worker,
-            search_worker,
-            search_and_vector_bootstrap_worker,
-            table_summary_worker,
-            schema_worker,
-            export_worker,
-            snapshot_import_worker,
-            system_table_cleanup_worker,
-            migration_worker,
+            workers,
             log_visibility,
             module_cache,
             system_env_var_names: default_system_env_vars.into_keys().collect(),
@@ -900,8 +883,16 @@ impl<RT: Runtime> Application<RT> {
         self.runner.clone()
     }
 
-    pub fn function_log(&self) -> FunctionExecutionLog<RT> {
-        self.function_log.clone()
+    pub fn function_log(
+        &self,
+        identity: Identity,
+        endpoint: &'static str,
+    ) -> anyhow::Result<&FunctionExecutionLog<RT>> {
+        anyhow::ensure!(
+            identity.is_admin() || identity.is_system(),
+            unauthorized_error(endpoint)
+        );
+        Ok(&self.function_log)
     }
 
     pub fn log_manager_client(&self) -> &LogManagerClient {
@@ -953,6 +944,23 @@ impl<RT: Runtime> Application<RT> {
 
     pub fn snapshot(&self, ts: RepeatableTimestamp) -> anyhow::Result<Snapshot> {
         self.database.snapshot(ts)
+    }
+
+    pub async fn index_page(
+        &self,
+        ts: RepeatableTimestamp,
+        index_id: IndexId,
+        tablet_id: TabletId,
+        interval: &Interval,
+        order: Order,
+        max_size: usize,
+    ) -> anyhow::Result<(
+        Vec<(IndexKeyBytes, Timestamp, PackedDocument)>,
+        CursorPosition,
+    )> {
+        self.database
+            .index_page(ts, index_id, tablet_id, interval, order, max_size)
+            .await
     }
 
     pub fn latest_snapshot(&self) -> anyhow::Result<Snapshot> {
@@ -2784,11 +2792,8 @@ impl<RT: Runtime> Application<RT> {
     ) -> anyhow::Result<FileStream> {
         self.bail_if_not_running().await?;
         let mut file_storage_tx = self.begin(Identity::system()).await?;
-        let Some(file_entry) = self
-            .file_storage
-            .transactional_file_storage
-            // The transaction is not part of UDF so use the global usage counters.
-            .get_file_entry(&mut file_storage_tx, component.into(), storage_id.clone())
+        let Some(parsed_doc) = FileStorageModel::new(&mut file_storage_tx, component.into())
+            .get_file(storage_id.clone())
             .await?
         else {
             return Err(ErrorMetadata::not_found(
@@ -2804,12 +2809,28 @@ impl<RT: Runtime> Application<RT> {
             )
             .into());
         };
-        self
+        let doc_id = parsed_doc.developer_id().to_string();
+        let file_entry = parsed_doc.into_value();
+        let mut file_stream = self
             .file_storage
             .transactional_file_storage
             // The transaction is not part of UDF so use the global usage counters.
             .get_file_stream(component_path, file_entry, self.usage_counter.clone())
-            .await
+            .await?;
+        let log_manager_client = self.log_manager_client.clone();
+        file_stream.add_on_complete(Box::new(move |egress_bytes| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before epoch");
+            log_manager_client.send_logs(vec![LogEvent {
+                timestamp: UnixTimestamp::from_millis(now.as_millis() as u64),
+                event: StructuredLogEvent::StorageApiBandwidth {
+                    storage_id: doc_id,
+                    egress_bytes,
+                },
+            }]);
+        }));
+        Ok(file_stream)
     }
 
     pub async fn get_file_range(
@@ -2817,15 +2838,12 @@ impl<RT: Runtime> Application<RT> {
         component: ComponentId,
         storage_id: FileStorageId,
         bytes_range: (Bound<u64>, Bound<u64>),
-    ) -> anyhow::Result<FileRangeStream> {
+    ) -> anyhow::Result<FileStream> {
         self.bail_if_not_running().await?;
         let mut file_storage_tx = self.begin(Identity::system()).await?;
 
-        let Some(file_entry) = self
-            .file_storage
-            .transactional_file_storage
-            // The transaction is not part of UDF so use the global usage counters.
-            .get_file_entry(&mut file_storage_tx, component.into(), storage_id.clone())
+        let Some(parsed_doc) = FileStorageModel::new(&mut file_storage_tx, component.into())
+            .get_file(storage_id.clone())
             .await?
         else {
             return Err(ErrorMetadata::not_found(
@@ -2841,8 +2859,9 @@ impl<RT: Runtime> Application<RT> {
             )
             .into());
         };
-
-        self
+        let doc_id = parsed_doc.developer_id().to_string();
+        let file_entry = parsed_doc.into_value();
+        let mut file_stream = self
             .file_storage
             .transactional_file_storage
             // The transaction is not part of UDF so use the global usage counters.
@@ -2852,7 +2871,21 @@ impl<RT: Runtime> Application<RT> {
                 bytes_range,
                 self.usage_counter.clone(),
             )
-            .await
+            .await?;
+        let log_manager_client = self.log_manager_client.clone();
+        file_stream.add_on_complete(Box::new(move |egress_bytes| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time before epoch");
+            log_manager_client.send_logs(vec![LogEvent {
+                timestamp: UnixTimestamp::from_millis(now.as_millis() as u64),
+                event: StructuredLogEvent::StorageApiBandwidth {
+                    storage_id: doc_id,
+                    egress_bytes,
+                },
+            }]);
+        }));
+        Ok(file_stream)
     }
 
     pub async fn authenticate(
@@ -2928,150 +2961,6 @@ impl<RT: Runtime> Application<RT> {
             "Component {component_id:?} not found"
         );
         Ok(())
-    }
-
-    pub async fn udf_rate(
-        &self,
-        identity: Identity,
-        identifier: UdfIdentifier,
-        metric: UdfRate,
-        window: MetricsWindow,
-    ) -> anyhow::Result<Timeseries> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("udf_rate"));
-        }
-        self.function_log.udf_rate(identifier, metric, window)
-    }
-
-    pub async fn failure_percentage_top_k(
-        &self,
-        identity: Identity,
-        window: MetricsWindow,
-        k: usize,
-    ) -> anyhow::Result<Vec<(String, Timeseries)>> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("failure_percentage_top_k"));
-        }
-        self.function_log.failure_percentage_top_k(window, k)
-    }
-
-    pub async fn cache_hit_percentage_top_k(
-        &self,
-        identity: Identity,
-        window: MetricsWindow,
-        k: usize,
-    ) -> anyhow::Result<Vec<(String, Timeseries)>> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("failure_percentage_top_k"));
-        }
-        self.function_log.cache_hit_percentage_top_k(window, k)
-    }
-
-    pub async fn function_call_count_top_k(
-        &self,
-        identity: Identity,
-        window: MetricsWindow,
-        k: usize,
-    ) -> anyhow::Result<Vec<(String, Timeseries)>> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("function_call_count_top_k"));
-        }
-
-        self.function_log.function_call_count_top_k(window, k)
-    }
-
-    pub async fn cache_hit_percentage(
-        &self,
-        identity: Identity,
-        identifier: UdfIdentifier,
-        window: MetricsWindow,
-    ) -> anyhow::Result<Timeseries> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("cache_hit_percentage"));
-        }
-        self.function_log.cache_hit_percentage(identifier, window)
-    }
-
-    pub async fn latency_percentiles(
-        &self,
-        identity: Identity,
-        identifier: UdfIdentifier,
-        percentiles: Vec<Percentile>,
-        window: MetricsWindow,
-    ) -> anyhow::Result<BTreeMap<Percentile, Timeseries>> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("latency_percentiles_ms"));
-        }
-        self.function_log
-            .latency_percentiles(identifier, percentiles, window)
-    }
-
-    pub async fn udf_summary(
-        &self,
-        identity: Identity,
-        cursor: Option<CursorMs>,
-    ) -> anyhow::Result<(Option<UdfMetricSummary>, Option<CursorMs>)> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("latency_percentiles_ms"));
-        }
-        Ok(self.function_log.udf_summary(cursor))
-    }
-
-    pub async fn table_rate(
-        &self,
-        identity: Identity,
-        name: TableName,
-        metric: TableRate,
-        window: MetricsWindow,
-    ) -> anyhow::Result<Timeseries> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("table_rate"));
-        }
-        self.function_log.table_rate(name, metric, window)
-    }
-
-    pub async fn stream_udf_execution(
-        &self,
-        identity: Identity,
-        cursor: CursorMs,
-    ) -> anyhow::Result<(Vec<FunctionExecution>, CursorMs)> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("stream_udf_execution"));
-        }
-        Ok(self.function_log.stream(cursor).await)
-    }
-
-    pub async fn stream_function_logs(
-        &self,
-        identity: Identity,
-        cursor: CursorMs,
-    ) -> anyhow::Result<(Vec<FunctionExecutionPart>, CursorMs)> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("stream_function_logs"));
-        }
-        Ok(self.function_log.stream_parts(cursor).await)
-    }
-
-    pub async fn scheduled_job_lag(
-        &self,
-        identity: Identity,
-        window: MetricsWindow,
-    ) -> anyhow::Result<Timeseries> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("scheduled_job_lag"));
-        }
-        self.function_log.scheduled_job_lag(window)
-    }
-
-    pub async fn function_concurrency(
-        &self,
-        identity: Identity,
-        window: MetricsWindow,
-    ) -> anyhow::Result<BTreeMap<String, Timeseries>> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("function_concurrency"));
-        }
-        self.function_log.function_concurrency(window)
     }
 
     pub async fn delete_scheduled_jobs_table(
@@ -3672,35 +3561,11 @@ impl<RT: Runtime> Application<RT> {
     }
 
     pub async fn shutdown(&self) -> anyhow::Result<()> {
-        self.usage_gauges_tracking_worker.shutdown().await?;
+        self.workers.shutdown().await?;
         self.log_manager_client.shutdown().await?;
-        self.table_summary_worker.shutdown().await?;
-        self.system_table_cleanup_worker.lock().shutdown();
-        self.schema_worker.lock().shutdown();
-        let index_worker = self.index_worker.lock().take();
-        if let Some(index_worker) = index_worker {
-            shutdown_and_join(index_worker).await?;
-        }
-        self.search_worker.lock().shutdown();
-        self.search_and_vector_bootstrap_worker.lock().shutdown();
-        self.fast_forward_worker.lock().shutdown();
-        let export_worker = self.export_worker.lock().take();
-        if let Some(export_worker) = export_worker {
-            shutdown_and_join(export_worker).await?;
-        }
-        let snapshot_import_worker = self.snapshot_import_worker.lock().take();
-        if let Some(snapshot_import_worker) = snapshot_import_worker {
-            shutdown_and_join(snapshot_import_worker).await?;
-        }
         self.runner.shutdown().await?;
-        self.scheduled_job_runner.shutdown();
-        self.cron_job_executor.lock().shutdown();
         self.database.shutdown().await?;
-        let migration_worker = self.migration_worker.lock().take();
-        if let Some(migration_worker) = migration_worker {
-            shutdown_and_join(migration_worker).await?;
-        }
-        self.function_log().shutdown();
+        self.function_log.shutdown();
         self.usage_event_logger.shutdown().await?;
         tracing::info!("Application shut down");
         Ok(())

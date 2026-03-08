@@ -16,7 +16,7 @@ type Story = StoryObj<typeof meta>;
 function ToastDemo() {
   const [message, setMessage] = useState("Hello world");
 
-  const types = ["success", "error", "info"] as const;
+  const types = ["success", "error", "info", "warning"] as const;
   const [type, setType] = useState<(typeof types)[number]>("success");
   const [permanent, setPermanent] = useState(false);
 
@@ -67,8 +67,6 @@ function ToastDemo() {
           </div>
         </form>
       </Sheet>
-
-      <ToastContainer />
     </>
   );
 }

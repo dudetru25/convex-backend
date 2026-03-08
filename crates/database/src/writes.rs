@@ -252,7 +252,6 @@ impl Writes {
         }
         Self::record_reads_for_write(bootstrap_tables, reads, document_id.tablet_id)?;
 
-        let id_size = document_id.size();
         let value_size = new_document.as_ref().map(|d| d.value().size()).unwrap_or(0);
 
         let tx_size = if is_system_document {
@@ -265,7 +264,7 @@ impl Writes {
         // we want the size to reflect the write, so that
         // we can tell that we threw and not issue a warning.
         tx_size.num_writes += 1;
-        tx_size.size += id_size + value_size;
+        tx_size.size += value_size;
 
         if is_system_document {
             let tx_size = &self.system_tx_size;
@@ -395,7 +394,7 @@ impl Writes {
             // need to read the index. We only care about the name always mapping
             // to the same fields.
             let tablet_id_bytes =
-                values_to_bytes(&[Some(index_metadata_serialize_tablet_id(&tablet_id)?)]);
+                values_to_bytes::<false>(&[Some(index_metadata_serialize_tablet_id(&tablet_id)?)]);
             reads.record_indexed_derived(
                 TabletIndexName::new(
                     table_mapping.index_id.tablet_id,

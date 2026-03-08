@@ -30,9 +30,15 @@ describe("SettingsSidebar", () => {
               id: 0,
               name: "fine-marmot-266",
               deploymentType: "prod",
+              deploymentUrl: "https://fine-marmot-266.convex.cloud",
               projectId: 0,
               kind: "cloud",
+              class: "s16",
               previewIdentifier: null,
+              createTime: 0,
+              isDefault: false,
+              reference: "",
+              region: "aws-us-east-1",
             }),
           }}
         >
@@ -137,9 +143,15 @@ describe("SettingsSidebar", () => {
               id: 0,
               name: "self-hosted",
               deploymentType: "prod",
+              deploymentUrl: "https://my-selfhosted-deployment.example.com",
               projectId: 0,
               kind: "cloud",
+              class: "s16",
               previewIdentifier: null,
+              createTime: 0,
+              isDefault: false,
+              reference: "",
+              region: "aws-us-east-1",
             }),
           }}
         >
@@ -223,9 +235,15 @@ describe("SettingsSidebar", () => {
               id: 0,
               name: "fine-marmot-266",
               deploymentType: "prod",
+              deploymentUrl: "https://fine-marmot-266.convex.cloud",
               projectId: 0,
               kind: "cloud",
+              class: "s16",
               previewIdentifier: null,
+              createTime: 0,
+              isDefault: false,
+              reference: "",
+              region: "aws-us-east-1",
             }),
           }}
         >
@@ -321,6 +339,11 @@ describe("SettingsSidebar", () => {
               projectId: 0,
               kind: "local",
               previewIdentifier: null,
+              createTime: 0,
+              creator: 0,
+              deviceName: "",
+              isActive: false,
+              port: 0,
             }),
           }}
         >
@@ -397,9 +420,15 @@ describe("SettingsSidebar", () => {
               id: 0,
               name: "fine-marmot-266",
               deploymentType: "prod",
+              deploymentUrl: "https://fine-marmot-266.convex.cloud",
               projectId: 0,
               kind: "cloud",
+              class: "s16",
               previewIdentifier: null,
+              createTime: 0,
+              isDefault: false,
+              reference: "",
+              region: "aws-us-east-1",
             }),
           }}
         >
@@ -439,9 +468,15 @@ describe("SettingsSidebar", () => {
               id: 0,
               name: "fine-marmot-266",
               deploymentType: "prod",
+              deploymentUrl: "https://fine-marmot-266.convex.cloud",
               projectId: 0,
               kind: "cloud",
+              class: "s16",
               previewIdentifier: null,
+              createTime: 0,
+              isDefault: false,
+              reference: "",
+              region: "aws-us-east-1",
             }),
           }}
         >

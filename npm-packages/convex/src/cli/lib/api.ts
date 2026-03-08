@@ -62,7 +62,7 @@ export async function createProject(
   const data = await bigBrainAPI({
     ctx,
     method: "POST",
-    url: "create_project",
+    path: "create_project",
     data: provisioningArgs,
   });
   const { projectSlug, teamSlug, projectsRemaining } = data;
@@ -185,7 +185,7 @@ async function hasAccessToProject(
   try {
     await bigBrainAPIMaybeThrows({
       ctx,
-      url: `teams/${selector.teamSlug}/projects/${selector.projectSlug}/deployments`,
+      path: `teams/${selector.teamSlug}/projects/${selector.projectSlug}/deployments`,
       method: "GET",
     });
     return true;
@@ -259,7 +259,7 @@ export async function getTeamAndProjectSlugForDeployment(
   try {
     const body = await bigBrainAPIMaybeThrows({
       ctx,
-      url: `deployment/${selector.deploymentName}/team_and_project`,
+      path: `deployment/${selector.deploymentName}/team_and_project`,
       method: "GET",
     });
     return { teamSlug: body.team, projectSlug: body.project };
@@ -313,7 +313,7 @@ export async function fetchDeploymentCredentialsProvisioningDevOrProdMaybeThrows
     data = await bigBrainAPIMaybeThrows({
       ctx,
       method: "POST",
-      url: "deployment/provision_and_authorize",
+      path: "deployment/provision_and_authorize",
       data: {
         teamSlug:
           projectSelection.kind === "teamAndProjectSlugs"
@@ -453,7 +453,7 @@ async function handleProd(
       const credentials = await bigBrainAPI({
         ctx,
         method: "POST",
-        url: "deployment/authorize_prod",
+        path: "deployment/authorize_prod",
         data: {
           deploymentName: projectSelection.deploymentName,
         },
@@ -494,7 +494,7 @@ async function handlePreview(
       return await bigBrainAPI({
         ctx,
         method: "POST",
-        url: "deployment/authorize_preview",
+        path: "deployment/authorize_preview",
         data: {
           previewName: previewName,
           projectSelection: projectSelection,
@@ -528,7 +528,7 @@ async function handleDeploymentName(
       return await bigBrainAPI({
         ctx,
         method: "POST",
-        url: "deployment/authorize_within_current_project",
+        path: "deployment/authorize_within_current_project",
         data: {
           selectedDeploymentName: deploymentName,
           projectSelection: projectSelection,
@@ -642,22 +642,16 @@ export type DetailedDeploymentCredentials = {
   } | null;
 };
 
-// This is used by most commands (notably not `dev` and `deploy`) to determine
-// which deployment to act on, taking into account the deployment selection flags.
-//
+/**
+ * This is used by most commands to determine which deployment to act on, taking into account the deployment selection flags.
+ */
 export async function loadSelectedDeploymentCredentials(
   ctx: Context,
   deploymentSelection: DeploymentSelection,
-  selectionWithinProject: DeploymentSelectionWithinProject,
   { ensureLocalRunning } = { ensureLocalRunning: true },
 ): Promise<DetailedDeploymentCredentials> {
   switch (deploymentSelection.kind) {
     case "existingDeployment":
-      await validateDeploymentSelectionForExistingDeployment(
-        ctx,
-        selectionWithinProject,
-        deploymentSelection.deploymentToActOn.source,
-      );
       // We're already set up.
       logVerbose(
         `Deployment URL: ${deploymentSelection.deploymentToActOn.url}, Deployment Name: ${deploymentSelection.deploymentToActOn.deploymentFields?.deploymentName ?? "unknown"}, Deployment Type: ${deploymentSelection.deploymentToActOn.deploymentFields?.deploymentType ?? "unknown"}`,
@@ -687,7 +681,8 @@ export async function loadSelectedDeploymentCredentials(
           teamSlug: slugs.teamSlug,
           projectSlug: slugs.projectSlug,
         },
-        selectionWithinProject,
+        // Note that the user could select a non-preview deployment here, and it would succeed if the user is logged in locally because getBigBrainAuth prefers the user's access token over the preview deploy key.
+        deploymentSelection.selectionWithinProject,
         { ensureLocalRunning },
       );
     }
@@ -695,7 +690,7 @@ export async function loadSelectedDeploymentCredentials(
       return await _loadExistingDeploymentCredentialsForProject(
         ctx,
         deploymentSelection.targetProject,
-        selectionWithinProject,
+        deploymentSelection.selectionWithinProject,
         { ensureLocalRunning },
       );
     }
@@ -748,7 +743,7 @@ export async function fetchTeamAndProject(
   const data = (await bigBrainAPI({
     ctx,
     method: "GET",
-    url: `deployment/${deploymentName}/team_and_project`,
+    path: `deployment/${deploymentName}/team_and_project`,
   })) as {
     team: string; // slug
     project: string; // slug
@@ -779,7 +774,7 @@ export async function fetchTeamAndProjectForKey(
   const data = (await bigBrainAPI({
     ctx,
     method: "POST",
-    url: `deployment/team_and_project_for_key`,
+    path: `deployment/team_and_project_for_key`,
     data: {
       deployKey: deployKey,
     },
@@ -810,7 +805,7 @@ export async function getTeamsForUser(ctx: Context) {
     {
       ctx,
       method: "GET",
-      url: "teams",
+      path: "teams",
     },
   );
   return teams;

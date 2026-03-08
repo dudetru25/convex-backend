@@ -69,12 +69,14 @@ const createDeployment = (overrides: {
   reference: string;
 }): PlatformDeploymentResponse => ({
   kind: "cloud",
+  class: "s16",
   projectId: 1,
   creator: 1,
   createTime: Date.now() - 7 * 24 * 60 * 60 * 1000,
-  region: "us-east-1",
+  region: "aws-us-east-1",
   isDefault: false,
   previewIdentifier: null,
+  deploymentUrl: `https://${overrides.name}.convex.cloud`,
   ...overrides,
 });
 

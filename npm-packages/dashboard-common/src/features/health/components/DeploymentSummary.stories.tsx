@@ -39,12 +39,14 @@ const prodDeployment: PlatformDeploymentResponse = {
   deploymentType: "prod",
   projectId: 1,
   kind: "cloud",
-  region: "us-east-1",
+  class: "s16",
+  region: "aws-us-east-1",
   createTime: Date.now() - 1000 * 60 * 60 * 24 * 7, // 1 week ago
   isDefault: true,
   creator: null,
   previewIdentifier: null,
   reference: "production",
+  deploymentUrl: "https://happy-animal-123.convex.cloud",
 };
 
 const devCloudDeployment: PlatformDeploymentResponse = {
@@ -53,12 +55,14 @@ const devCloudDeployment: PlatformDeploymentResponse = {
   deploymentType: "dev",
   projectId: 1,
   kind: "cloud",
-  region: "us-west-2",
+  class: "s16",
+  region: "aws-eu-west-1",
   createTime: Date.now() - 1000 * 60 * 60 * 24 * 2, // 2 days ago
   isDefault: false,
   creator: 123,
   previewIdentifier: null,
   reference: "dev/nicolas",
+  deploymentUrl: "https://joyful-capybara-123.convex.cloud",
 };
 
 const devLocalDeployment: PlatformDeploymentResponse = {
@@ -80,12 +84,14 @@ const previewDeployment: PlatformDeploymentResponse = {
   deploymentType: "preview",
   projectId: 1,
   kind: "cloud",
-  region: "eu-west-1",
+  class: "s16",
+  region: "aws-us-east-1",
   createTime: Date.now() - 1000 * 60 * 60 * 12, // 12 hours ago
   isDefault: false,
   creator: 456,
   previewIdentifier: "pr-42",
   reference: "preview/my-feature",
+  deploymentUrl: "https://musical-dog-123.convex.cloud",
 };
 
 const customDeployment: PlatformDeploymentResponse = {
@@ -94,19 +100,19 @@ const customDeployment: PlatformDeploymentResponse = {
   deploymentType: "custom",
   projectId: 1,
   kind: "cloud",
-  region: "ap-southeast-1",
+  class: "s16",
+  region: "aws-us-east-1",
   createTime: Date.now() - 1000 * 60 * 60 * 24 * 30, // 30 days ago
   isDefault: false,
   creator: 789,
   previewIdentifier: null,
   reference: "staging",
+  deploymentUrl: "https://wandering-fish-513.convex.cloud",
 };
 
 const mockRegions = [
-  { name: "us-east-1", displayName: "US East (N. Virginia)" },
-  { name: "us-west-2", displayName: "US West (Oregon)" },
-  { name: "eu-west-1", displayName: "EU (Ireland)" },
-  { name: "ap-southeast-1", displayName: "Asia Pacific (Singapore)" },
+  { name: "aws-us-east-1", displayName: "US East (N. Virginia)" },
+  { name: "aws-eu-west-1", displayName: "EU (Ireland)" },
 ];
 
 const meta = {
