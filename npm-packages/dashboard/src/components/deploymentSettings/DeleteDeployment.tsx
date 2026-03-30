@@ -1,7 +1,7 @@
 import React, { useContext, useState } from "react";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { useQuery } from "convex/react";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useRouter } from "next/router";
 import { Sheet } from "@ui/Sheet";
 import { Button } from "@ui/Button";
@@ -83,10 +83,7 @@ export function DeleteDeployment() {
             <span className="font-semibold">
               Consider creating and downloading a backup before deleting.
             </span>{" "}
-            <Link
-              href={`${deploymentsURI}/settings/backups`}
-              className="text-content-link hover:underline"
-            >
+            <Link href={`${deploymentsURI}/settings/backups`}>
               Go to Backups
             </Link>
           </p>
@@ -111,6 +108,7 @@ function DeleteDeploymentModal({
     name: string;
     deploymentType: string;
     projectId: number;
+    reference?: string;
   };
   onClose: () => void;
 }) {
@@ -148,9 +146,7 @@ function DeleteDeploymentModal({
     deployment.deploymentType.charAt(0).toUpperCase() +
     deployment.deploymentType.slice(1);
 
-  const validationText = isProd
-    ? `Delete ${deploymentTypeLabel} deployment and all data`
-    : `Delete deployment and all data`;
+  const validationText = `Delete ${deployment.reference ?? deploymentTypeLabel} and all data`;
 
   return (
     <ConfirmationDialog

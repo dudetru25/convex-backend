@@ -11,11 +11,7 @@ import { useRememberLastViewedDeploymentForProject } from "hooks/useLastViewed";
 import { cn } from "@ui/cn";
 import { useRouter } from "next/router";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
-import {
-  ProjectDetails,
-  DeploymentType,
-  DeploymentResponse,
-} from "generatedApi";
+import { ProjectDetails, DeploymentResponse, TeamResponse } from "generatedApi";
 import { Button } from "@ui/Button";
 import { ContextMenu } from "@common/features/data/components/ContextMenu";
 import { DeploymentMenuOptions } from "components/header/ProjectSelector/DeploymentMenuOptions";
@@ -25,6 +21,7 @@ import {
   PROVISION_DEV_PAGE_NAME,
   PROVISION_PROD_PAGE_NAME,
 } from "@common/lib/deploymentContext";
+import { deploymentTypeColorClasses } from "@common/lib/deploymentTypeColorClasses";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useListVanityDomains } from "api/vanityDomains";
 import { useQuery } from "convex/react";
@@ -182,104 +179,22 @@ export function DeploymentDisplay({ project }: { project: ProjectDetails }) {
     [projectsURI],
   );
 
-  // ContextMenu trigger state
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const [menuTarget, setMenuTarget] = useState<{ x: number; y: number } | null>(
-    null,
-  );
-  const openMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setMenuTarget({ x: rect.left, y: rect.bottom });
-    }
-  };
-  const closeMenu = () => setMenuTarget(null);
-
   return isProjectSettings ? (
     team && currentProject ? (
-      <div
-        key="projectSettings"
-        className="my-2 mr-px flex grow items-stretch overflow-visible rounded-full bg-background-secondary"
-      >
-        <Button
-          variant="unstyled"
-          className={cn(
-            "flex h-full items-center gap-2 rounded-full px-3",
-            "border bg-background-secondary text-content-primary",
-            "truncate text-sm font-medium transition-opacity hover:bg-background-tertiary",
-            menuTarget && "border-border-selected bg-background-tertiary",
-          )}
-          ref={buttonRef}
-          tabIndex={0}
-          role="button"
-          aria-haspopup="menu"
-          aria-expanded={!!menuTarget}
-          onClick={openMenu}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") openMenu(e as any);
-          }}
-        >
-          <GearIcon className="size-4 min-w-4" />
-          <span className="max-w-24 truncate sm:contents">
-            Project settings
-          </span>
-          <CaretSortIcon className="ml-auto size-5 bg-transparent" />
-          <ContextMenu target={menuTarget} onClose={closeMenu}>
-            <DeploymentMenuOptions
-              team={team}
-              project={currentProject}
-              deployments={deployments}
-            />
-          </ContextMenu>
-        </Button>
-      </div>
+      <DeploymentLabelProjectSettings
+        team={team}
+        currentProject={currentProject}
+        deployments={deployments}
+      />
     ) : null
   ) : isProvisionPage ? (
     team && currentProject ? (
-      <div
-        key="provisionDeployment"
-        className="my-2 mr-px flex grow items-stretch overflow-visible rounded-full bg-background-secondary"
-      >
-        <Button
-          variant="unstyled"
-          className={cn(
-            "flex h-full items-center gap-2 rounded-full px-3",
-            "border border-dashed",
-            "truncate text-sm font-medium transition-opacity hover:opacity-80",
-            menuTarget && "opacity-80",
-            isProvisionProd
-              ? "border-purple-600 bg-purple-100/50 text-purple-600 dark:border-purple-100 dark:bg-purple-700/50 dark:text-purple-100"
-              : "border-green-600 bg-green-100/50 text-green-600 dark:border-green-400 dark:bg-green-900/50 dark:text-green-400",
-          )}
-          ref={buttonRef}
-          tabIndex={0}
-          role="button"
-          aria-haspopup="menu"
-          aria-expanded={!!menuTarget}
-          onClick={openMenu}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") openMenu(e as any);
-          }}
-        >
-          {isProvisionProd ? (
-            <SignalIcon className="size-4 min-w-4" />
-          ) : (
-            <CommandLineIcon className="size-4 min-w-4" />
-          )}
-          <span className="max-w-32 truncate sm:contents">
-            {isProvisionProd ? "Production" : "Development (Cloud)"}
-          </span>
-          <CaretSortIcon className="ml-auto size-5 bg-transparent" />
-          <ContextMenu target={menuTarget} onClose={closeMenu}>
-            <DeploymentMenuOptions
-              team={team}
-              project={currentProject}
-              deployments={deployments}
-            />
-          </ContextMenu>
-        </Button>
-      </div>
+      <DeploymentLabelProvisionDeployment
+        team={team}
+        currentProject={currentProject}
+        deployments={deployments}
+        isProvisionProd={isProvisionProd}
+      />
     ) : null
   ) : !isDoneLoading ? null : (
     <DeploymentLabelWrapper
@@ -304,18 +219,8 @@ export function DeploymentLabel({
 }) {
   const team = useCurrentTeam();
   const project = useCurrentProject();
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const [menuTarget, setMenuTarget] = useState<{ x: number; y: number } | null>(
-    null,
-  );
-  const openMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setMenuTarget({ x: rect.left, y: rect.bottom });
-    }
-  };
-  const closeMenu = () => setMenuTarget(null);
+  const { openMenu, closeMenu, menuTarget, buttonRef } =
+    useContextMenuTrigger();
 
   const [containerRef, containerWidth] = useContainerWidth<HTMLDivElement>();
 
@@ -366,7 +271,7 @@ export function DeploymentLabel({
           "flex h-[2.3125rem] items-center gap-2 truncate rounded-full border text-sm font-medium transition-opacity hover:opacity-80",
           menuTarget && "opacity-80",
           "focus-visible:ring-1 focus-visible:ring-border-selected focus-visible:outline-hidden",
-          getBackgroundColor(deployment.deploymentType),
+          deploymentTypeColorClasses(deployment.deploymentType),
         )}
         type="button"
         ref={buttonRef}
@@ -443,7 +348,7 @@ export function DeploymentLabel({
           <CaretSortIcon
             className={cn(
               "ml-auto size-5 shrink-0",
-              getBackgroundColor(deployment.deploymentType),
+              deploymentTypeColorClasses(deployment.deploymentType),
               "bg-transparent",
             )}
           />
@@ -460,21 +365,114 @@ export function DeploymentLabel({
   );
 }
 
-export function getBackgroundColor(deploymentType: DeploymentType): string {
-  switch (deploymentType) {
-    case "prod":
-      return "border-purple-600 dark:border-purple-100 bg-purple-100 text-purple-600 dark:bg-purple-700 dark:text-purple-100";
-    case "preview":
-      return "border-orange-600 dark:border-orange-400 bg-orange-100 text-orange-600 dark:bg-orange-900 dark:text-orange-400";
-    case "dev":
-      return "border-green-600 dark:border-green-400 bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-400";
-    case "custom":
-      return "border-neutral-4 dark:border-neutral-6 bg-neutral-1 text-neutral-11 dark:bg-neutral-12 dark:text-neutral-2";
-    default: {
-      deploymentType satisfies never;
-      return "";
-    }
-  }
+export function DeploymentLabelProjectSettings({
+  team,
+  currentProject,
+  deployments,
+}: {
+  team: TeamResponse;
+  currentProject: ProjectDetails;
+  deployments: PlatformDeploymentResponse[];
+}) {
+  const { openMenu, closeMenu, menuTarget, buttonRef } =
+    useContextMenuTrigger();
+
+  return (
+    <div
+      key="projectSettings"
+      className="my-2 mr-px flex grow items-stretch overflow-visible p-px"
+    >
+      <Button
+        variant="unstyled"
+        className={cn(
+          "flex h-[2.3125rem] items-center gap-2 rounded-full px-3",
+          "border bg-background-secondary text-content-primary",
+          "truncate text-sm font-medium transition-opacity hover:bg-background-tertiary",
+          menuTarget && "border-border-selected bg-background-tertiary",
+        )}
+        ref={buttonRef}
+        tabIndex={0}
+        role="button"
+        aria-haspopup="menu"
+        aria-expanded={!!menuTarget}
+        onClick={openMenu}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") openMenu(e as any);
+        }}
+      >
+        <GearIcon className="size-4 min-w-4" />
+        <span className="max-w-24 truncate sm:contents">Project settings</span>
+        <CaretSortIcon className="ml-auto size-5 bg-transparent" />
+        <ContextMenu target={menuTarget} onClose={closeMenu}>
+          <DeploymentMenuOptions
+            team={team}
+            project={currentProject}
+            deployments={deployments}
+          />
+        </ContextMenu>
+      </Button>
+    </div>
+  );
+}
+
+export function DeploymentLabelProvisionDeployment({
+  team,
+  currentProject,
+  deployments,
+  isProvisionProd,
+}: {
+  team: TeamResponse;
+  currentProject: ProjectDetails;
+  deployments: PlatformDeploymentResponse[];
+  isProvisionProd: boolean;
+}) {
+  const { openMenu, closeMenu, menuTarget, buttonRef } =
+    useContextMenuTrigger();
+
+  return (
+    <div
+      key="provisionDeployment"
+      className="my-2 mr-px flex grow items-stretch overflow-visible p-px"
+    >
+      <Button
+        variant="unstyled"
+        className={cn(
+          "flex h-[2.3125rem] items-center gap-2 rounded-full px-3",
+          "border border-dashed",
+          "truncate text-sm font-medium transition-opacity hover:opacity-80",
+          menuTarget && "opacity-80",
+          deploymentTypeColorClasses(isProvisionProd ? "prod" : "dev"),
+          "[--bg-opacity:50%]",
+        )}
+        ref={buttonRef}
+        tabIndex={0}
+        role="button"
+        aria-haspopup="menu"
+        aria-expanded={!!menuTarget}
+        onClick={openMenu}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") openMenu(e as any);
+        }}
+      >
+        {isProvisionProd ? (
+          <SignalIcon className="size-4 min-w-4" />
+        ) : (
+          <CommandLineIcon className="size-4 min-w-4" />
+        )}
+        <span className="max-w-32 truncate sm:contents">
+          {isProvisionProd ? "Production" : "Development (Cloud)"}
+        </span>
+        <CaretSortIcon className="ml-auto size-5 bg-transparent" />
+        <ContextMenu target={menuTarget} onClose={closeMenu}>
+          <DeploymentMenuOptions
+            team={team}
+            project={currentProject}
+            deployments={deployments}
+          />
+        </ContextMenu>
+      </Button>
+    </div>
+  );
 }
 
 export function getDeploymentLabel({
@@ -484,6 +482,16 @@ export function getDeploymentLabel({
   deployment: PlatformDeploymentResponse | DeploymentResponse;
   whoseName: string | null; // null = mine
 }): string {
+  if (
+    (deployment.deploymentType === "custom" ||
+      ("isDefault" in deployment &&
+        !deployment.isDefault &&
+        deployment.deploymentType !== "preview")) &&
+    "reference" in deployment
+  ) {
+    return deployment.reference;
+  }
+
   switch (deployment.deploymentType) {
     case "prod":
       return "Production";
@@ -502,4 +510,21 @@ export function getDeploymentLabel({
       return "";
     }
   }
+}
+
+function useContextMenuTrigger() {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [menuTarget, setMenuTarget] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const openMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setMenuTarget({ x: rect.left, y: rect.bottom });
+    }
+  };
+  const closeMenu = () => setMenuTarget(null);
+
+  return { openMenu, closeMenu, menuTarget, buttonRef };
 }

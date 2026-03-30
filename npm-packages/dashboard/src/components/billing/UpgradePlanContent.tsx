@@ -8,7 +8,7 @@ import { useGetCoupon, useCreateSubscription } from "api/billing";
 import { FormikProvider, useFormik, useFormikContext } from "formik";
 import * as Yup from "yup";
 import { Address, PlanResponse, TeamResponse } from "generatedApi";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { PriceSummary } from "components/billing/PriceSummary";
 import { usePostHog } from "hooks/usePostHog";
 import { PaymentDetailsForm } from "./PaymentDetailsForm";
@@ -76,7 +76,7 @@ export function UpgradePlanContentContainer({
       planId: plan.id,
       paymentMethod: undefined,
       billingAddress: undefined,
-      spendingLimitWarningThresholdUsd: "",
+      spendingLimitWarningThresholdUsd: null,
       spendingLimitDisableThresholdUsd: null,
     },
     validationSchema: CreateSubscriptionSchema.concat(
@@ -158,7 +158,7 @@ export function UpgradePlanContentContainer({
         {...props}
         plan={plan}
         isChef={isChef}
-        teamManagedBy={team.managedBy || undefined}
+        teamManagedBy={team.managedBy === "vercel" ? team.managedBy : undefined}
         setPaymentMethod={(p) => {
           if (!p) {
             resetClientSecret();
@@ -355,7 +355,14 @@ export function UpgradePlanContent({
         <Button
           size="sm"
           onClick={() => setCurrentStep(currentStep + 1)}
-          disabled={currentStep === 0 && !canProceedFromStep0}
+          disabled={
+            (currentStep === 0 && !canProceedFromStep0) ||
+            (currentStep === 1 &&
+              !!(
+                formState.errors.spendingLimitWarningThresholdUsd ||
+                formState.errors.spendingLimitDisableThresholdUsd
+              ))
+          }
           tip={
             currentStep === 0
               ? !formState.values.name
@@ -412,12 +419,7 @@ export function UpgradePlanContent({
       {isChef && plan.planType === "CONVEX_STARTER_PLUS" && (
         <p className="mb-2">
           {plan.name} is recommended for Convex Chef users.{" "}
-          <Link
-            href="/team/settings/billing"
-            className="text-content-link hover:underline"
-          >
-            View all plans.
-          </Link>
+          <Link href="/team/settings/billing">View all plans.</Link>
         </p>
       )}
       <div className="flex flex-col gap-4">

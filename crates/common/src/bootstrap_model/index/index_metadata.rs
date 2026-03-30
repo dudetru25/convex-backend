@@ -147,7 +147,9 @@ impl<T: IndexTableIdentifier> IndexMetadata<T> {
     }
 
     #[cfg(any(test, feature = "testing"))]
-    pub fn inject_last_segment_ts_into_backfilling_vector_index(&mut self) -> anyhow::Result<()> {
+    pub fn inject_backfill_snapshot_ts_into_backfilling_vector_index(
+        &mut self,
+    ) -> anyhow::Result<()> {
         match self {
             Self {
                 name: _,
@@ -157,7 +159,13 @@ impl<T: IndexTableIdentifier> IndexMetadata<T> {
                         on_disk_state: VectorIndexState::Backfilling(state),
                     },
             } => {
-                state.last_segment_ts = Some(Timestamp::MIN);
+                use value::InternalId;
+
+                use crate::bootstrap_model::index::search_index::SearchBackfillCursor;
+                state.cursor = Some(SearchBackfillCursor::AtSnapshot {
+                    backfill_snapshot_ts: Timestamp::MIN,
+                    cursor: InternalId::MIN,
+                });
                 Ok(())
             },
             _ => Err(anyhow::anyhow!("Not a vector index in backfilling state")),

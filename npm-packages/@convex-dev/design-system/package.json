@@ -3,6 +3,11 @@
   "version": "0.3.0",
   "type": "module",
   "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "directory": "npm-packages/@convex-dev/design-system"
+  },
   "files": [
     "dist",
     "package.json"
@@ -32,7 +37,7 @@
     "react-use": "~17.6.0",
     "tailwind-merge": "^3.3.1",
     "tailwind-variants": "^3.0.0",
-    "lodash-es": "~4.17.21"
+    "lodash-es": "~4.17.23"
   },
   "devDependencies": {
     "@jest/types": "^30.0.0",
@@ -47,7 +52,7 @@
     "@types/testing-library__jest-dom": "~5.14.5",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "@storybook/nextjs": "^10.2.13",
+    "@storybook/nextjs": "^10.2.17",
     "eslint": "^9.37.0",
     "eslint-config-next": "^15.5.4",
     "eslint-config-prettier": "^10.0.0",
@@ -62,7 +67,7 @@
     "postcss": "^8.4.19",
     "prettier": "^3.8.0",
     "prettier-plugin-tailwindcss": "~0.7.0",
-    "storybook": "^10.2.13",
+    "storybook": "^10.2.17",
     "typescript": "^5.9.2",
     "tsc-alias": "~1.8.15",
     "@types/lodash-es": "~4.17.12"
@@ -96,9 +101,17 @@
       "import": "./dist/Donut.jsx",
       "types": "./dist/Donut.d.ts"
     },
+    "./HelpTooltip": {
+      "import": "./dist/HelpTooltip.jsx",
+      "types": "./dist/HelpTooltip.d.ts"
+    },
     "./KeyboardShortcut": {
       "import": "./dist/KeyboardShortcut.jsx",
       "types": "./dist/KeyboardShortcut.d.ts"
+    },
+    "./Link": {
+      "import": "./dist/Link.jsx",
+      "types": "./dist/Link.d.ts"
     },
     "./Loading": {
       "import": "./dist/Loading.jsx",
@@ -123,6 +136,10 @@
     "./ProgressBar": {
       "import": "./dist/ProgressBar.jsx",
       "types": "./dist/ProgressBar.d.ts"
+    },
+    "./SegmentedControl": {
+      "import": "./dist/SegmentedControl.jsx",
+      "types": "./dist/SegmentedControl.d.ts"
     },
     "./Sheet": {
       "import": "./dist/Sheet.jsx",

@@ -46,6 +46,9 @@ import { createProject } from "../api.js";
 import { removeAnonymousPrefix } from "../deployment.js";
 import { nodeFs } from "../../../bundler/fs.js";
 import { doInitConvexFolder } from "../codegen.js";
+import { readProjectConfig } from "../config.js";
+import { functionsDir } from "../utils/utils.js";
+import { maybeSetupAiFiles } from "../aiFiles/index.js";
 
 export async function handleAnonymousDeployment(
   ctx: Context,
@@ -77,7 +80,8 @@ export async function handleAnonymousDeployment(
   });
   if (
     deployment.kind === "first" &&
-    process.env.CONVEX_AGENT_MODE !== "anonymous"
+    process.env.CONVEX_AGENT_MODE !== "anonymous" &&
+    process.stdin.isTTY
   ) {
     logMessage(
       "This command, `npx convex dev`, will run your Convex backend locally and update it with the function you write in the `convex/` directory.",
@@ -181,6 +185,10 @@ export async function handleAnonymousDeployment(
 
   if (deployment.kind === "new") {
     await doInitConvexFolder(ctx);
+    const { configPath, projectConfig } = await readProjectConfig(ctx);
+    const convexDir = path.resolve(functionsDir(configPath, projectConfig));
+    const projectDir = path.resolve(path.dirname(configPath));
+    await maybeSetupAiFiles({ ctx, convexDir, projectDir });
   }
   return {
     adminKey,
@@ -344,6 +352,11 @@ async function chooseDeployment(
 
   // User explicitly wants a new deployment - create without prompting for name
   if (options.chosenConfiguration === "new") {
+    return { deploymentName: generateDeploymentName(), kind: "new" };
+  }
+
+  // Non-interactive terminal - auto-create a new deployment
+  if (!process.stdin.isTTY) {
     return { deploymentName: generateDeploymentName(), kind: "new" };
   }
 

@@ -31,6 +31,7 @@ use common::{
         UnixTimestamp,
     },
     sync::spsc,
+    try_anyhow,
     types::{
         PersistenceVersion,
         UdfType,
@@ -63,7 +64,6 @@ use parking_lot::Mutex;
 use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
 use serde_json::Value as JsonValue;
-use sync_types::types::SerializedArgs;
 use tokio::sync::{
     mpsc::{
         self,
@@ -83,6 +83,7 @@ use udf::{
 };
 use value::{
     serialized_args_ext::SerializedArgsExt,
+    ConvexArray,
     ConvexObject,
     ConvexValue,
     JsonPackedValue,
@@ -507,7 +508,7 @@ async fn run_request<RT: Runtime>(
     });
 
     // Phase 1: Load and register all source needed, and evaluate the UDF's module.
-    let r: anyhow::Result<_> = try {
+    let r: anyhow::Result<_> = try_anyhow!({
         let mut stack = vec![udf_path.module().clone()];
 
         while let Some(module_path) = stack.pop() {
@@ -536,7 +537,7 @@ async fn run_request<RT: Runtime>(
         let udf_module_specifier = module_specifier_from_path(udf_path.module())?;
         client.evaluate_module(udf_module_specifier.clone()).await?;
         anyhow::Ok(())
-    };
+    });
     if let Err(e) = r {
         let js_error = e.downcast::<JsError>()?;
         client.shutdown().await?;
@@ -576,7 +577,7 @@ async fn run_request<RT: Runtime>(
         execution_context,
     );
     let parsed_args = parse_udf_args(udf_path, arguments.clone().into_args()?)?;
-    let r: anyhow::Result<_> = try {
+    let r: anyhow::Result<_> = try_anyhow!({
         // Update our shared state with the updated table mappings before reentering
         // user code.
         provider.shared.update_table_mappings(provider.tx);
@@ -659,7 +660,7 @@ async fn run_request<RT: Runtime>(
             provider.shared.update_table_mappings(provider.tx);
             result = client.poll_function(function_id, completions).await?;
         }
-    };
+    });
 
     let result = match r {
         Ok(result) => Ok(result),
@@ -679,14 +680,9 @@ async fn run_request<RT: Runtime>(
         provider.tx.biggest_document_writes(),
         result.as_ref().ok(),
         |warning| {
-            log_lines.push(LogLine::new_system_log_line(
-                warning.level,
-                warning.messages,
-                // Note: accessing the current time here is still deterministic since
-                // we don't externalize the time to the function.
-                rt.unix_timestamp(),
-                warning.system_log_metadata,
-            ));
+            // Note: accessing the current time here is still deterministic since
+            // we don't externalize the time to the function.
+            log_lines.push(warning.into_log_line(rt.unix_timestamp()));
         },
     )?;
     let outcome = UdfOutcome {
@@ -907,7 +903,7 @@ impl<RT: Runtime> AsyncSyscallProvider<RT> for Isolate2SyscallProvider<'_, RT> {
         path: CanonicalizedComponentFunctionPath,
         args: Vec<JsonValue>,
         scheduled_ts: UnixTimestamp,
-    ) -> anyhow::Result<(CanonicalizedComponentFunctionPath, SerializedArgs)> {
+    ) -> anyhow::Result<(CanonicalizedComponentFunctionPath, ConvexArray)> {
         validate_schedule_args(path, args, scheduled_ts, self.unix_timestamp, self.tx).await
     }
 

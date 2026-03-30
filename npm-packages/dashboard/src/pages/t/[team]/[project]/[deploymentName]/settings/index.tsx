@@ -1,21 +1,22 @@
 import { withAuthenticatedPage } from "lib/withAuthenticatedPage";
 import { Sheet } from "@ui/Sheet";
 import { DeployKeysForDeployment } from "components/deploymentSettings/DeployKeysForDeployment";
-import { useCurrentDeployment } from "api/deployments";
+import { useCurrentDeployment, useDeploymentRegions } from "api/deployments";
 import { useRouter } from "next/router";
 import { usePathname } from "next/navigation";
 import { DeleteDeployment } from "components/deploymentSettings/DeleteDeployment";
+import { TransferDeployment } from "components/deploymentSettings/TransferDeployment";
 import { DeploymentSettingsLayout } from "@common/layouts/DeploymentSettingsLayout";
-import {
-  DeploymentUrl,
-  HttpActionsUrl,
-} from "@common/features/settings/components/DeploymentUrl";
-import { DeploymentReference } from "components/deploymentSettings/DeploymentReference";
+import { DeploymentAdvancedSettings } from "components/deploymentSettings/DeploymentAdvancedSettings";
 import { PauseDeployment } from "@common/features/settings/components/PauseDeployment";
+import { DeploymentSummary } from "@common/features/health/components/DeploymentSummary";
 import { useScrollToHash } from "@common/lib/useScrollToHash";
 import { usePostHog } from "hooks/usePostHog";
 import { useLaunchDarkly } from "hooks/useLaunchDarkly";
-import { useRef } from "react";
+import { useCurrentTeam, useTeamMembers } from "api/teams";
+import { useCurrentProject } from "api/projects";
+import { useListCloudBackups } from "api/backups";
+import { useMemo, useRef } from "react";
 
 export { getServerSideProps } from "lib/ssr";
 
@@ -43,39 +44,45 @@ export default withAuthenticatedPage(() => {
 
 function DeploymentURLAndDeployKey() {
   const deployment = useCurrentDeployment();
-  const deploymentType = deployment?.deploymentType ?? "prod";
   const { capture } = usePostHog();
   const pauseDeploymentRef = useRef<HTMLDivElement | null>(null);
   useScrollToHash("#pause-deployment", pauseDeploymentRef);
-  const { showReferences } = useLaunchDarkly();
+  const { transferDeployment } = useLaunchDarkly();
 
-  const getDeploymentUrlDescription = () => {
-    switch (deploymentType) {
-      case "prod":
-        return "Configure a production Convex client with this URL.";
-      case "dev":
-        return "Configure a Convex client with this URL while developing locally.";
-      case "preview":
-        return "Configure a Convex client with this URL to preview changes on a branch.";
-      case "custom":
-        return "Configure a Convex client with this URL.";
-      default:
-        return "Configure a Convex client with this URL.";
+  const team = useCurrentTeam();
+  const project = useCurrentProject();
+  const backups = useListCloudBackups(team?.id || 0);
+  const teamMembers = useTeamMembers(team?.id);
+  const { regions } = useDeploymentRegions(team?.id);
+
+  const lastBackupTime = useMemo(() => {
+    if (!backups || !deployment || deployment.kind !== "cloud") {
+      return undefined;
     }
-  };
+    const deploymentsBackups = backups.filter(
+      (b) => b.sourceDeploymentId === deployment.id && b.state === "complete",
+    );
+    return deploymentsBackups.length > 0
+      ? deploymentsBackups[0].requestedTime
+      : null;
+  }, [backups, deployment]);
 
   return (
     <div className="flex flex-col gap-4">
-      <Sheet>
-        <DeploymentUrl>{getDeploymentUrlDescription()}</DeploymentUrl>
-      </Sheet>
-      <Sheet>
-        <HttpActionsUrl />
-      </Sheet>
-      {showReferences && <DeploymentReference />}
+      {deployment && team?.slug && project?.slug && (
+        <DeploymentSummary
+          deployment={deployment}
+          teamSlug={team.slug}
+          projectSlug={project.slug}
+          lastBackupTime={lastBackupTime}
+          teamMembers={teamMembers}
+          regions={regions}
+        />
+      )}
       <Sheet>
         <DeployKeysForDeployment />
       </Sheet>
+      <DeploymentAdvancedSettings />
       <div ref={pauseDeploymentRef}>
         <PauseDeployment
           onPausedDeployment={() => {
@@ -84,6 +91,7 @@ function DeploymentURLAndDeployKey() {
         />
       </div>
       <DeleteDeployment />
+      {transferDeployment && <TransferDeployment />}
     </div>
   );
 }

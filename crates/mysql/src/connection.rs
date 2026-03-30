@@ -1,5 +1,7 @@
 use std::{
+    env,
     mem,
+    path::PathBuf,
     str::FromStr,
     time::Duration,
 };
@@ -61,6 +63,7 @@ use mysql_async::{
     PoolConstraints,
     PoolOpts,
     Row,
+    SslOpts,
     TxOpts,
     Value as MySqlValue,
 };
@@ -324,7 +327,7 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
             .await?
         };
         if let Some(row) = &row {
-            log_query_result(row, self.labels.clone());
+            log_query_result(self.labels.clone()).add_row(row);
         }
         Ok(row)
     }
@@ -384,9 +387,10 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
     ) -> anyhow::Result<Vec<R>> {
         let mut result = vec![];
         pin_mut!(stream);
+        let mut stats = log_query_result(labels);
         while let Some(row) = with_timeout(stream.try_next()).await? {
             progress_counter.add_processed(1);
-            log_query_result(&row, labels.clone());
+            stats.add_row(&row);
             // `f` may be computationally intensive, and
             // `stream.try_next().await` might not yield to tokio if the rows
             // are all available at once. Avoid long poll times by intentionally
@@ -556,7 +560,19 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
             .with_abs_conn_ttl(Some(*MYSQL_MAX_CONNECTION_LIFETIME))
             .with_abs_conn_ttl_jitter(Some(*MYSQL_MAX_CONNECTION_LIFETIME / 10))
             .with_reset_connection(false); // persist prepared statements
-        let opts = OptsBuilder::from_opts(Opts::from_str(url.as_ref())?).pool_opts(pool_opts);
+        let mut opts = OptsBuilder::from_opts(Opts::from_str(url.as_ref())?).pool_opts(pool_opts);
+        if let Some(ca_file_path) = env::var_os("MYSQL_CA_FILE")
+            && !ca_file_path.is_empty()
+        {
+            let ca_file_path = PathBuf::from(ca_file_path);
+            anyhow::ensure!(
+                ca_file_path.exists(),
+                "MYSQL_CA_FILE does not exist: {}",
+                ca_file_path.display()
+            );
+            let ssl_opts = SslOpts::default().with_root_certs(vec![ca_file_path.into()]);
+            opts = opts.ssl_opts(ssl_opts);
+        }
         Ok(Self {
             pool: Pool::new(opts),
             use_prepared_statements,

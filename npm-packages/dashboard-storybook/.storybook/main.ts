@@ -12,7 +12,17 @@ const config: StorybookConfig = {
     "@storybook/addon-links",
     "@storybook/addon-themes",
     "@storybook/addon-docs",
+    "@storybook/addon-a11y",
     "@storybook/addon-vitest",
+  ],
+  staticDirs: [
+    {
+      from: path.resolve(
+        import.meta.dirname,
+        "../../@convex-dev/design-system/node_modules/@fontsource-variable/inter/files",
+      ),
+      to: "/assets/files",
+    },
   ],
   framework: {
     name: "@storybook/nextjs-vite",
@@ -35,6 +45,7 @@ const config: StorybookConfig = {
         alias: {
           // Match dashboard's tsconfig baseUrl: "src" for api/* imports
           api: path.resolve(import.meta.dirname, "../../dashboard/src/api"),
+          hooks: path.resolve(import.meta.dirname, "../../dashboard/src/hooks"),
           // Match dashboard/dashboard-common tsconfig path alias "@common/*"
           "@common": path.resolve(
             import.meta.dirname,
@@ -45,6 +56,10 @@ const config: StorybookConfig = {
             import.meta.dirname,
             "../../@convex-dev/design-system/src",
           ),
+          // Storybook's Vite build can't bundle `saffron`'s `.wasm` dependency
+          // (see vite:wasm-fallback errors). For Storybook only, swap in a
+          // minimal JS mock so stories can render.
+          saffron: path.resolve(import.meta.dirname, "./mocks/saffron.ts"),
         },
       },
       server: {

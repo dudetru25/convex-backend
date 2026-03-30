@@ -8,6 +8,7 @@ use std::{
     slice,
 };
 
+use anyhow::Context as _;
 use axum::{
     debug_handler,
     http::HeaderMap,
@@ -17,9 +18,12 @@ use serde::Deserialize;
 use tikv_jemalloc_sys::malloc_stats_print;
 use tikv_jemallocator::Jemalloc;
 
-use crate::performance::{
-    JemallocStats,
-    JEMALLOC_STATS_REPORTER,
+use crate::{
+    metrics::log_process_level_stats,
+    performance::{
+        JemallocStats,
+        JEMALLOC_STATS_REPORTER,
+    },
 };
 
 // Configure jemalloc as Rust's global allocator. Based on:
@@ -109,4 +113,11 @@ pub async fn heap_profile(
         },
     }
     Ok(collect_profile().await?)
+}
+
+pub fn log_process_memory_stats() -> anyhow::Result<()> {
+    let jemalloc_stats = load_jemalloc_stats()?;
+    let process_stats = memory_stats::memory_stats().context("failed to get memory stats")?;
+    log_process_level_stats(process_stats.physical_mem, &jemalloc_stats);
+    Ok(())
 }

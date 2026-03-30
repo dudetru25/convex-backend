@@ -194,13 +194,6 @@ pub struct SerializedEvaluatePushResponse {
     schema_change: SerializedSchemaChange,
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SerializedIndexDiff {
-    added: Vec<String>,
-    removed: Vec<String>,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyzedComponent {

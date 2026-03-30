@@ -44,6 +44,28 @@ import {
 import { functionsDir } from "./utils/utils.js";
 import { LargeIndexDeletionCheck } from "./indexes.js";
 
+const PRESERVED_GENERATED_ENTRIES = new Set(["ai"]);
+
+export function cleanupStaleGeneratedEntries(
+  ctx: Context,
+  codegenDir: string,
+  writtenFiles: string[],
+  opts?: { debug?: boolean; force?: boolean; dryRun?: boolean },
+) {
+  // Skip cleanup in debug mode since we don't actually write files in that mode.
+  if (opts?.debug) {
+    return;
+  }
+  for (const file of ctx.fs.listDir(codegenDir)) {
+    if (PRESERVED_GENERATED_ENTRIES.has(file.name)) {
+      continue;
+    }
+    if (!writtenFiles.includes(file.name)) {
+      recursivelyDelete(ctx, path.join(codegenDir, file.name), opts);
+    }
+  }
+}
+
 export type CodegenOptions = {
   url?: string | undefined;
   adminKey?: string | undefined;
@@ -67,7 +89,7 @@ export async function doInitConvexFolder(
     debug?: boolean;
   },
 ) {
-  const skipIfExists = false; // Not currently configured
+  const skipIfExists = true;
   let folder: string;
   if (functionsFolder) {
     folder = functionsFolder;
@@ -75,9 +97,19 @@ export async function doInitConvexFolder(
     const { projectConfig, configPath } = await readProjectConfig(ctx);
     folder = functionsDir(configPath, projectConfig);
   }
-  await prepareForCodegen(ctx, folder, opts);
+  const { functionsDirExistedBeforeCodegen } = await prepareForCodegen(
+    ctx,
+    folder,
+    opts,
+  );
   await withTmpDir(async (tmpDir) => {
-    await doReadmeCodegen(ctx, tmpDir, folder, skipIfExists, opts);
+    await doReadmeCodegen(
+      ctx,
+      tmpDir,
+      folder,
+      skipIfExists && functionsDirExistedBeforeCodegen,
+      opts,
+    );
     await doTsconfigCodegen(ctx, tmpDir, folder, skipIfExists, opts);
   });
 }
@@ -87,6 +119,7 @@ async function prepareForCodegen(
   functionsDir: string,
   opts?: { dryRun?: boolean },
 ) {
+  const functionsDirExistedBeforeCodegen = ctx.fs.exists(functionsDir);
   // Delete the old _generated.ts because v0.1.2 used to put the react generated
   // code there
   const legacyCodegenPath = path.join(functionsDir, "_generated.ts");
@@ -104,7 +137,7 @@ async function prepareForCodegen(
   // Create the codegen dir if it doesn't already exist.
   const codegenDir = path.join(functionsDir, "_generated");
   ctx.fs.mkdir(codegenDir, { allowExisting: true, recursive: true });
-  return codegenDir;
+  return { codegenDir, functionsDirExistedBeforeCodegen };
 }
 
 /** Codegen only for an application (a root component) */
@@ -115,7 +148,7 @@ export async function doCodegen(
   opts?: { dryRun?: boolean; generateCommonJSApi?: boolean; debug?: boolean },
 ) {
   const { projectConfig } = await readProjectConfig(ctx);
-  const codegenDir = await prepareForCodegen(ctx, functionsDir, opts);
+  const { codegenDir } = await prepareForCodegen(ctx, functionsDir, opts);
 
   await withTmpDir(async (tmpDir) => {
     // Write files in dependency order so a watching dev server doesn't
@@ -164,14 +197,7 @@ export async function doCodegen(
     writtenFiles.push(...apiFiles);
 
     // Cleanup any files that weren't written in this run.
-    // Skip cleanup in debug mode since we don't actually write files in that mode.
-    if (!opts?.debug) {
-      for (const file of ctx.fs.listDir(codegenDir)) {
-        if (!writtenFiles.includes(file.name)) {
-          recursivelyDelete(ctx, path.join(codegenDir, file.name), opts);
-        }
-      }
-    }
+    cleanupStaleGeneratedEntries(ctx, codegenDir, writtenFiles, opts);
 
     // Generated code is updated, typecheck the query and mutation functions.
     await typeCheckFunctionsInMode(ctx, typeCheckMode, functionsDir);
@@ -203,7 +229,7 @@ export async function doInitialComponentCodegen(
     return;
   }
 
-  const codegenDir = await prepareForCodegen(
+  const { codegenDir } = await prepareForCodegen(
     ctx,
     componentDirectory.path,
     opts,
@@ -269,14 +295,7 @@ export async function doInitialComponentCodegen(
   }
 
   // Cleanup any files that weren't written in this run.
-  // Skip cleanup in debug mode since we don't actually write files in that mode.
-  if (!opts?.debug) {
-    for (const file of ctx.fs.listDir(codegenDir)) {
-      if (!writtenFiles.includes(file.name)) {
-        recursivelyDelete(ctx, path.join(codegenDir, file.name), opts);
-      }
-    }
-  }
+  cleanupStaleGeneratedEntries(ctx, codegenDir, writtenFiles, opts);
 }
 
 /* This component defined in a dist directory; it is probably in a node_module
@@ -463,11 +482,11 @@ async function doReadmeCodegen(
   ctx: Context,
   tmpDir: TempDir,
   functionsDir: string,
-  skipIfExists: boolean,
+  skip: boolean,
   opts?: { dryRun?: boolean; debug?: boolean },
 ) {
   const readmePath = path.join(functionsDir, "README.md");
-  if (skipIfExists && ctx.fs.exists(readmePath)) {
+  if (skip) {
     logVerbose(`Not overwriting README.md.`);
     return;
   }

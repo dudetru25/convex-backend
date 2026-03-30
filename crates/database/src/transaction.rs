@@ -108,7 +108,10 @@ use crate::{
         },
     },
     committer::table_dependency_sort_key,
-    execution_size::FunctionExecutionSize,
+    execution_size::{
+        FunctionExecutionSize,
+        ScheduledFunctionsSize,
+    },
     metrics::{
         self,
         log_index_too_large_blocking_writes,
@@ -130,7 +133,6 @@ use crate::{
     writes::{
         NestedWriteToken,
         NestedWrites,
-        TransactionWriteSize,
         Writes,
     },
     ComponentRegistry,
@@ -140,6 +142,7 @@ use crate::{
     SystemMetadataModel,
     TableModel,
     TableRegistry,
+    TransactionReadSize,
     SCHEMAS_TABLE,
 };
 
@@ -155,7 +158,7 @@ pub struct Transaction<RT: Runtime> {
     pub(crate) next_creation_time: CreationTime,
 
     // Size of any functions scheduled from this transaction.
-    pub scheduled_size: TransactionWriteSize,
+    pub scheduled_size: ScheduledFunctionsSize,
 
     pub(crate) reads: TransactionReadSet,
     pub(crate) writes: NestedWrites<Writes>,
@@ -226,7 +229,7 @@ impl<RT: Runtime> Transaction<RT> {
             writes: NestedWrites::new(Writes::new()),
             id_generator,
             next_creation_time: creation_time,
-            scheduled_size: TransactionWriteSize::default(),
+            scheduled_size: ScheduledFunctionsSize::default(),
             index: NestedWrites::new(index),
             metadata: NestedWrites::new(metadata),
             schema_registry: NestedWrites::new(schema_registry),
@@ -433,6 +436,10 @@ impl<RT: Runtime> Transaction<RT> {
         }
     }
 
+    pub fn user_tx_read_size(&self) -> &TransactionReadSize {
+        self.reads.user_tx_size()
+    }
+
     /// Applies the reads and writes from FunctionRunner to the Transaction.
     #[fastrace::trace]
     pub fn apply_function_runner_tx(
@@ -571,6 +578,9 @@ impl<RT: Runtime> Transaction<RT> {
             let patched_value = value.apply(old_document.value().clone().into_value())?;
             old_document.replace_value(patched_value)?
         };
+        if new_document == old_document {
+            return Ok(new_document);
+        }
         SchemaModel::new(self, namespace)
             .enforce(&new_document)
             .await?;
@@ -605,6 +615,9 @@ impl<RT: Runtime> Transaction<RT> {
 
         // Replace document.
         let new_document = old_document.replace_value(value)?;
+        if new_document == old_document {
+            return Ok(new_document);
+        }
 
         SchemaModel::new(self, namespace)
             .enforce(&new_document)
@@ -719,7 +732,7 @@ impl<RT: Runtime> Transaction<RT> {
         &self.stats
     }
 
-    fn take_table_mapping_dep(&mut self) {
+    pub(crate) fn take_table_mapping_dep(&mut self) {
         let tables_by_id = TabletIndexName::by_id(
             self.metadata
                 .table_mapping()
@@ -950,7 +963,7 @@ impl<RT: Runtime> Transaction<RT> {
                     &self.virtual_system_mapping,
                 )?;
 
-                Some((doc, timestamp))
+                Some((doc.unpack(), timestamp))
             },
             None => None,
         };

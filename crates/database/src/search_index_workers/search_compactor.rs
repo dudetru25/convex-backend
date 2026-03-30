@@ -36,7 +36,6 @@ use crate::{
     },
     search_index_workers::{
         index_meta::{
-            BackfillState,
             SearchIndex,
             SearchOnDiskState,
             SearchSnapshot,
@@ -126,21 +125,21 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
         // Skip compaction on empty tables.
         for index_doc in non_empty_search_indexes {
             let (index_id, index_metadata) = index_doc.into_id_and_value();
-            let Some(config) = T::get_config(index_metadata.config) else {
+            let Some(config) = T::get_config(&index_metadata.config) else {
                 continue;
             };
             let name = index_metadata.name;
 
             let maybe_segments_to_compact = match &config.on_disk_state {
-                SearchOnDiskState::Backfilling(BackfillState {
-                    segments,
-                    backfill_snapshot_ts,
-                    ..
-                }) => {
-                    if backfill_snapshot_ts.is_none() {
+                SearchOnDiskState::Backfilling(backfill_state) => {
+                    if backfill_state.cursor.is_none() {
                         continue;
                     } else {
-                        Self::find_segments_to_compact(segments, &config.spec, &self.config)?
+                        Self::find_segments_to_compact(
+                            &backfill_state.segments,
+                            &config.spec,
+                            &self.config,
+                        )?
                     }
                 },
                 SearchOnDiskState::SnapshottedAt(SearchSnapshot {
@@ -196,15 +195,14 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
     async fn build_one(&self, job: CompactionJob<T>) -> anyhow::Result<u64> {
         let timer = compaction_build_one_timer(Self::search_type(), job.compaction_reason);
         let snapshot_ts = match job.on_disk_state {
-            SearchOnDiskState::Backfilling(BackfillState {
-                backfill_snapshot_ts,
-                ..
-            }) => backfill_snapshot_ts.with_context(|| {
-                format!(
-                    "Trying to compact backfilling {:?} segments with no backfill timestamp",
-                    Self::search_type()
-                )
-            })?,
+            SearchOnDiskState::Backfilling(ref backfill_state) => {
+                backfill_state.backfill_ts().with_context(|| {
+                    format!(
+                        "Trying to compact backfilling {:?} segments with no backfill timestamp",
+                        Self::search_type()
+                    )
+                })?
+            },
             SearchOnDiskState::Backfilled { snapshot, .. }
             | SearchOnDiskState::SnapshottedAt(snapshot) => snapshot.ts,
         };

@@ -36,6 +36,7 @@ use common::{
         fetch::ProxiedFetchClient,
         RoutedHttpPath,
     },
+    knobs::ISOLATE_MAX_HEAP_FOR_ANALYZE,
     log_lines::LogLines,
     pause::HoldGuard,
     persistence::Persistence,
@@ -374,6 +375,7 @@ impl<RT: Runtime, P: Persistence> UdfTest<RT, P> {
                 modules_by_path.clone(),
                 BTreeMap::new(),
                 DEV_INSTANCE_NAME.to_string(),
+                *ISOLATE_MAX_HEAP_FOR_ANALYZE,
             )
             .await?
         {
@@ -887,6 +889,7 @@ impl<RT: Runtime, P: Persistence> UdfTest<RT, P> {
         backfill_text_indexes(
             self.rt.clone(),
             self.database.clone(),
+            self.persistence.reader(),
             self.search_storage.clone(),
             segment_term_metadata_fetcher,
         )
@@ -898,6 +901,7 @@ impl<RT: Runtime, P: Persistence> UdfTest<RT, P> {
         backfill_vector_indexes(
             self.rt.clone(),
             self.database.clone(),
+            self.persistence.reader(),
             self.search_storage.clone(),
         )
         .await?;
@@ -1433,7 +1437,6 @@ impl<RT: Runtime, P: Persistence> ActionCallbacks for UdfTest<RT, P> {
         )
         .await?;
 
-        let udf_args = parse_udf_args(&scheduled_path.udf_path, udf_args.into_args()?)?;
         let virtual_id = VirtualSchedulerModel::new(&mut tx, scheduling_component.into())
             .schedule(scheduled_path, udf_args, scheduled_ts, context)
             .await?;

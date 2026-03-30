@@ -16,7 +16,10 @@ use common::{
     document::ParsedDocument,
     knobs::DEFAULT_DOCUMENTS_PAGE_SIZE,
     persistence::TimestampRange,
-    query::Order,
+    query::{
+        CursorPosition,
+        Order,
+    },
     runtime::{
         new_rate_limiter,
         Runtime,
@@ -51,6 +54,7 @@ use crate::{
     search_index_workers::{
         index_meta::{
             BackfillState,
+            SearchBackfillCursor,
             SearchIndex,
             SearchOnDiskState,
             SearchSnapshot,
@@ -189,19 +193,13 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexMetadataWriter<RT, T> {
             .iter()
             .map(|segment| segment.statistics())
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let schema = T::new_schema(&job.index_config.spec);
-
         if let Some(index_backfill_result) = backfill_result {
+            let schema = T::new_schema(&job.index_config.spec);
             inner
-                .commit_backfill_flush(
-                    job,
-                    snapshot_ts,
-                    segments,
-                    new_segment_id,
-                    index_backfill_result,
-                )
+                .commit_backfill_flush(job, segments, new_segment_id, index_backfill_result, schema)
                 .await?
         } else {
+            let schema = T::new_schema(&job.index_config.spec);
             inner
                 .commit_snapshot_flush(job, snapshot_ts, segments, new_segment_id, schema)
                 .await?
@@ -282,7 +280,7 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
         let mut metadata = Self::require_index_metadata(&mut tx, index_id).await?;
 
         let (spec, state) = T::extract_metadata(metadata)?;
-        let snapshot_ts = *state.ts().context("Compacted a segment without a ts?")?;
+        let snapshot_ts = state.ts().context("Compacted a segment without a ts?")?;
         let snapshot_ts = tx.begin_timestamp().prior_ts(snapshot_ts)?;
         let mut current_segments = state.segments().clone();
 
@@ -351,7 +349,7 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
     ) -> anyhow::Result<()> {
         let new_metadata = IndexMetadata {
             name,
-            config: T::new_index_config(spec, state)?,
+            config: T::new_index_config(spec, state),
         };
 
         SystemMetadataModel::new_global(&mut tx)
@@ -400,10 +398,10 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
     async fn commit_backfill_flush(
         &self,
         job: &IndexBuild<T>,
-        backfill_complete_ts: RepeatableTimestamp,
         mut new_and_modified_segments: Vec<T::Segment>,
         new_segment_id: Option<String>,
         backfill_result: MultiSegmentBackfillResult,
+        schema: T::Schema,
     ) -> anyhow::Result<()> {
         let timer = search_flush_merge_commit_timer(T::search_type());
         let mut tx: Transaction<RT> = self.database.begin(Identity::system()).await?;
@@ -414,8 +412,8 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
                 || matches!(job.build_reason, BuildReason::VersionMismatch)
         );
 
-        let (spec, state) = T::extract_metadata(metadata)?;
-        let staged = match &state {
+        let (spec, current_disk_state) = T::extract_metadata(metadata)?;
+        let staged = match &current_disk_state {
             SearchOnDiskState::Backfilling(backfill_state) => backfill_state.staged,
             SearchOnDiskState::Backfilled {
                 snapshot: _,
@@ -426,61 +424,94 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
             },
         };
 
-        // Find new segment and add to current segments to avoid race with compactor
-        let new_segment = new_segment_id
+        let current_segments = current_disk_state.segments();
+        let is_merge_required = Self::is_merge_flush_required(
+            &new_and_modified_segments,
+            &current_segments,
+            &new_segment_id,
+        );
+        let new_segment_num_docs = new_segment_id
+            .as_ref()
             .map(|new_segment_id| {
                 new_and_modified_segments
-                    .into_iter()
+                    .iter()
                     .find(|segment| segment.id() == new_segment_id)
                     .context("Missing new segment in segments list!")
             })
-            .transpose()?;
+            .transpose()?
+            .as_ref()
+            .map(|segment| anyhow::Ok::<u64>(segment.statistics()?.num_documents()))
+            .transpose()?
+            .unwrap_or_default();
+        if is_merge_required {
+            // Drop and restart, merging could take a while.
+            drop(tx);
+            let start_snapshot_ts = current_disk_state
+                .ts()
+                .context("Compaction ran before index had a snapshot")?;
+            let updated_segments = self
+                .merge_deletes(
+                    current_segments,
+                    start_snapshot_ts,
+                    backfill_result.new_ts,
+                    job.index_name.clone(),
+                    job.build_reason.read_max_pages_per_second(),
+                    schema,
+                )
+                .await?;
+            tx = self.database.begin(Identity::system()).await?;
+            let new_segment = new_segment_id
+                .map(|new_segment_id| {
+                    new_and_modified_segments
+                        .into_iter()
+                        .find(|segment| segment.id() == new_segment_id)
+                        .context("Missing new segment in segments list!")
+                })
+                .transpose()?;
+            new_and_modified_segments = updated_segments
+                .into_iter()
+                .chain(new_segment.into_iter())
+                .collect_vec();
+        }
         let mut index_backfill_model = IndexBackfillModel::new(&mut tx);
         index_backfill_model
             .update_search_index_backfill_progress(
                 job.index_id,
                 *job.index_name.table(),
-                new_segment
-                    .as_ref()
-                    .map(|segment| anyhow::Ok::<u64>(segment.statistics()?.num_documents()))
-                    .transpose()?
-                    .unwrap_or_default(),
+                new_segment_num_docs,
             )
             .await?;
-        new_and_modified_segments = state
-            .segments()
-            .into_iter()
-            .chain(new_segment)
-            .collect_vec();
 
-        self.write_metadata(
-            tx,
-            job.metadata_id,
-            job.index_name.clone(),
-            spec,
-            if backfill_result.is_backfill_complete {
-                SearchOnDiskState::Backfilled {
-                    snapshot: SearchSnapshot {
-                        ts: *backfill_complete_ts,
-                        data: SnapshotData::MultiSegment(new_and_modified_segments),
-                    },
-                    staged,
-                }
-            } else {
-                SearchOnDiskState::Backfilling(BackfillState {
-                    segments: new_and_modified_segments,
-                    cursor: backfill_result
-                        .new_cursor
-                        .map(|cursor| cursor.internal_id()),
-                    backfill_snapshot_ts: Some(*backfill_complete_ts),
-                    last_segment_ts: None,
-                    staged,
-                })
+        let new_state = match backfill_result.new_cursor.index_key {
+            Some(CursorPosition::End) => SearchOnDiskState::Backfilled {
+                snapshot: SearchSnapshot {
+                    ts: *backfill_result.new_ts,
+                    data: SnapshotData::MultiSegment(new_and_modified_segments),
+                },
+                staged,
             },
-        )
-        .await?;
+            Some(CursorPosition::After(cursor)) => SearchOnDiskState::Backfilling(BackfillState {
+                segments: new_and_modified_segments,
+                cursor: Some(SearchBackfillCursor::WalkingForwards {
+                    last_segment_ts: *backfill_result.new_ts,
+                    table_scan_cursor: cursor.0,
+                }),
+                staged,
+            }),
+            None => anyhow::bail!("Tried to commit backfill flush without a cursor"),
+        };
 
-        finish_search_index_merge_timer(timer, SearchIndexMergeType::NotRequired);
+        self.write_metadata(tx, job.metadata_id, job.index_name.clone(), spec, new_state)
+            .await?;
+
+        finish_search_index_merge_timer(
+            timer,
+            if is_merge_required {
+                SearchIndexMergeType::Required
+            } else {
+                SearchIndexMergeType::NotRequired
+            },
+        );
         Ok(())
     }
 
@@ -512,7 +543,7 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
             // we necesssarily must have a snapshot timestamp for when those
             // segments were valid. So it's an error if we think we need to
             // merge with a compaction but have no snapshot timestamp.
-            let start_snapshot_ts = *current_disk_state
+            let start_snapshot_ts = current_disk_state
                 .ts()
                 .context("Compaction ran before index had a snapshot")?;
             let updated_segments = self

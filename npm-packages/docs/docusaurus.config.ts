@@ -2,7 +2,9 @@ import { themes } from "prism-react-renderer";
 const lightCodeTheme = themes.github;
 import darkCodeTheme from "./src/theme/prism-theme/oneDark.js";
 import * as dotenv from "dotenv";
-import { resolve } from "path";
+import { execSync } from "child_process";
+import { mkdirSync, writeFileSync } from "fs";
+import { join, resolve } from "path";
 import type { Config, ThemeConfig } from "@docusaurus/types";
 import type { Options as PresetClassicOptions } from "@docusaurus/preset-classic";
 import type * as OpenApiPlugin from "docusaurus-plugin-openapi-docs";
@@ -51,6 +53,9 @@ const config: Config = {
     POST_HOG_HOST: process.env.POST_HOG_HOST,
   },
   themeConfig: {
+    colorMode: {
+      respectPrefersColorScheme: true,
+    },
     // Replace with your project's social card
     // image: "img/docusaurus-social-card.jpg", // TODO!
     docs: {
@@ -429,6 +434,20 @@ const config: Config = {
     "./src/plugins/metrics",
     "./src/plugins/prefixIds",
     "./src/plugins/imageZoomPlugin",
+    async function versionPlugin() {
+      // Exposes a /api/version route used by isitout
+      return {
+        name: "version-plugin",
+        async postBuild({ outDir }: { outDir: string }) {
+          const sha = execSync("git rev-parse HEAD").toString().trim();
+          mkdirSync(join(outDir, "api"), { recursive: true });
+          writeFileSync(
+            join(outDir, "api", "version"),
+            JSON.stringify({ sha }),
+          );
+        },
+      };
+    },
     async function tailwindPlugin() {
       return {
         name: "docusaurus-tailwindcss",

@@ -36,8 +36,6 @@ use pb::common::{
     DocumentUpdateWithPrevTs as DocumentUpdateWithPrevTsProto,
     ResolvedDocument as ResolvedDocumentProto,
 };
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use serde_json::{
     Number,
     Value as JsonValue,
@@ -273,12 +271,6 @@ impl DeveloperDocument {
     }
 }
 
-impl HeapSize for DeveloperDocument {
-    fn heap_size(&self) -> usize {
-        self.id.heap_size() + self.value.heap_size()
-    }
-}
-
 impl Debug for DeveloperDocument {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Document({:?})", self.value)
@@ -314,12 +306,6 @@ impl Debug for ResolvedDocument {
 impl Display for ResolvedDocument {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         Display::fmt(&self.document, f)
-    }
-}
-
-impl HeapSize for ResolvedDocument {
-    fn heap_size(&self) -> usize {
-        self.document.heap_size()
     }
 }
 
@@ -624,12 +610,6 @@ pub struct DocumentUpdateWithPrevTs {
     pub new_document: Option<ResolvedDocument>,
 }
 
-impl HeapSize for DocumentUpdateWithPrevTs {
-    fn heap_size(&self) -> usize {
-        self.old_document.heap_size() + self.new_document.heap_size()
-    }
-}
-
 impl TryFrom<DocumentUpdateWithPrevTs> for DocumentUpdateWithPrevTsProto {
     type Error = anyhow::Error;
 
@@ -860,10 +840,9 @@ impl PackedDocument {
         out.clear();
         for field_path in fields {
             let value = self.value.as_ref().open_path(field_path);
-            write_sort_key_or_undefined::<_, false>(value, out)
-                .expect("failed to unpack opened value");
+            write_sort_key_or_undefined(value, out).expect("failed to unpack opened value");
         }
-        let Ok(()) = write_sort_key::<_, false>(
+        let Ok(()) = write_sort_key(
             self.id().developer_id.encode_into(&mut Default::default()),
             out,
         );

@@ -20,17 +20,16 @@ import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { TextInput } from "@ui/TextInput";
 import { useFormik } from "formik";
 import { useHasProjectAdminPermissions } from "api/roles";
-import Link from "next/link";
+import { useDeployments } from "api/deployments";
+import { useCurrentProject } from "api/projects";
+import { Link } from "@ui/Link";
 import { useState, useMemo, ReactNode } from "react";
 import {
   PlatformDeploymentResponse,
   PlatformCustomDomainResponse,
-} from "@convex-dev/platform/managementApi";
-import {
-  TeamResponse,
-  TeamEntitlementsResponse,
   PlatformDeleteCustomDomainArgs,
-} from "generatedApi";
+} from "@convex-dev/platform/managementApi";
+import { TeamResponse, TeamEntitlementsResponse } from "generatedApi";
 import {
   useListVanityDomains,
   useCreateVanityDomain,
@@ -63,6 +62,14 @@ export function CustomDomains({
     deployment.deploymentType !== "prod" || hasAdminPermissions;
   const hasEditAccess = hasEntitlement && canPerformActions;
 
+  const project = useCurrentProject();
+  const defaultProdDeployment = useDeployments(
+    deployment.projectId,
+  ).deployments?.find(
+    (d) => d.kind === "cloud" && d.deploymentType === "prod" && d.isDefault,
+  );
+  const isNonProd = deployment.deploymentType !== "prod";
+
   return (
     <div className="flex flex-col gap-4">
       <Sheet>
@@ -76,6 +83,22 @@ export function CustomDomains({
             </p>
           </div>
 
+          {isNonProd && (
+            <Callout variant="hint">
+              <div>
+                You can add custom domains to this deployment, but you may be
+                looking to configure them on your production deployment instead.{" "}
+                {defaultProdDeployment && project ? (
+                  <Link
+                    href={`/t/${team.slug}/${project.slug}/${defaultProdDeployment.name}/settings/custom-domains`}
+                  >
+                    Go to production custom domains.
+                  </Link>
+                ) : null}
+              </div>
+            </Callout>
+          )}
+
           <div>
             {!hasEntitlement && (
               <>
@@ -86,10 +109,7 @@ export function CustomDomains({
                       only available on the Pro plan
                     </span>
                     .{" "}
-                    <Link
-                      href={`/t/${team.slug}/settings/billing`}
-                      className="underline"
-                    >
+                    <Link href={`/t/${team.slug}/settings/billing`}>
                       Upgrade to get access.
                     </Link>
                   </div>
@@ -97,7 +117,7 @@ export function CustomDomains({
                 <LocalDevCallout
                   className="flex-col"
                   tipText="Tip: Run this to enable custom domains locally:"
-                  command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement custom_domains_enabled --team-id ${team.id} --reason "local" true --for-real`}
+                  command={`cargo run --bin big-brain-tool -- --dev entitlement grant --team-entitlement custom_domains_enabled --team-id ${team.id} --reason "local" true --for-real`}
                 />
               </>
             )}

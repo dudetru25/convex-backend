@@ -60,7 +60,7 @@ use file_storage::{
 };
 use function_runner::{
     in_process_function_runner::InProcessFunctionRunner,
-    server::InstanceStorage,
+    server::DeploymentStorage,
 };
 use http_client::CachedHttpClient;
 use isolate::{
@@ -95,7 +95,6 @@ use model::{
     scheduled_jobs::types::ScheduledJobMetadata,
     udf_config::types::UdfConfig,
     virtual_system_mapping,
-    REFRESHABLE_APP_TABLES,
 };
 use node_executor::{
     noop::NoopNodeExecutor,
@@ -215,7 +214,6 @@ impl<RT: Runtime> ApplicationTestExt<RT> for Application<RT> {
             searcher.clone(),
             ShutdownSignal::panic(),
             virtual_system_mapping().clone(),
-            REFRESHABLE_APP_TABLES.clone(),
             // Essentially unlimited rate limit for testing
             Arc::new(new_unlimited_rate_limiter(rt.clone())),
             deleted_tablet_sender,
@@ -239,7 +237,7 @@ impl<RT: Runtime> ApplicationTestExt<RT> for Application<RT> {
             convex_origin.clone(),
             rt.clone(),
             persistence.reader(),
-            InstanceStorage {
+            DeploymentStorage {
                 files_storage: application_storage.files_storage.clone(),
                 modules_storage: application_storage.modules_storage.clone(),
             },

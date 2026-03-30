@@ -2,9 +2,13 @@ import { Sheet } from "@ui/Sheet";
 import { cn } from "@ui/cn";
 import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
-import { TimestampDistance } from "@common/elements/TimestampDistance";
+import {
+  LiveTimestampDistanceInner,
+  TimestampDistance,
+} from "@common/elements/TimestampDistance";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
 import {
+  ClockIcon,
   CommandLineIcon,
   SignalIcon,
   WrenchIcon,
@@ -20,32 +24,14 @@ import {
   ExternalLinkIcon,
   QuestionMarkCircledIcon,
 } from "@radix-ui/react-icons";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useContext, useEffect, useState } from "react";
 import semver from "semver";
 import { Button } from "@ui/Button";
 import { Tooltip } from "@ui/Tooltip";
 import { Spinner } from "@ui/Spinner";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
-
-function getBackgroundColor(
-  deploymentType: PlatformDeploymentResponse["deploymentType"],
-): string {
-  switch (deploymentType) {
-    case "prod":
-      return "border-purple-600 dark:border-purple-100 bg-purple-100 text-purple-600 dark:bg-purple-700 dark:text-purple-100";
-    case "preview":
-      return "border-orange-600 dark:border-orange-400 bg-orange-100 text-orange-600 dark:bg-orange-900 dark:text-orange-400";
-    case "dev":
-      return "border-green-600 dark:border-green-400 bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-400";
-    case "custom":
-      return "border-neutral-4 dark:border-neutral-6 bg-neutral-1 text-neutral-11 dark:bg-neutral-12 dark:text-neutral-2";
-    default: {
-      deploymentType satisfies never;
-      return "";
-    }
-  }
-}
+import { deploymentTypeColorClasses } from "@common/lib/deploymentTypeColorClasses";
 
 function useLatestConvexVersion(currentVersion: string | undefined) {
   const [hasUpdate, setHasUpdate] = useState(false);
@@ -149,20 +135,28 @@ export function DeploymentSummary({
   teamSlug,
   projectSlug,
   lastBackupTime,
-  creatorId,
-  creatorName,
+  teamMembers,
   regions,
 }: {
   deployment: PlatformDeploymentResponse;
   teamSlug: string;
   projectSlug: string;
   lastBackupTime?: number | null;
-  creatorId?: number;
-  creatorName?: string;
+  teamMembers?: Array<{ id: number; name?: string | null; email: string }>;
   regions?: Array<{ name: string; displayName: string }>;
 }) {
   const { TeamMemberLink } = useContext(DeploymentInfoContext);
   const lastPushEvent = useQuery(udfs.deploymentEvents.lastPushEvent, {});
+
+  // Resolve the team member who last deployed from the push event
+  const deployer = teamMembers?.find(
+    (tm) => lastPushEvent && tm.id === Number(lastPushEvent.member_id),
+  );
+  const deployerId = lastPushEvent
+    ? Number(lastPushEvent.member_id) || undefined
+    : undefined;
+  const deployerName = deployer?.name || deployer?.email || undefined;
+
   const convexCloudUrl = useQuery(udfs.convexCloudUrl.default, {});
   const convexSiteUrl = useQuery(udfs.convexSiteUrl.default, {});
   const serverVersion = useQuery(udfs.getVersion.default);
@@ -200,17 +194,29 @@ export function DeploymentSummary({
     );
   }
 
+  const mainPanelRounding =
+    deployment.kind === "cloud"
+      ? // When the Cloud URL panel is present we split rounding between panels.
+        "rounded-l-lg rounded-tr-lg rounded-bl-none lg:flex-1 lg:rounded-tr-none lg:rounded-bl-lg"
+      : // Local backends don't render the Cloud URL panel, so round all corners.
+        "rounded-lg";
+
   return (
     <Sheet className="flex w-fit flex-col bg-transparent" padding={false}>
       <div className="flex flex-col lg:flex-row">
         {/* Main deployment info */}
-        <div className="flex flex-col gap-4 rounded-l-lg rounded-tr-lg rounded-bl-none bg-background-secondary p-2 py-3 lg:flex-1 lg:rounded-tr-none lg:rounded-bl-lg lg:pr-4">
+        <div
+          className={cn(
+            "flex flex-col gap-4 bg-background-secondary p-2 py-3 lg:pr-4",
+            mainPanelRounding,
+          )}
+        >
           {/* Row 1: Type + Name (always together) */}
           <div className="flex flex-wrap items-center gap-2">
             <div
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium",
-                getBackgroundColor(deployment.deploymentType),
+                deploymentTypeColorClasses(deployment.deploymentType),
               )}
             >
               <DeploymentIcon deployment={deployment} className="size-3.5" />
@@ -260,14 +266,13 @@ export function DeploymentSummary({
                     tip={
                       <span className="flex items-center gap-1">
                         Deployment class
-                        <a
+                        <Link
                           href="https://docs.convex.dev/production/state/limits"
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-content-link hover:underline"
                         >
                           <QuestionMarkCircledIcon className="size-3.5" />
-                        </a>
+                        </Link>
                       </span>
                     }
                   >
@@ -314,6 +319,7 @@ export function DeploymentSummary({
                       aria-label="Convex NPM Package Upgrade Available"
                       href="https://github.com/get-convex/convex-js/blob/main/CHANGELOG.md#changelog"
                       target="_blank"
+                      // eslint-disable-next-line no-restricted-syntax -- manual Link-Button hybrid implementation
                       className="h-[1.25rem] text-content-link"
                     >
                       <div>({latestVersion} available)</div>
@@ -345,10 +351,13 @@ export function DeploymentSummary({
                     date={new Date(lastPushEvent._creationTime)}
                     className="text-sm text-content-primary"
                   />
-                  {creatorId && creatorName && (
+                  {deployerId !== undefined && deployerName && (
                     <>
                       <span>by</span>
-                      <TeamMemberLink memberId={creatorId} name={creatorName} />
+                      <TeamMemberLink
+                        memberId={deployerId}
+                        name={deployerName}
+                      />
                     </>
                   )}
                 </div>
@@ -372,7 +381,6 @@ export function DeploymentSummary({
                       </span>
                       <Link
                         href={backupSettingsUrl}
-                        className="text-content-link hover:underline"
                         aria-label="View backup settings"
                       >
                         <ExternalLinkIcon className="size-3.5" />
@@ -389,7 +397,6 @@ export function DeploymentSummary({
                       />
                       <Link
                         href={backupSettingsUrl}
-                        className="text-content-link hover:underline"
                         aria-label="View backup settings"
                       >
                         <ExternalLinkIcon className="size-3.5" />
@@ -400,6 +407,36 @@ export function DeploymentSummary({
               </div>
             )}
           </div>
+
+          {/* Row 4: Expiry warning (ephemeral deployments) */}
+          {deployment.kind === "cloud" && deployment.expiresAt && (
+            <div className="flex items-center gap-2">
+              <Tooltip tip="This deployment will be automatically deleted">
+                <ClockIcon
+                  className="size-4 shrink-0 text-content-warning"
+                  aria-label="Expiry"
+                />
+              </Tooltip>
+              <Tooltip
+                tip={new Date(deployment.expiresAt).toLocaleString(undefined, {
+                  timeZoneName: "short",
+                })}
+              >
+                <span className="text-sm text-content-warning">
+                  Will expire on{" "}
+                  {new Date(deployment.expiresAt).toLocaleDateString(
+                    undefined,
+                    { month: "short", day: "numeric", year: "numeric" },
+                  )}{" "}
+                  (
+                  <LiveTimestampDistanceInner
+                    date={new Date(deployment.expiresAt)}
+                  />
+                  )
+                </span>
+              </Tooltip>
+            </div>
+          )}
         </div>
 
         {/* Deployment URLs */}
@@ -413,7 +450,8 @@ export function DeploymentSummary({
                 href={convexCloudUrl!}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-xs break-all text-content-link hover:underline"
+                className="font-mono text-xs break-all"
+                noUnderline
               >
                 {convexCloudUrl}
               </Link>
@@ -426,7 +464,8 @@ export function DeploymentSummary({
                 href={convexSiteUrl!}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-xs break-all text-content-link hover:underline"
+                className="font-mono text-xs break-all"
+                noUnderline
               >
                 {convexSiteUrl}
               </Link>

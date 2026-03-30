@@ -1,11 +1,19 @@
 import type { Meta, StoryObj } from "@storybook/nextjs";
 import { IndexOption } from "./IndexFilters";
+import { Sheet } from "@ui/Sheet";
 
 const meta: Meta<typeof IndexOption> = {
   component: IndexOption,
   parameters: {
     layout: "centered",
   },
+  decorators: [
+    (Story) => (
+      <Sheet padding={false} className="p-2">
+        <Story />
+      </Sheet>
+    ),
+  ],
 };
 
 export default meta;

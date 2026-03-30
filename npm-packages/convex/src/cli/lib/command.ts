@@ -42,6 +42,7 @@ declare module "@commander-js/extra-typings" {
         prod?: boolean;
         previewName?: string;
         deploymentName?: string;
+        deployment?: string;
       }
     >;
 
@@ -172,7 +173,12 @@ Command.prototype.addDeploymentSelectionOptions = function (
     options?.showUrlHelp
       ? action + " the deployment at the given URL."
       : undefined,
-  ).conflicts(["--prod", "--preview-name", "--deployment-name"]);
+  ).conflicts([
+    "--prod",
+    "--preview-name",
+    "--deployment-name",
+    "--deployment",
+  ]);
   if (!options?.showUrlHelp) {
     urlOption.hideHelp();
   }
@@ -181,15 +187,20 @@ Command.prototype.addDeploymentSelectionOptions = function (
     .addOption(
       new Option(
         "--prod",
-        action + " this project's production deployment.",
-      ).conflicts(["--preview-name", "--deployment-name", "--url"]),
+        action + " this project's default production deployment.",
+      ).conflicts([
+        "--preview-name",
+        "--deployment-name",
+        "--url",
+        "--deployment",
+      ]),
     )
     .addOption(
       new Option(
         "--preview-name <previewName>",
         action + " the preview deployment with the given name.",
       )
-        .conflicts(["--prod", "--deployment-name", "--url"])
+        .conflicts(["--prod", "--deployment-name", "--url", "--deployment"])
         .hideHelp(),
     )
     .addOption(
@@ -197,8 +208,20 @@ Command.prototype.addDeploymentSelectionOptions = function (
         "--deployment-name <deploymentName>",
         action + " the specified deployment.",
       )
-        .conflicts(["--prod", "--preview-name", "--url"])
+        .conflicts(["--prod", "--preview-name", "--url", "--deployment"])
         .hideHelp(),
+    )
+    .addOption(
+      new Option(
+        "--deployment <deployment>",
+        action +
+          " a specific deployment. Accepts:\n" +
+          "• a deployment name (e.g. joyful-capybara-123)\n" +
+          "• a deployment ref (e.g. dev/james)\n" +
+          "• 'dev' (for your personal dev deployment)\n" +
+          "• 'prod' (for your project’s default production deployment)." +
+          "\nYou can also select deployments in other projects with 'project-slug:ref' or 'team-slug:project-slug:ref'.",
+      ).conflicts(["--prod", "--preview-name", "--deployment-name", "--url"]),
     )
     .addOption(
       new Option(
@@ -225,8 +248,9 @@ export async function normalizeDevOptions(
     codegen: "enable" | "disable";
     once?: boolean;
     untilSuccess: boolean;
-    run?: string | undefined;
+    start?: string;
     runSh?: string;
+    run?: string | undefined;
     runComponent?: string;
     tailLogs?: string | true;
     traceEvents: boolean;
@@ -295,10 +319,10 @@ export async function normalizeDevOptions(
             name: cmdOptions.run,
             component: cmdOptions.runComponent,
           }
-        : cmdOptions.runSh !== undefined
+        : (cmdOptions.start ?? cmdOptions.runSh) !== undefined
           ? {
               kind: "shell",
-              command: cmdOptions.runSh,
+              command: (cmdOptions.start ?? cmdOptions.runSh)!,
             }
           : undefined,
     tailLogs:
@@ -321,7 +345,12 @@ Command.prototype.addDeployOptions = function () {
       "--dry-run",
       "Print out the generated configuration without deploying to your Convex deployment",
     )
-    .option("-y, --yes", "Skip confirmation prompt when running locally")
+    .addOption(
+      new Option(
+        "-y, --yes",
+        "Skip confirmation prompt when running interactively. Warning: this deploys to PRODUCTION. To deploy to your current dev environment, run npx convex dev --once",
+      ).hideHelp(),
+    )
     .addOption(
       new Option(
         "--typecheck <mode>",

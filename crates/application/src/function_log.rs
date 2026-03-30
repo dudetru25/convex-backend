@@ -140,6 +140,8 @@ pub struct FunctionExecution {
     pub cached_result: bool,
     /// How long (in seconds) did executing this UDF take?
     pub execution_time: f64,
+    /// How long (in seconds) did the user's code execute?
+    pub user_execution_time: Option<Duration>,
 
     /// Who called this UDF?
     pub caller: FunctionCaller,
@@ -240,7 +242,7 @@ impl FunctionExecution {
         match log_line {
             LogLine::Structured(log_line) => {
                 vec![LogEvent {
-                    timestamp: log_line.timestamp,
+                    timestamp: self.unix_timestamp,
                     event: StructuredLogEvent::Console {
                         source: self.event_source(sub_function_path),
                         log_line: log_line.clone(),
@@ -270,6 +272,7 @@ impl FunctionExecution {
                 source: self.event_source(None),
                 error: self.params.err().cloned(),
                 execution_time,
+                user_execution_time: self.user_execution_time,
                 occ_info: match &self.occ_info {
                     Some(occ_info) => Some(log_streaming::OccInfo {
                         table_name: occ_info.table_name.clone(),
@@ -294,6 +297,7 @@ impl FunctionExecution {
                     vector_index_read_bytes: self.usage_stats.vector_index_read_bytes,
                     vector_index_write_bytes: self.usage_stats.vector_index_write_bytes,
                     text_index_write_bytes: self.usage_stats.text_index_write_bytes,
+                    network_egress_bytes: self.usage_stats.network_egress_bytes,
                     memory_used_mb: self.memory_used_mb,
                     return_bytes: self.return_bytes,
                 },
@@ -738,6 +742,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             tables_touched: tables_touched.into(),
             cached_result: was_cached,
             execution_time: execution_time.as_secs_f64(),
+            user_execution_time: outcome.user_execution_time,
             caller,
             environment: ModuleEnvironment::Isolate,
             syscall_trace: outcome.syscall_trace.clone(),
@@ -750,7 +755,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             mutation_retry_count: None,
             occ_info: None,
         };
-        self.log_execution(execution, true);
+        self.log_execution(execution, true, true);
     }
 
     pub async fn log_mutation(
@@ -894,6 +899,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             tables_touched: tables_touched.into(),
             cached_result: false,
             execution_time: execution_time.as_secs_f64(),
+            user_execution_time: outcome.user_execution_time,
             caller,
             environment: ModuleEnvironment::Isolate,
             syscall_trace: outcome.syscall_trace,
@@ -906,7 +912,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             mutation_retry_count: Some(mutation_retry_count),
             occ_info,
         };
-        self.log_execution(execution, true);
+        self.log_execution(execution, true, true);
     }
 
     pub async fn log_action(&self, completion: ActionCompletion, usage: FunctionUsageTracker) {
@@ -989,6 +995,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             tables_touched: WithHeapSize::default(),
             cached_result: false,
             execution_time: completion.execution_time.as_secs_f64(),
+            user_execution_time: outcome.user_execution_time,
             caller: completion.caller,
             environment: completion.environment,
             syscall_trace: outcome.syscall_trace,
@@ -1001,7 +1008,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             mutation_retry_count: None,
             occ_info: None,
         };
-        self.log_execution(execution, /* send_console_events */ false)
+        self.log_execution(execution, /* send_console_events */ false, true)
     }
 
     pub fn log_action_progress(
@@ -1099,13 +1106,26 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
         context: ExecutionContext,
         response_sha256: Sha256Digest,
     ) {
+        // For usage tracking, substitute "[unmatched]" when the JS router
+        // didn't match a route. This avoids route explosion from every unique
+        // 404 URL becoming a separate billing entry. Function execution logs
+        // preserve the actual URL for debugging.
+        let usage_route = if outcome.route.matched {
+            outcome.route.clone()
+        } else {
+            HttpActionRoute {
+                method: outcome.route.method,
+                path: "[unmatched]".to_string(),
+                matched: false,
+            }
+        };
         let aggregated = match usage {
             TrackUsage::Track(usage_tracker) => {
                 let usage_stats = usage_tracker.gather_user_stats();
                 let aggregated = usage_stats.aggregate();
                 self.usage_tracking
                     .track_call(
-                        UdfIdentifier::Http(outcome.route.clone()),
+                        UdfIdentifier::Http(usage_route),
                         context.execution_id,
                         context.request_id.clone(),
                         CallType::HttpAction {
@@ -1135,6 +1155,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             tables_touched: WithHeapSize::default(),
             cached_result: false,
             execution_time: execution_time.as_secs_f64(),
+            user_execution_time: outcome.user_execution_time,
             caller,
             environment: ModuleEnvironment::Isolate,
             usage_stats: aggregated,
@@ -1147,7 +1168,11 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             mutation_retry_count: None,
             occ_info: None,
         };
-        self.log_execution(execution, /* send_console_events */ false);
+        self.log_execution(
+            execution,
+            /* send_console_events */ false,
+            /* log_app_metrics */ outcome.route.matched,
+        );
     }
 
     pub fn log_http_action_progress(
@@ -1173,11 +1198,16 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
         self.log_execution_progress(log_lines, event_source, unix_timestamp)
     }
 
-    fn log_execution(&self, execution: FunctionExecution, send_console_events: bool) {
-        if let Err(mut e) = self
-            .inner
-            .lock()
-            .log_execution(execution, send_console_events)
+    fn log_execution(
+        &self,
+        execution: FunctionExecution,
+        send_console_events: bool,
+        log_app_metrics: bool,
+    ) {
+        if let Err(mut e) =
+            self.inner
+                .lock()
+                .log_execution(execution, send_console_events, log_app_metrics)
         {
             report_error_sync(&mut e);
         }
@@ -1830,10 +1860,11 @@ impl<RT: Runtime> Inner<RT> {
         &mut self,
         execution: FunctionExecution,
         send_console_events: bool,
+        log_app_metrics: bool,
     ) -> anyhow::Result<()> {
-        if let Err(e) = self.log_execution_metrics(&execution) {
+        if log_app_metrics && let Err(e) = self.log_execution_app_metrics(&execution) {
             Self::log_metrics_error(e);
-        };
+        }
         let next_time = self.next_time()?;
 
         // Gather log lines
@@ -1890,7 +1921,7 @@ impl<RT: Runtime> Inner<RT> {
         }
     }
 
-    fn log_execution_metrics(
+    fn log_execution_app_metrics(
         &mut self,
         execution: &FunctionExecution,
     ) -> Result<(), UdfMetricsError> {

@@ -235,6 +235,30 @@ export interface paths {
         patch: operations["update deployment"];
         trace?: never;
     };
+    "/deployments/{deployment_name}/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transfer deployment
+         * @description Transfer a deployment from its current project to another project within the
+         *     same team. For production deployments, the caller must be a project admin on
+         *     both the source and destination projects. For other deployment types, any
+         *     team member can transfer deployments they created, or project admins can
+         *     transfer any deployment.
+         */
+        post: operations["transfer deployment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/teams/{team_id}/list_deployment_classes": {
         parameters: {
             query?: never;
@@ -547,6 +571,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/teams/create_team": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a team */
+        post: operations["create team"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/create_access_token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a team access token */
+        post: operations["create team access token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/invite_team_member": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["invite team member"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -555,6 +629,14 @@ export interface components {
         AdminKey: string;
         /** @enum {string} */
         CreateDeploymentType: "dev" | "prod" | "preview" | "custom";
+        CreateInvitationArgs: {
+            email: string;
+            role: components["schemas"]["Role"];
+        };
+        CreateTeamAccessTokenResponse: {
+            accessToken: string;
+            tokenType: string;
+        };
         /** @enum {string} */
         DeploymentClass: "s16" | "s256" | "d1024";
         DeploymentClassMetadata: {
@@ -585,6 +667,9 @@ export interface components {
         ListLocalDeploymentsResponse: {
             items: components["schemas"]["PlatformDeploymentResponse"][];
         };
+        ManagedBy: "vercel" | {
+            oauthApp: string;
+        };
         /** Format: int64 */
         MemberId: number;
         PaginatedDeploymentsResponse: {
@@ -607,6 +692,17 @@ export interface components {
             /** @description The class to use for this deployment. If not provided, the default
              *     deployment class for your team will be used. */
             class?: string | null;
+            /** @description When creating a prod deployment, whether the deployment is the default
+             *     production deployment for the project (i.e. the one used by default
+             *     when running `npx convex deploy`).
+             *     When creating a dev deployment, whether the deployment is the default
+             *     development deployment for the member that creates it (i.e. the one used
+             *     by default when running `npx convex dev`).
+             *     This option can’t be set on other types of deployments.
+             *     If not provided, defaults to `true` when creating a dev or prod
+             *     deployment without providing a reference (and defaults to `false`
+             *     otherwise). */
+            isDefault?: boolean | null;
             /** @description An identifier that uniquely identifies this deployment within the
              *     project. By providing a reference, you can create multiple dev and prod
              *     deployments in the project. If you don’t provide a reference, the
@@ -646,6 +742,10 @@ export interface components {
              *     deployment was requested. */
             deploymentUrl?: string | null;
             projectId: components["schemas"]["ProjectId"];
+        };
+        PlatformCreateTeamArgs: {
+            defaultRegion: components["schemas"]["RegionName"];
+            name: components["schemas"]["ProposedTeamName"];
         };
         PlatformCustomDomainResponse: {
             /**
@@ -694,6 +794,7 @@ export interface components {
              * @description Timestamp in milliseconds when this token was last used (if ever).
              */
             lastUsedTime?: number | null;
+            managedBy?: null | components["schemas"]["ManagedBy"];
             /** @description The name given to the deploy key at creation. */
             name: string;
         };
@@ -831,6 +932,9 @@ export interface components {
             /** @enum {string} */
             type: "projectToken";
         };
+        PlatformTransferDeploymentArgs: {
+            destinationProjectId: components["schemas"]["ProjectId"];
+        };
         PlatformUpdateDeploymentArgs: {
             /** @description Controls whether the dashboard requires a confirmation before allowing
              *     edits during a browser session for this deployment. If set to `null`,
@@ -870,6 +974,8 @@ export interface components {
         ProjectId: number;
         ProjectName: string;
         ProjectSlug: string;
+        ProposedTeamName: string;
+        ReferralCode: string;
         /** @enum {string} */
         RegionName: "aws-us-east-1" | "aws-eu-west-1";
         /** @enum {string} */
@@ -887,6 +993,20 @@ export interface components {
             /** @description The role of the team member */
             role: components["schemas"]["Role"];
         };
+        TeamName: string;
+        TeamResponse: {
+            creator?: null | components["schemas"]["MemberId"];
+            defaultRegion?: null | components["schemas"]["RegionName"];
+            id: components["schemas"]["TeamId"];
+            managedBy?: null | components["schemas"]["ManagedBy"];
+            managedByUrl?: string | null;
+            name: components["schemas"]["TeamName"];
+            referralCode: components["schemas"]["ReferralCode"];
+            referredBy?: null | components["schemas"]["TeamId"];
+            slug: components["schemas"]["TeamSlug"];
+            ssoLoginId?: string | null;
+            suspended: boolean;
+        };
         TeamSlug: string;
     };
     responses: never;
@@ -897,6 +1017,8 @@ export interface components {
 }
 export type AdminKey = components['schemas']['AdminKey'];
 export type CreateDeploymentType = components['schemas']['CreateDeploymentType'];
+export type CreateInvitationArgs = components['schemas']['CreateInvitationArgs'];
+export type CreateTeamAccessTokenResponse = components['schemas']['CreateTeamAccessTokenResponse'];
 export type DeploymentClass = components['schemas']['DeploymentClass'];
 export type DeploymentClassMetadata = components['schemas']['DeploymentClassMetadata'];
 export type DeploymentId = components['schemas']['DeploymentId'];
@@ -908,6 +1030,7 @@ export type IsDefaultDeployment = components['schemas']['IsDefaultDeployment'];
 export type ListDeploymentClassesResponse = components['schemas']['ListDeploymentClassesResponse'];
 export type ListDeploymentRegionsResponse = components['schemas']['ListDeploymentRegionsResponse'];
 export type ListLocalDeploymentsResponse = components['schemas']['ListLocalDeploymentsResponse'];
+export type ManagedBy = components['schemas']['ManagedBy'];
 export type MemberId = components['schemas']['MemberId'];
 export type PaginatedDeploymentsResponse = components['schemas']['PaginatedDeploymentsResponse'];
 export type PaginationMetadata = components['schemas']['PaginationMetadata'];
@@ -918,6 +1041,7 @@ export type PlatformCreatePreviewDeployKeyArgs = components['schemas']['Platform
 export type PlatformCreatePreviewDeployKeyResponse = components['schemas']['PlatformCreatePreviewDeployKeyResponse'];
 export type PlatformCreateProjectArgs = components['schemas']['PlatformCreateProjectArgs'];
 export type PlatformCreateProjectResponse = components['schemas']['PlatformCreateProjectResponse'];
+export type PlatformCreateTeamArgs = components['schemas']['PlatformCreateTeamArgs'];
 export type PlatformCustomDomainResponse = components['schemas']['PlatformCustomDomainResponse'];
 export type PlatformDeleteCustomDomainArgs = components['schemas']['PlatformDeleteCustomDomainArgs'];
 export type PlatformDeleteDeployKeyArgs = components['schemas']['PlatformDeleteDeployKeyArgs'];
@@ -929,16 +1053,21 @@ export type PlatformListPreviewDeployKeysResponse = components['schemas']['Platf
 export type PlatformListTeamMembersResponse = components['schemas']['PlatformListTeamMembersResponse'];
 export type PlatformProjectDetails = components['schemas']['PlatformProjectDetails'];
 export type PlatformTokenDetailsResponse = components['schemas']['PlatformTokenDetailsResponse'];
+export type PlatformTransferDeploymentArgs = components['schemas']['PlatformTransferDeploymentArgs'];
 export type PlatformUpdateDeploymentArgs = components['schemas']['PlatformUpdateDeploymentArgs'];
 export type PreviewDeploymentIdentifier = components['schemas']['PreviewDeploymentIdentifier'];
 export type ProjectId = components['schemas']['ProjectId'];
 export type ProjectName = components['schemas']['ProjectName'];
 export type ProjectSlug = components['schemas']['ProjectSlug'];
+export type ProposedTeamName = components['schemas']['ProposedTeamName'];
+export type ReferralCode = components['schemas']['ReferralCode'];
 export type RegionName = components['schemas']['RegionName'];
 export type RequestDestination = components['schemas']['RequestDestination'];
 export type Role = components['schemas']['Role'];
 export type TeamId = components['schemas']['TeamId'];
 export type TeamMember = components['schemas']['TeamMember'];
+export type TeamName = components['schemas']['TeamName'];
+export type TeamResponse = components['schemas']['TeamResponse'];
 export type TeamSlug = components['schemas']['TeamSlug'];
 export type $defs = Record<string, never>;
 export interface operations {
@@ -1239,6 +1368,30 @@ export interface operations {
             };
         };
     };
+    "transfer deployment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Deployment Name */
+                deployment_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformTransferDeploymentArgs"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     "list deployment classes": {
         parameters: {
             query?: never;
@@ -1291,19 +1444,19 @@ export interface operations {
                 /** @description Max results per page (default: 100, max: 100) */
                 limit?: number;
                 /** @description Sort field: createTime, lastDeployTime, reference */
-                sort_by?: string;
+                sortBy?: string;
                 /** @description Sort order: asc, desc */
-                sort_order?: string;
+                sortOrder?: string;
                 /** @description Filter by type: dev, prod, preview, custom */
-                deployment_type?: string;
+                deploymentType?: string;
                 /** @description Search by deployment name or reference */
                 q?: string;
                 /** @description Filter by project ID */
-                project_id?: components["schemas"]["ProjectId"];
+                projectId?: components["schemas"]["ProjectId"];
                 /** @description Filter by creator member ID */
                 creator?: components["schemas"]["MemberId"];
                 /** @description Filter by default deployment status */
-                is_default?: boolean;
+                isDefault?: boolean;
             };
             header?: never;
             path: {
@@ -1446,7 +1599,11 @@ export interface operations {
     };
     "list preview deploy keys": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description If true, include managed preview deploy keys (e.g., created by external
+                 *     integrations like Vercel) in the response. Defaults to false. */
+                includeManaged?: boolean;
+            };
             header?: never;
             path: {
                 /** @description Project ID */
@@ -1598,6 +1755,89 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PlatformListTeamMembersResponse"];
                 };
+            };
+        };
+    };
+    "create team": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformCreateTeamArgs"];
+            };
+        };
+        responses: {
+            /** @description Team created successfully */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamResponse"];
+                };
+            };
+            /** @description Caller is not authorized to create teams */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "create team access token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Team access token created successfully */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateTeamAccessTokenResponse"];
+                };
+            };
+            /** @description Caller is not authorized to create team access tokens */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "invite team member": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInvitationArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

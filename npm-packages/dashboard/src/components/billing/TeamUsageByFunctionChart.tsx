@@ -7,6 +7,7 @@ import classNames from "classnames";
 import { Button } from "@ui/Button";
 import { Tooltip } from "@ui/Tooltip";
 import { AggregatedFunctionMetrics } from "hooks/usageMetrics";
+import { AggregatedFunctionMetricsV2 } from "hooks/usageMetricsV2";
 import { rootComponentPath } from "api/usage";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -14,11 +15,13 @@ import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
 import { DeploymentType, TeamResponse, ProjectDetails } from "generatedApi";
 import { PuzzlePieceIcon } from "@common/elements/icons";
 import { BANDWIDTH_CATEGORIES } from "./lib/teamUsageCategories";
+import { deploymentTypeColorClasses } from "@common/lib/deploymentTypeColorClasses";
 import {
   QuantityType,
   formatQuantity,
   formatQuantityCompact,
 } from "./lib/formatQuantity";
+import { cn } from "@ui/cn";
 
 const ITEMS_SHOWN_INITIALLY = 6;
 const ITEMS_SHOW_MORE_INCREMENT = 20;
@@ -35,10 +38,14 @@ type DeploymentTypeRow = {
   href: string | null;
 };
 
+export type FunctionMetricsRow =
+  | AggregatedFunctionMetrics
+  | AggregatedFunctionMetricsV2;
+
 export type FunctionBreakdownMetric = {
   name: string;
-  getTotal: (row: AggregatedFunctionMetrics) => number;
-  getValues: (row: AggregatedFunctionMetrics) => number[];
+  getTotal: (row: FunctionMetricsRow) => number;
+  getValues: (row: FunctionMetricsRow) => number[];
   quantityType: QuantityType;
   categories?: {
     name: string;
@@ -64,17 +71,82 @@ export const FunctionBreakdownMetricDatabaseBandwidth: FunctionBreakdownMetric =
 
 export const FunctionBreakdownMetricActionCompute: FunctionBreakdownMetric = {
   name: "action compute",
-  getTotal: (row) => row.actionComputeTime,
-  getValues: (row) => [row.actionComputeTime],
+  getTotal: (row) => ("actionComputeTime" in row ? row.actionComputeTime : 0),
+  getValues: (row) => ["actionComputeTime" in row ? row.actionComputeTime : 0],
   quantityType: "actionCompute",
 };
 
 export const FunctionBreakdownMetricVectorBandwidth: FunctionBreakdownMetric = {
   name: "vector bandwidth",
-  getTotal: (row) => row.vectorIngressSize + row.vectorEgressSize,
-  getValues: (row) => [row.vectorEgressSize, row.vectorIngressSize],
+  getTotal: (row) =>
+    "vectorIngressSize" in row
+      ? row.vectorIngressSize + row.vectorEgressSize
+      : 0,
+  getValues: (row) =>
+    "vectorIngressSize" in row
+      ? [row.vectorEgressSize, row.vectorIngressSize]
+      : [0, 0],
   quantityType: "storage",
   categories: Object.values(BANDWIDTH_CATEGORIES),
+};
+
+// V2 function breakdown metrics
+
+export const FunctionBreakdownMetricCallsV2: FunctionBreakdownMetric = {
+  name: "function calls",
+  getTotal: (row) => row.callCount,
+  getValues: (row) => [row.callCount],
+  quantityType: "unit",
+};
+
+export const FunctionBreakdownMetricDatabaseIOV2: FunctionBreakdownMetric = {
+  name: "database I/O",
+  getTotal: (row) => row.databaseIngressSize + row.databaseEgressSize,
+  getValues: (row) => [row.databaseEgressSize, row.databaseIngressSize],
+  quantityType: "storage",
+  categories: Object.values(BANDWIDTH_CATEGORIES),
+};
+
+export const FunctionBreakdownMetricComputeV2: FunctionBreakdownMetric = {
+  name: "compute",
+  getTotal: (row) =>
+    ("queryMutationComputeTime" in row ? row.queryMutationComputeTime : 0) +
+    ("actionComputeConvexTime" in row ? row.actionComputeConvexTime : 0) +
+    ("actionComputeNodeTime" in row ? row.actionComputeNodeTime : 0),
+  getValues: (row) => [
+    "queryMutationComputeTime" in row ? row.queryMutationComputeTime : 0,
+    "actionComputeConvexTime" in row ? row.actionComputeConvexTime : 0,
+    "actionComputeNodeTime" in row ? row.actionComputeNodeTime : 0,
+  ],
+  quantityType: "actionCompute",
+  categories: [
+    { name: "Query/Mutation", backgroundColor: "bg-background-success" },
+    { name: "Action (Convex)", backgroundColor: "bg-background-warning" },
+    { name: "Action (Node)", backgroundColor: "bg-background-error" },
+  ],
+};
+
+export const FunctionBreakdownMetricSearchV2: FunctionBreakdownMetric = {
+  name: "search",
+  getTotal: (row) =>
+    ("textSearchGb" in row ? row.textSearchGb : 0) +
+    ("vectorSearchGb" in row ? row.vectorSearchGb : 0),
+  getValues: (row) => [
+    "textSearchGb" in row ? row.textSearchGb : 0,
+    "vectorSearchGb" in row ? row.vectorSearchGb : 0,
+  ],
+  quantityType: "textSearch",
+  categories: [
+    { name: "Text Search", backgroundColor: "bg-background-success" },
+    { name: "Vector Search", backgroundColor: "bg-background-warning" },
+  ],
+};
+
+export const FunctionBreakdownMetricDataEgressV2: FunctionBreakdownMetric = {
+  name: "data egress",
+  getTotal: (row) => ("dataEgress" in row ? row.dataEgress : 0),
+  getValues: (row) => ["dataEgress" in row ? row.dataEgress : 0],
+  quantityType: "storage",
 };
 
 export function TeamUsageByFunctionChart({
@@ -88,7 +160,7 @@ export function TeamUsageByFunctionChart({
   project: ProjectDetails | null;
   metric: FunctionBreakdownMetric;
   deployments: PlatformDeploymentResponse[];
-  rows: AggregatedFunctionMetrics[];
+  rows: FunctionMetricsRow[];
   team: TeamResponse;
   maxValue: number;
 }) {
@@ -278,17 +350,20 @@ function ChartRow({
 
   const valueTip =
     categories !== undefined
-      ? values.map((value, index) => (
-          <div key={index}>
-            <span
-              className={classNames(
-                "rounded-full w-2 h-2 inline-block",
-                categories![index].backgroundColor,
-              )}
-            />{" "}
-            {categories![index].name}: {formatQuantity(value, quantityType)}
-          </div>
-        ))
+      ? values
+          .map((value, index) => ({ value, index }))
+          .filter(({ value }) => value > 0)
+          .map(({ value, index }) => (
+            <div key={index}>
+              <span
+                className={classNames(
+                  "rounded-full w-2 h-2 inline-block",
+                  categories![index].backgroundColor,
+                )}
+              />{" "}
+              {categories![index].name}: {formatQuantity(value, quantityType)}
+            </div>
+          ))
       : quantityType === "actionCompute"
         ? formatQuantity(values[0], quantityType)
         : null;
@@ -339,56 +414,18 @@ function DeploymentTypeIndicator({
 }: {
   deploymentType: DeploymentType;
 }) {
-  switch (deploymentType) {
-    case "prod":
-      return (
-        <>
-          <span
-            className={classNames(
-              "size-4 rounded-xl mr-2 border bg-purple-100 dark:bg-purple-900",
-            )}
-          />
-          <span className="capitalize">{deploymentType}</span>
-        </>
-      );
-    case "dev":
-      return (
-        <>
-          <span
-            className={classNames(
-              "size-4 rounded-xl mr-2 border bg-background-success",
-            )}
-          />
-          <span className="capitalize">{deploymentType}</span>
-        </>
-      );
-    case "preview":
-      return (
-        <>
-          <span
-            className={classNames(
-              "size-4 rounded-xl mr-2 border bg-orange-100 dark:bg-orange-900",
-            )}
-          />
-          <span className="capitalize">Preview</span>
-        </>
-      );
-    case "custom":
-      return (
-        <>
-          <span
-            className={classNames(
-              "size-4 rounded-xl mr-2 border bg-neutral-2 dark:bg-neutral-9",
-            )}
-          />
-          <span className="capitalize">Custom</span>
-        </>
-      );
-    default: {
-      deploymentType satisfies never;
-      return null;
-    }
-  }
+  return (
+    <>
+      <span
+        className={cn(
+          "mr-2 size-4 rounded-xl border",
+          deploymentTypeColorClasses(deploymentType),
+          "border-border-transparent dark:border-border-transparent",
+        )}
+      />
+      <span className="capitalize">{deploymentType}</span>
+    </>
+  );
 }
 
 /**
@@ -396,7 +433,7 @@ function DeploymentTypeIndicator({
  * and they are sorted by call count.
  */
 function useOrderedAndGroupedRows(
-  rows: AggregatedFunctionMetrics[],
+  rows: FunctionMetricsRow[],
   metric: FunctionBreakdownMetric,
   project: ProjectDetails | null,
   deployments: PlatformDeploymentResponse[],
@@ -416,7 +453,9 @@ function useOrderedAndGroupedRows(
         if (project) {
           deployment = deployments.find(
             (d) =>
-              (d.kind === "cloud" && d.id === row.deploymentId) ||
+              (d.kind === "cloud" &&
+                "deploymentId" in row &&
+                d.id === row.deploymentId) ||
               d.name === row.deploymentName,
           );
           deploymentType = deployment

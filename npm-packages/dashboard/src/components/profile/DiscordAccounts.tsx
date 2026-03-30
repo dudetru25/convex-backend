@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Link } from "@ui/Link";
 
 import { useDiscordAccounts, useUnlinkDiscordAccount } from "api/discord";
 import { Button } from "@ui/Button";
@@ -67,6 +67,7 @@ function DiscordAccountListRow({ account }: { account: DiscordAccount }) {
       <div className="ml-auto">
         <Button
           tip="Unlink"
+          aria-label="Unlink"
           type="button"
           onClick={() => {
             void unlinkAccount({ discordId: account.id });
@@ -103,11 +104,7 @@ export function DiscordAccounts() {
 
       <p className="max-w-lg text-sm">
         Join the{" "}
-        <Link
-          href="https://convex.dev/community"
-          className="text-content-link"
-          target="_blank"
-        >
+        <Link href="https://convex.dev/community" target="_blank">
           Convex Discord server
         </Link>{" "}
         to get support, share ideas, and chat with other Convex users and team

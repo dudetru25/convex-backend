@@ -3,6 +3,7 @@ use std::{
         BTreeMap,
         BTreeSet,
     },
+    ops::RangeToInclusive,
     path::PathBuf,
     sync::Arc,
 };
@@ -13,8 +14,6 @@ use common::{
     bootstrap_model::index::{
         text_index::{
             FragmentedTextSegment,
-            TextBackfillCursor,
-            TextIndexBackfillState,
             TextIndexSnapshot,
             TextIndexSnapshotData,
             TextIndexSpec,
@@ -28,9 +27,14 @@ use common::{
         ParsedDocument,
         ResolvedDocument,
     },
+    index::{
+        IndexKey,
+        IndexKeyBytes,
+    },
     persistence::{
         DocumentRevisionStream,
         DocumentStream,
+        RepeatablePersistence,
         TimestampRange,
     },
     persistence_helpers::{
@@ -70,11 +74,14 @@ use search::{
 };
 use storage::Storage;
 use sync_types::Timestamp;
-use value::TabletId;
+use value::{
+    DeveloperDocumentId,
+    TableNumber,
+    TabletId,
+};
 
 use crate::{
     search_index_workers::index_meta::{
-        BackfillState,
         SearchIndex,
         SearchIndexConfig,
         SearchOnDiskState,
@@ -127,7 +134,7 @@ impl SearchIndex for TextSearchIndex {
     type Spec = TextIndexSpec;
     type Statistics = TextStatistics;
 
-    fn get_config(config: IndexConfig) -> Option<SearchIndexConfig<Self>> {
+    fn get_config(config: &IndexConfig) -> Option<SearchIndexConfig<Self>> {
         let IndexConfig::Text {
             on_disk_state,
             spec,
@@ -136,11 +143,9 @@ impl SearchIndex for TextSearchIndex {
             return None;
         };
         Some(SearchIndexConfig {
-            spec,
-            on_disk_state: match on_disk_state {
-                TextIndexState::Backfilling(snapshot) => {
-                    SearchOnDiskState::Backfilling(snapshot.into())
-                },
+            spec: spec.clone(),
+            on_disk_state: match on_disk_state.clone() {
+                TextIndexState::Backfilling(state) => SearchOnDiskState::Backfilling(state),
                 TextIndexState::Backfilled { snapshot, staged } => SearchOnDiskState::Backfilled {
                     snapshot: snapshot.into(),
                     staged,
@@ -241,6 +246,27 @@ impl SearchIndex for TextSearchIndex {
             .boxed()
     }
 
+    fn walk_document_log_for_updates<'a>(
+        scan_doc_stream: DocumentRevisionStream<'a>,
+        reader: &'a RepeatablePersistence,
+        tablet_id: TabletId,
+        table_number: TableNumber,
+        range: TimestampRange,
+        filter_id_range: RangeToInclusive<IndexKeyBytes>,
+    ) -> DocumentRevisionStream<'a> {
+        let log_stream = reader
+            .load_revision_pairs(Some(tablet_id), range, Order::Desc)
+            .try_filter(move |revision_pair| {
+                let doc_id_index_key = IndexKey::new(
+                    vec![],
+                    DeveloperDocumentId::new(table_number, revision_pair.id.internal_id()),
+                );
+                futures::future::ready(filter_id_range.contains(&doc_id_index_key.to_bytes()))
+            })
+            .boxed();
+        scan_doc_stream.chain(log_stream).boxed()
+    }
+
     async fn build_disk_index(
         schema: &Self::Schema,
         index_path: &PathBuf,
@@ -287,15 +313,12 @@ impl SearchIndex for TextSearchIndex {
         Ok((spec, SearchOnDiskState::from(on_disk_state)))
     }
 
-    fn new_index_config(
-        spec: Self::Spec,
-        new_state: SearchOnDiskState<Self>,
-    ) -> anyhow::Result<IndexConfig> {
+    fn new_index_config(spec: Self::Spec, new_state: SearchOnDiskState<Self>) -> IndexConfig {
         let on_disk_state = TextIndexState::from(new_state);
-        Ok(IndexConfig::Text {
+        IndexConfig::Text {
             on_disk_state,
             spec,
-        })
+        }
     }
 
     fn search_type() -> SearchType {
@@ -418,7 +441,7 @@ pub struct TextStatistics {
 impl From<SearchOnDiskState<TextSearchIndex>> for TextIndexState {
     fn from(value: SearchOnDiskState<TextSearchIndex>) -> Self {
         match value {
-            SearchOnDiskState::Backfilling(state) => Self::Backfilling(state.into()),
+            SearchOnDiskState::Backfilling(state) => Self::Backfilling(state),
             SearchOnDiskState::Backfilled { snapshot, staged } => Self::Backfilled {
                 snapshot: snapshot.into(),
                 staged,
@@ -431,7 +454,7 @@ impl From<SearchOnDiskState<TextSearchIndex>> for TextIndexState {
 impl From<TextIndexState> for SearchOnDiskState<TextSearchIndex> {
     fn from(value: TextIndexState) -> Self {
         match value {
-            TextIndexState::Backfilling(state) => Self::Backfilling(state.into()),
+            TextIndexState::Backfilling(state) => Self::Backfilling(state),
             TextIndexState::Backfilled { snapshot, staged } => Self::Backfilled {
                 snapshot: snapshot.into(),
                 staged,
@@ -457,42 +480,6 @@ impl SegmentStatistics for TextStatistics {
 
     fn num_non_deleted_documents(&self) -> u64 {
         self.num_indexed_documents - self.num_deleted_documents
-    }
-}
-
-impl From<TextIndexBackfillState> for BackfillState<TextSearchIndex> {
-    fn from(value: TextIndexBackfillState) -> Self {
-        Self {
-            segments: value.segments,
-            cursor: value.cursor.clone().and_then(|value| value.cursor),
-            backfill_snapshot_ts: value
-                .cursor
-                .as_ref()
-                .and_then(|value| value.backfill_snapshot_ts),
-            staged: value.staged,
-            last_segment_ts: value.cursor.and_then(|value| value.last_segment_ts),
-        }
-    }
-}
-
-impl From<BackfillState<TextSearchIndex>> for TextIndexBackfillState {
-    fn from(value: BackfillState<TextSearchIndex>) -> Self {
-        let cursor = if let Some(cursor) = value.cursor
-            && let Some(backfill_snapshot_ts) = value.backfill_snapshot_ts
-        {
-            Some(TextBackfillCursor {
-                cursor: Some(cursor),
-                backfill_snapshot_ts: Some(backfill_snapshot_ts),
-                last_segment_ts: value.last_segment_ts,
-            })
-        } else {
-            None
-        };
-        Self {
-            segments: value.segments,
-            cursor,
-            staged: value.staged,
-        }
     }
 }
 

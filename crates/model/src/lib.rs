@@ -16,13 +16,13 @@
 //! allow. Linux's `procfs` is an inspiration here, where it's useful to present
 //! system data as regular files, but most mutations don't make much sense.
 
-#![feature(assert_matches)]
 #![feature(coroutines)]
 #![feature(iter_advance_by)]
 #![feature(type_alias_impl_trait)]
 #![feature(iterator_try_collect)]
 #![feature(never_type)]
 #![feature(try_blocks)]
+#![feature(try_blocks_heterogeneous)]
 #![feature(impl_trait_in_assoc_type)]
 #![feature(iter_from_coroutine)]
 #![feature(duration_constructors)]
@@ -595,15 +595,6 @@ static APP_TABLES_TO_LOAD_IN_MEMORY: LazyLock<BTreeSet<TableName>> = LazyLock::n
         BACKEND_INFO_TABLE.clone(),
         AWS_LAMBDA_VERSIONS_TABLE.clone(),
         SOURCE_PACKAGES_TABLE.clone(),
-    }
-});
-
-/// System tables that we allow the `DatabaseSnapshotIndexCache` to be refreshed
-/// for. We will store documents in the write log for only these tables so we
-/// can walk the write log to refresh the cache to do efficient queries.
-pub static REFRESHABLE_APP_TABLES: LazyLock<BTreeSet<TableName>> = LazyLock::new(|| {
-    btreeset! {
-        SCHEDULED_JOBS_TABLE.clone()
     }
 });
 

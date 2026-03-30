@@ -9,7 +9,6 @@
 
 /* Customize the search button in nav and modal */
 @import url("./search.css");
-@import url("./language-selector.css");
 
 @theme {
   --color-neutral-white: #ffffff;
@@ -1203,6 +1202,26 @@ main .container .col[class*="docItemCol"] {
   opacity: 1;
 }
 
+/*
+Fix Docusaurus copy button icon cascade in production CSS:
+some optimized builds reorder shared icon rules after success-state rules.
+Keep this scoped to code blocks so inline custom copy buttons remain module-driven.
+*/
+.theme-code-block svg[class*="copyButtonSuccessIcon"] {
+  top: 50% !important;
+  left: 50% !important;
+  opacity: 0 !important;
+  transform: translate(-50%, -50%) scale(0.33) !important;
+}
+
+.theme-code-block
+  button[class*="copyButtonCopied"]
+  svg[class*="copyButtonSuccessIcon"] {
+  opacity: 1 !important;
+  transform: translate(-50%, -50%) scale(1) !important;
+  transition-delay: 0.075s !important;
+}
+
 /* START: TourGuide styling */
 
 .convex-tour-guide {
@@ -1350,12 +1369,6 @@ html:not([class*="docs-doc-id-quickstart/"]):not(
 .screenshot-border {
   border-radius: var(--ifm-code-border-radius);
   box-shadow: var(--ifm-global-shadow-lw);
-}
-
-/* Make space for language selector in code blocks */
-.codeblock-header {
-  display: flex;
-  justify-content: space-between;
 }
 
 /* FROM HERE ON: Dark mode styles */

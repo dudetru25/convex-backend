@@ -7,7 +7,7 @@ import { useListPlans, useTeamOrbSubscription } from "api/billing";
 import { useIsCurrentMemberTeamAdmin } from "api/roles";
 import { TeamSettingsLayout } from "layouts/TeamSettingsLayout";
 import { withAuthenticatedPage } from "lib/withAuthenticatedPage";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useRouter } from "next/router";
 import { TeamResponse } from "generatedApi";
 import { Plans } from "components/billing/Plans";
@@ -74,7 +74,7 @@ function Billing({ team }: { team: TeamResponse }) {
         )}
         <h2>Billing</h2>
       </div>
-      {team.managedBy && (
+      {team.managedBy === "vercel" && (
         <Callout className="mx-6 mb-4" variant="upsell">
           <div className="flex w-full items-center justify-between gap-4">
             <div>
@@ -117,7 +117,6 @@ function Billing({ team }: { team: TeamResponse }) {
                       <Link
                         href="https://convex.dev/plans"
                         passHref
-                        className="text-content-link"
                         target="_blank"
                       >
                         pricing page
@@ -131,7 +130,7 @@ function Billing({ team }: { team: TeamResponse }) {
                   />
                   <LocalDevCallout
                     tipText="Tip: Run this to enable audit logs locally:"
-                    command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement audit_log_retention_days --team-id ${team.id} --reason "local" 90 --for-real`}
+                    command={`cargo run --bin big-brain-tool -- --dev entitlement grant --team-entitlement audit_log_retention_days --team-id ${team.id} --reason "local" 90 --for-real`}
                   />
                 </div>
               </div>
@@ -179,7 +178,7 @@ function Billing({ team }: { team: TeamResponse }) {
   );
 }
 
-function BillingPage() {
+export function BillingPage() {
   return (
     <TeamSettingsLayout page="billing" Component={Billing} title="Billing" />
   );
@@ -199,7 +198,7 @@ function BillingErrorFallback({ eventId }: { eventId: string | null }) {
           <Link
             href="mailto:support@convex.dev"
             passHref
-            className="items-center text-content-link"
+            className="items-center"
           >
             support@convex.dev
           </Link>{" "}

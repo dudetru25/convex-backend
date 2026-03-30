@@ -1,8 +1,3 @@
-import {
-  useCurrentDeployment,
-  useModifyDeploymentSettings,
-} from "api/deployments";
-import { useCurrentProject } from "api/projects";
 import { useCallback, useId, useState } from "react";
 import { useFormik } from "formik";
 import * as Yup from "yup";
@@ -33,10 +28,13 @@ const referenceValidationSchema = Yup.object().shape({
     )
     .test(
       "not-local-prefix",
-      "Reference cannot start with 'local-'",
+      "Reference cannot start with 'local-' or 'local/'",
       (value) => {
         if (!value) return true;
-        return !value.startsWith("local-");
+        const valueLower = value.toLowerCase();
+        return (
+          !valueLower.startsWith("local-") && !valueLower.startsWith("local/")
+        );
       },
     )
     .test(
@@ -45,6 +43,7 @@ const referenceValidationSchema = Yup.object().shape({
       '"${value}" is a reserved name and cannot be used as a reference.',
       (value) => {
         if (!value) return true;
+        const valueLower = value.toLowerCase();
         const reserved = [
           "prod",
           "dev",
@@ -57,48 +56,19 @@ const referenceValidationSchema = Yup.object().shape({
           "deployment",
           "preview",
         ];
-        return !reserved.includes(value);
+        return !reserved.includes(valueLower);
       },
     ),
 });
 
-export function DeploymentReference() {
-  const deployment = useCurrentDeployment();
-
-  const project = useCurrentProject();
-  const modifyDeploymentSettings = useModifyDeploymentSettings({
-    deploymentName: deployment?.name,
-    projectId: project?.id,
-  });
-
-  const handleUpdateReference = useCallback(
-    async (reference: string) => {
-      await modifyDeploymentSettings({ reference });
-    },
-    [modifyDeploymentSettings],
-  );
-
-  // We hide the section when `deployment` is loading.
-  // This is fine since for the cloud dashboard, `useCurrentDeployment` loads during SSR
-  if (deployment === undefined) return null;
-
-  // Local deployments have no references
-  if (deployment.kind === "local") return null;
-
-  return (
-    <DeploymentReferenceInner
-      value={deployment.reference}
-      onUpdate={handleUpdateReference}
-    />
-  );
-}
-
-export function DeploymentReferenceInner({
+export function DeploymentReference({
   value,
   onUpdate,
+  canManage,
 }: {
   value: string;
   onUpdate: (reference: string) => Promise<void>;
+  canManage: boolean;
 }) {
   const textFieldId = useId();
 
@@ -112,7 +82,7 @@ export function DeploymentReferenceInner({
     onSubmit: async (values) => {
       if (values.reference === undefined) {
         Sentry.captureMessage(
-          "Unexpectedly submitting DeploymentReferenceInner with an undefined value",
+          "Unexpectedly submitting DeploymentReference with an undefined value",
           "error",
         );
         return;
@@ -131,72 +101,73 @@ export function DeploymentReferenceInner({
 
   return (
     <Sheet>
-      <div className="text-content-primary">
-        <div className="mb-4 flex items-center justify-between">
-          <h4>Deployment Reference</h4>
-        </div>
-        <p className="mb-2 text-sm">
-          You can use the reference to target this deployment from the CLI{" "}
-          <br />
-          (e.g. <code>--deployment&nbsp;{value ?? "<reference>"}</code>).
-        </p>
+      <h4 className="mb-2">Deployment Reference</h4>
+      <p className="mb-4 text-xs text-content-secondary">
+        You can use the reference to target this deployment from the CLI (e.g.{" "}
+        <code>--deployment&nbsp;{value ?? "<reference>"}</code>).
+      </p>
 
-        <div className="flex flex-wrap items-start gap-x-2 gap-y-4 sm:flex-nowrap">
-          {!isEditing ? (
-            <>
-              <TextInput
-                id={textFieldId}
-                label="Reference"
-                labelHidden
-                value={value}
-                disabled
-              />
-              <CopyButton
-                text={value ?? ""}
-                disabled={value === undefined}
-                size="sm"
-              />
-              <Button
-                variant="neutral"
-                onClick={() => setIsEditing(true)}
-                icon={<Pencil1Icon />}
-                aria-label="Edit deployment reference"
-              >
-                Edit
-              </Button>
-            </>
-          ) : (
-            <form onSubmit={formState.handleSubmit} className="contents">
-              <TextInput
-                id={textFieldId}
-                label="Reference"
-                labelHidden
-                error={
-                  (formState.touched.reference && formState.errors.reference) ||
-                  undefined
-                }
-                disabled={formState.isSubmitting}
-                {...formState.getFieldProps("reference")}
-              />
-              <Button
-                type="button"
-                variant="neutral"
-                onClick={handleCancel}
-                disabled={formState.isSubmitting}
-              >
-                Undo Edit
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                disabled={formState.isSubmitting || !formState.isValid}
-                loading={formState.isSubmitting}
-              >
-                Save
-              </Button>
-            </form>
-          )}
-        </div>
+      <div className="flex flex-wrap items-start gap-x-2 gap-y-4 sm:flex-nowrap">
+        {!isEditing ? (
+          <>
+            <TextInput
+              id={textFieldId}
+              label="Reference"
+              labelHidden
+              value={value}
+              disabled
+            />
+            <CopyButton
+              text={value ?? ""}
+              disabled={value === undefined}
+              size="sm"
+            />
+            <Button
+              variant="neutral"
+              onClick={() => setIsEditing(true)}
+              disabled={!canManage}
+              tip={
+                canManage
+                  ? undefined
+                  : "Only team admins can edit the deployment reference"
+              }
+              icon={<Pencil1Icon />}
+              aria-label="Edit deployment reference"
+            >
+              Edit
+            </Button>
+          </>
+        ) : (
+          <form onSubmit={formState.handleSubmit} className="contents">
+            <TextInput
+              id={textFieldId}
+              label="Reference"
+              labelHidden
+              error={
+                (formState.touched.reference && formState.errors.reference) ||
+                undefined
+              }
+              disabled={formState.isSubmitting}
+              {...formState.getFieldProps("reference")}
+            />
+            <Button
+              type="button"
+              variant="neutral"
+              onClick={handleCancel}
+              disabled={formState.isSubmitting}
+            >
+              Undo Edit
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={formState.isSubmitting || !formState.isValid}
+              loading={formState.isSubmitting}
+            >
+              Save
+            </Button>
+          </form>
+        )}
       </div>
     </Sheet>
   );

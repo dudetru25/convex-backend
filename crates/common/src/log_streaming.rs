@@ -68,6 +68,7 @@ pub struct AggregatedFunctionUsageStats {
     pub vector_index_read_bytes: u64,
     pub vector_index_write_bytes: u64,
     pub text_index_write_bytes: u64,
+    pub network_egress_bytes: u64,
     pub memory_used_mb: u64,
     pub return_bytes: Option<u64>,
 }
@@ -140,6 +141,7 @@ pub enum StructuredLogEvent {
         source: FunctionEventSource,
         error: Option<JsError>,
         execution_time: Duration,
+        user_execution_time: Option<Duration>,
         usage_stats: AggregatedFunctionUsageStats,
         occ_info: Option<OccInfo>,
         scheduler_info: Option<SchedulerInfo>,
@@ -191,6 +193,11 @@ pub enum StructuredLogEvent {
         storage_id: String,
         egress_bytes: u64,
     },
+    /// Topic for log stream egress. Emitted when a log sink sends a batch
+    /// of events to an external service, reporting the egress bytes used.
+    LogStreamEgress {
+        egress_bytes: u64,
+    },
     // User-specified topics -- not yet implemented.
     // See here for more details: https://www.notion.so/Log-Streaming-in-Convex-19a1dfadd6924c33b29b2796b0f5b2e2
     // User {
@@ -228,6 +235,7 @@ impl Display for LogEventFormatVersion {
 }
 
 #[cfg(any(test, feature = "testing"))]
+#[allow(clippy::derivable_impls)]
 impl Default for LogEventFormatVersion {
     fn default() -> Self {
         Self::V2
@@ -323,6 +331,7 @@ impl LogEvent {
                     source,
                     error,
                     execution_time,
+                    user_execution_time,
                     usage_stats,
                     occ_info: _,
                     scheduler_info: _,
@@ -332,6 +341,7 @@ impl LogEvent {
                         None => (None, "success"),
                     };
                     let execution_time_ms = execution_time.as_millis();
+                    let user_execution_time_ms = user_execution_time.map(|d| d.as_millis());
                     serialize_map!({
                         "_timestamp": ms,
                         "_topic":  "_execution_record",
@@ -341,10 +351,12 @@ impl LogEvent {
                         "status": status,
                         "reason": reason,
                         "executionTimeMs": execution_time_ms,
+                        "userExecutionTimeMs": user_execution_time_ms,
                         "databaseReadBytes": usage_stats.database_read_bytes,
                         "databaseWriteBytes": usage_stats.database_write_bytes,
                         "storageReadBytes": usage_stats.storage_read_bytes,
                         "storageWriteBytes": usage_stats.storage_write_bytes,
+                        "networkEgressBytes": usage_stats.network_egress_bytes,
                     })
                 },
                 StructuredLogEvent::Exception {
@@ -432,6 +444,11 @@ impl LogEvent {
                     "storage_id": storage_id,
                     "egress_bytes": egress_bytes
                 }),
+                StructuredLogEvent::LogStreamEgress { egress_bytes } => serialize_map!({
+                    "_timestamp": ms,
+                    "_topic": "_log_stream_egress",
+                    "egress_bytes": egress_bytes
+                }),
             },
             LogEventFormatVersion::V2 => match &self.event {
                 StructuredLogEvent::Verification => {
@@ -467,6 +484,7 @@ impl LogEvent {
                     source,
                     error,
                     execution_time,
+                    user_execution_time,
                     usage_stats,
                     occ_info,
                     scheduler_info,
@@ -485,6 +503,7 @@ impl LogEvent {
                         file_storage_write_bytes: u64,
                         vector_storage_read_bytes: u64,
                         vector_storage_write_bytes: u64,
+                        network_egress_bytes: u64,
                         memory_used_mb: u64,
                         action_memory_used_mb: Option<u64>,
                     }
@@ -495,11 +514,13 @@ impl LogEvent {
                     } else {
                         None
                     };
+                    let user_execution_time_ms = user_execution_time.map(|d| d.as_millis());
                     serialize_map!({
                         "timestamp": ms,
                         "topic": "function_execution",
                         "function": function_source,
                         "execution_time_ms": execution_time.as_millis(),
+                        "user_execution_time_ms": user_execution_time_ms,
                         "status": status,
                         "error_message": error_message,
                         "occ_info": occ_info,
@@ -512,6 +533,7 @@ impl LogEvent {
                             file_storage_write_bytes: usage_stats.storage_write_bytes,
                             vector_storage_read_bytes: usage_stats.vector_index_read_bytes,
                             vector_storage_write_bytes: usage_stats.vector_index_write_bytes,
+                            network_egress_bytes: usage_stats.network_egress_bytes,
                             memory_used_mb: usage_stats.memory_used_mb,
                             action_memory_used_mb,
                         }
@@ -614,6 +636,13 @@ impl LogEvent {
                         "egress_bytes": egress_bytes
                     })
                 },
+                StructuredLogEvent::LogStreamEgress { egress_bytes } => {
+                    serialize_map!({
+                        "timestamp": ms,
+                        "topic": "log_stream_egress",
+                        "egress_bytes": egress_bytes
+                    })
+                },
             },
         }
     }
@@ -713,6 +742,7 @@ pub enum FunctionExecutionJson {
         caller: String,
         parent_execution_id: Option<String>,
         execution_time: f64,
+        user_execution_time: Option<f64>,
         success: Option<JsonValue>,
         error: Option<String>,
         request_id: String,
@@ -908,6 +938,7 @@ mod tests {
         #[schema(inline)]
         function: SchemaFunctionEventSource,
         execution_time_ms: u64,
+        user_execution_time_ms: Option<u64>,
         status: String, // "success" or "failure"
         error_message: Option<String>,
         #[schema(inline)]
@@ -928,6 +959,7 @@ mod tests {
         file_storage_write_bytes: u64,
         vector_storage_read_bytes: u64,
         vector_storage_write_bytes: u64,
+        network_egress_bytes: u64,
         action_memory_used_mb: Option<u64>,
     }
 
@@ -1050,6 +1082,7 @@ mod tests {
                     },
                     error: None,
                     execution_time: std::time::Duration::from_millis(100),
+                    user_execution_time: Some(std::time::Duration::from_millis(80)),
                     usage_stats: AggregatedFunctionUsageStats {
                         database_read_bytes: 512,
                         database_write_bytes: 256,
@@ -1059,6 +1092,7 @@ mod tests {
                         vector_index_read_bytes: 0,
                         vector_index_write_bytes: 0,
                         text_index_write_bytes: 0,
+                        network_egress_bytes: 0,
                         memory_used_mb: 0,
                         return_bytes: Some(64),
                     },

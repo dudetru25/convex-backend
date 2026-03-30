@@ -3,9 +3,9 @@ import { InvitationResponse, TeamResponse, TeamMember } from "generatedApi";
 
 import { TeamMemberList } from "./TeamMemberList";
 
-const meta = { component: TeamMemberList } satisfies Meta<
-  typeof TeamMemberList
->;
+const meta = {
+  component: TeamMemberList,
+} satisfies Meta<typeof TeamMemberList>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;

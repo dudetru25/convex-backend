@@ -750,34 +750,6 @@
         }
       }
     },
-    "/projects/{project_id}/instances": {
-      "get": {
-        "operationId": "list_deployments_for_project",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "description": "",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/DeploymentResponse"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/delete_project/{project_id}": {
       "post": {
         "operationId": "dashboard_delete_project",
@@ -1367,107 +1339,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/UnlinkDiscordAccountRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        }
-      }
-    },
-    "/instances/{deployment_name}/domains/create": {
-      "post": {
-        "operationId": "create_vanity_domain",
-        "parameters": [
-          {
-            "name": "deployment_name",
-            "in": "path",
-            "description": "",
-            "required": true
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PlatformDeleteCustomDomainArgs"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        }
-      }
-    },
-    "/instances/{deployment_name}/domains/delete": {
-      "post": {
-        "operationId": "delete_vanity_domain",
-        "parameters": [
-          {
-            "name": "deployment_name",
-            "in": "path",
-            "description": "",
-            "required": true
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PlatformDeleteCustomDomainArgs"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        }
-      }
-    },
-    "/instances/{deployment_name}/domains/list": {
-      "get": {
-        "operationId": "list_vanity_domains_for_instance",
-        "parameters": [
-          {
-            "name": "deployment_name",
-            "in": "path",
-            "description": "",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ListVanityDomainsResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/rename_token": {
-      "post": {
-        "operationId": "rename_access_token",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RenameAccessTokenArgs"
               }
             }
           },
@@ -2219,62 +2090,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/projects/{project_id}/preview_deployments": {
-      "get": {
-        "operationId": "list_preview_deployments_for_project",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "description": "",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/DeploymentResponse"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/projects/{project_id}/delete_preview_deployment": {
-      "post": {
-        "operationId": "deactivate_preview_deployment",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "description": "",
-            "required": true
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DeactivatePreviewDeploymentArgs"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": ""
           }
         }
       }
@@ -3598,6 +3413,8 @@
           "enableSSO",
           "disableSSO",
           "updateSSO",
+          "transferDeployment",
+          "receiveDeployment",
           "updateDeployment"
         ]
       },
@@ -4289,17 +4106,6 @@
         "properties": {
           "name": {
             "$ref": "#/components/schemas/ProposedTeamName"
-          }
-        }
-      },
-      "DeactivatePreviewDeploymentArgs": {
-        "type": "object",
-        "required": [
-          "identifier"
-        ],
-        "properties": {
-          "identifier": {
-            "$ref": "#/components/schemas/PreviewDeploymentIdentifier"
           }
         }
       },
@@ -5287,24 +5093,25 @@
           }
         }
       },
-      "ListVanityDomainsResponse": {
-        "type": "object",
-        "required": [
-          "domains"
-        ],
-        "properties": {
-          "domains": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/VanityDomainResponse"
+      "ManagedBy": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "vercel"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "oauthApp"
+            ],
+            "properties": {
+              "oauthApp": {
+                "type": "string"
+              }
             }
           }
-        }
-      },
-      "ManagedBy": {
-        "type": "string",
-        "enum": [
-          "vercel"
         ]
       },
       "MemberDataResponse": {
@@ -5319,7 +5126,7 @@
           "deployments": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/DeploymentResponse"
+              "$ref": "#/components/schemas/PlatformDeploymentResponse"
             }
           },
           "optInsToAccept": {
@@ -5664,22 +5471,193 @@
           }
         }
       },
-      "PlatformDeleteCustomDomainArgs": {
-        "type": "object",
-        "required": [
-          "requestDestination",
-          "domain"
-        ],
-        "properties": {
-          "domain": {
-            "type": "string",
-            "description": "The custom domain name to delete."
+      "PlatformDeploymentResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "createTime",
+              "deploymentType",
+              "projectId",
+              "region",
+              "isDefault",
+              "reference",
+              "deploymentUrl",
+              "class",
+              "kind"
+            ],
+            "properties": {
+              "class": {
+                "type": "string",
+                "description": "The deployment class for this deployment."
+              },
+              "createTime": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Timestamp in milliseconds when this deployment was created."
+              },
+              "creator": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MemberId",
+                    "description": "The member who created this deployment."
+                  }
+                ]
+              },
+              "dashboardEditConfirmation": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "Controls whether the dashboard requires a confirmation before\nallowing edits during a browser session for this deployment.\nIf not set, defaults to true for prod deployments and false\nfor dev and preview deployments."
+              },
+              "deploymentType": {
+                "$ref": "#/components/schemas/DeploymentType",
+                "description": "The type of this deployment."
+              },
+              "deploymentUrl": {
+                "type": "string",
+                "description": "The full backend URL for this deployment (e.g. \"https://joyful-capybara-123.convex.cloud\" or \"https://calm-cow-456.eu-west-1.convex.cloud\"). This is always a `.convex.cloud` URL, even when the deployment is using custom domains. To get the canonical URL, use [`/get_canonical_urls`](https://docs.convex.dev/deployment-api/get-canonical-urls)."
+              },
+              "expiresAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "Timestamp in milliseconds when this deployment will be\ndeleted. Preview deployments have this set by default unless\noverridden."
+              },
+              "id": {
+                "$ref": "#/components/schemas/DeploymentId"
+              },
+              "isDefault": {
+                "$ref": "#/components/schemas/IsDefaultDeployment",
+                "description": "For prod deployments, whether they are the default prod deployment\nof the project. For dev deployments, whether they are the default\ndev deployment for the member that created it.\nFor other deployments, set to false."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cloud"
+                ]
+              },
+              "lastDeployTime": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "Timestamp in milliseconds of the last deploy to this deployment, if\nany."
+              },
+              "name": {
+                "type": "string",
+                "description": "The readable identifier for this deployment, something like\nplayful-otter-123."
+              },
+              "previewIdentifier": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PreviewDeploymentIdentifier",
+                    "description": "Preview deployment identifier, if this is a preview deployment."
+                  }
+                ]
+              },
+              "projectId": {
+                "$ref": "#/components/schemas/ProjectId",
+                "description": "The project this deployment belongs to."
+              },
+              "reference": {
+                "$ref": "#/components/schemas/DeploymentReference",
+                "description": "An identifier that uniquely identifies this deployment within the\nproject."
+              },
+              "region": {
+                "$ref": "#/components/schemas/RegionName",
+                "description": "The region where this deployment is hosted."
+              },
+              "sendLogsToClient": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "Whether to send function logs to the client. If `null`, the\ndeployment-type default is used (true for dev/preview, false for\nprod)."
+              }
+            }
           },
-          "requestDestination": {
-            "$ref": "#/components/schemas/RequestDestination",
-            "description": "The destination for this custom domain (convexCloud or convexSite)."
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "createTime",
+              "deploymentType",
+              "projectId",
+              "creator",
+              "port",
+              "deviceName",
+              "isActive",
+              "kind"
+            ],
+            "properties": {
+              "createTime": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Timestamp in milliseconds when this deployment was created."
+              },
+              "creator": {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "The member who created this deployment."
+              },
+              "deploymentType": {
+                "$ref": "#/components/schemas/DeploymentType",
+                "description": "Whether this is a \"dev\" development deployment or \"prod\" production\ndeployment. Note that this will always be \"dev\" for local\ndeployments."
+              },
+              "deviceName": {
+                "$ref": "#/components/schemas/DeviceName",
+                "description": "The device name where this local deployment is running."
+              },
+              "isActive": {
+                "type": "boolean",
+                "description": "Whether this local deployment is currently active."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "local"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "description": "The readable identifier for this deployment."
+              },
+              "port": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The port where this local deployment is running.",
+                "minimum": 0
+              },
+              "previewIdentifier": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PreviewDeploymentIdentifier",
+                    "description": "Preview deployment identifier. Note that this will always be None\nfor local deployments."
+                  }
+                ]
+              },
+              "projectId": {
+                "$ref": "#/components/schemas/ProjectId",
+                "description": "The project this deployment belongs to."
+              }
+            }
           }
-        }
+        ]
       },
       "PreviewDeploymentIdentifier": {
         "type": "string"
@@ -6085,23 +6063,6 @@
         },
         "additionalProperties": false
       },
-      "RenameAccessTokenArgs": {
-        "type": "object",
-        "required": [
-          "accessToken",
-          "newName"
-        ],
-        "properties": {
-          "accessToken": {
-            "type": "string",
-            "description": "Authentication token is expected to be the access token from WorkOS"
-          },
-          "newName": {
-            "$ref": "#/components/schemas/DeviceName"
-          }
-        },
-        "additionalProperties": false
-      },
       "RequestCloudBackupArgs": {
         "type": "object",
         "required": [
@@ -6112,13 +6073,6 @@
             "type": "boolean"
           }
         }
-      },
-      "RequestDestination": {
-        "type": "string",
-        "enum": [
-          "convexCloud",
-          "convexSite"
-        ]
       },
       "RestoreFromCloudBackupArgs": {
         "type": "object",
@@ -6867,37 +6821,6 @@
         ]
       },
       "Value": {},
-      "VanityDomainResponse": {
-        "type": "object",
-        "required": [
-          "creationTime",
-          "instanceName",
-          "requestDestination",
-          "domain"
-        ],
-        "properties": {
-          "creationTime": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "domain": {
-            "type": "string"
-          },
-          "instanceName": {
-            "$ref": "#/components/schemas/CloudDeploymentName"
-          },
-          "requestDestination": {
-            "$ref": "#/components/schemas/RequestDestination"
-          },
-          "verificationTime": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64"
-          }
-        }
-      },
       "WorkOSAssociatedTeam": {
         "type": "object",
         "required": [

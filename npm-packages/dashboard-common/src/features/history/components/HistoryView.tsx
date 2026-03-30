@@ -1,5 +1,5 @@
 import { endOfDay, endOfToday, startOfDay } from "date-fns";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useRouter } from "next/router";
 import { useCallback, useContext, useEffect, useState } from "react";
 import { DeploymentEventContent } from "@common/elements/DeploymentEventContent";
@@ -101,7 +101,7 @@ function History() {
             <LocalDevCallout
               className="mt-6 flex-col"
               tipText="Tip: Run this to enable the deployment history locally:"
-              command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement audit_log_retention_days --team-id ${team?.id} --reason "local" 90 --for-real`}
+              command={`cargo run --bin big-brain-tool -- --dev entitlement grant --team-entitlement audit_log_retention_days --team-id ${team?.id} --reason "local" 90 --for-real`}
             />
           </Sheet>
         </div>
@@ -190,7 +190,6 @@ function EmptyHistory() {
           <Link
             passHref
             href="https://docs.convex.dev/dashboard/deployments/history"
-            className="text-content-link"
             target="_blank"
           >
             Learn more

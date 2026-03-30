@@ -4,8 +4,8 @@
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 #![feature(try_blocks)]
+#![feature(try_blocks_heterogeneous)]
 #![feature(if_let_guard)]
-#![feature(assert_matches)]
 mod chunks;
 mod connection;
 mod document_encoding;
@@ -47,7 +47,6 @@ use common::{
         ResolvedDocument,
     },
     errors::lease_lost_error,
-    heap_size::HeapSize,
     index::{
         IndexEntry,
         IndexKeyBytes,
@@ -394,7 +393,7 @@ impl<RT: Runtime> Persistence for MySqlPersistence<RT> {
             match &update.value {
                 Some(doc) => {
                     anyhow::ensure!(update.id == doc.id_with_table_id());
-                    write_size += doc.heap_size();
+                    write_size += doc.size();
                 },
                 None => {},
             }

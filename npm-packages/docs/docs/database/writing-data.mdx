@@ -18,10 +18,9 @@ data from database tables.
 You can create new documents in the database with the
 [`db.insert`](/api/interfaces/server.GenericDatabaseWriter#insert) method:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={insertExample}
-  sourceJS={insertExample}
+  source={insertExample}
   highlightPatterns={["db.insert"]}
 />
 
@@ -46,10 +45,9 @@ methods:
    document. New fields are added. Existing fields are overwritten. Fields set
    to `undefined` are removed.
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={patchExample}
-  sourceJS={patchExample}
+  source={patchExample}
   highlightPatterns={["db.patch"]}
 />
 
@@ -57,10 +55,9 @@ methods:
    method will replace the existing document entirely, potentially removing
    existing fields:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={replaceExample}
-  sourceJS={replaceExample}
+  source={replaceExample}
   highlightPatterns={["db.replace"]}
 />
 
@@ -69,10 +66,9 @@ methods:
 Given an existing document ID the document can be removed from the table with
 the [`db.delete`](/api/interfaces/server.GenericDatabaseWriter#delete) method.
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={deleteExample}
-  sourceJS={deleteExample}
+  source={deleteExample}
   highlightPatterns={["db.delete"]}
 />
 
@@ -149,4 +145,23 @@ time. It allows you to resume from failures, and validate changes with dry runs.
 ## Write performance and limits
 
 To prevent accidental writes of large amounts of records, queries and mutations
-enforce limits detailed [here](/production/state/limits.mdx#transactions).
+enforce [transaction limits](/production/state/limits.mdx#transactions). In
+situations where you are at risk of reading or writing unknown amounts of data,
+use these tools to stay within the limits.
+
+### Measuring document sizes
+
+Use tools like `getConvexSize` to
+[calculate documents sizes](/database/types#measuring-document-sizes). By doing
+so, you can make batches of work dynamically and handle each batch in a separate
+transaction, using the scheduler or having an action call multiple mutations.
+Note: a mutation or query called by another mutation or query share the overall
+transaction limits.
+
+### Limiting paginated queries
+
+When using [paginated queries](/database/pagination), pass `maximumBytesRead` or
+`maximumRowsRead` in
+[`PaginationOptions`](/api/interfaces/server.PaginationOptions) to limit how
+much data a single page reads. This is especially useful when filtering for rare
+items where a low `numItems` won't bound execution time.

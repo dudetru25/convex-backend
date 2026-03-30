@@ -281,7 +281,6 @@ impl Writes {
                 "Too many bytes written in system tables in a single transaction: {}",
                 tx_size.size
             );
-            tx_size
         } else {
             let tx_size = &self.user_tx_size;
             anyhow::ensure!(
@@ -304,8 +303,7 @@ impl Writes {
                     )
                 ),
             );
-            tx_size
-        };
+        }
 
         if let Some(old_update) = self.updates.get(&document_id) {
             let (old_document, old_document_ts) = old_document.unzip();
@@ -394,7 +392,7 @@ impl Writes {
             // need to read the index. We only care about the name always mapping
             // to the same fields.
             let tablet_id_bytes =
-                values_to_bytes::<false>(&[Some(index_metadata_serialize_tablet_id(&tablet_id)?)]);
+                values_to_bytes(&[Some(index_metadata_serialize_tablet_id(&tablet_id)?)]);
             reads.record_indexed_derived(
                 TabletIndexName::new(
                     table_mapping.index_id.tablet_id,

@@ -18,6 +18,7 @@ use common::{
     },
     knobs::SEARCHLIGHT_CLUSTER_NAME,
     runtime::block_in_place,
+    try_anyhow,
     types::{
         IndexId,
         SearchIndexMetricLabels,
@@ -246,7 +247,7 @@ impl VectorIndexManager {
             // We need to add the size of the document id to the write size because it's
             // also stored in the vector index.
             write_size.0 += (qdrant_schema.estimate_vector_size() + id.size()) as u64;
-            self.indexes.update(&index.id, None, |memory_index| {
+            self.indexes.update(&index.id(), None, |memory_index| {
                 memory_index.update(id.internal_id(), ts, old_value, new_value)
             })?;
         }
@@ -442,7 +443,7 @@ impl VectorIndexManager {
         search_storage: Arc<dyn Storage>,
     ) -> anyhow::Result<Vec<VectorSearchQueryResult>> {
         let timer = metrics::search_timer(&SEARCHLIGHT_CLUSTER_NAME);
-        let result: anyhow::Result<_> = try {
+        let result: anyhow::Result<_> = try_anyhow!({
             let IndexConfig::Vector { ref spec, .. } = index.metadata.config else {
                 anyhow::bail!(ErrorMetadata::bad_request(
                     "IndexNotAVectorIndexError",
@@ -481,7 +482,7 @@ impl VectorIndexManager {
                 ),
             };
             (disk_revisions, vector_index_type)
-        };
+        });
         match result {
             Ok((disk_revisions, vector_index_type)) => {
                 metrics::finish_search(timer, &disk_revisions, vector_index_type);

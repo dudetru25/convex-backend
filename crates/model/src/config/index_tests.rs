@@ -187,9 +187,7 @@ async fn prepare_new_mutated_indexes_with_mutated_index_not_yet_enabled_removes_
             .await?;
 
         assert!(!IndexModel::new(&mut tx)
-            .get_all_indexes()
-            .await?
-            .iter()
+            .get_all_indexes()?
             .any(|index| index.id().internal_id() == current_index.id().internal_id()));
         Ok(())
     })
@@ -636,8 +634,8 @@ async fn apply_config_with_backfilling_search_index_throws(rt: TestRuntime) -> a
     // commit the schema.
     assert_root_cause_contains(
         result,
-        "Expected backfilled index, but found: Backfilling(TextIndexBackfillState { segments: [], \
-         cursor: None, staged: false }) for \"index\"",
+        "Expected backfilled index, but found: Backfilling(BackfillState { segments: [], cursor: \
+         None, staged: false }) for \"index\"",
     );
 
     Ok(())

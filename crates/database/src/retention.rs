@@ -102,6 +102,7 @@ use common::{
         Reader,
         Writer,
     },
+    try_anyhow,
     try_chunks::TryChunksExt,
     types::{
         GenericIndexName,
@@ -957,8 +958,8 @@ impl LeaderRetentionWorkers {
                 .into_iter()
                 .filter_map(
                     |doc: (Timestamp, Option<(Timestamp, InternalDocumentId)>)| {
-                        if doc.1.is_some() {
-                            Some((doc.0, doc.1.unwrap()))
+                        if let Some(v) = doc.1 {
+                            Some((doc.0, v))
                         } else {
                             None
                         }
@@ -1444,7 +1445,7 @@ impl LeaderRetentionWorkers {
                 "go_delete_documents: running, current_bounds: \
                  {cursor}..{min_document_snapshot_ts}",
             );
-            let r: anyhow::Result<()> = try {
+            let r: anyhow::Result<()> = try_anyhow!({
                 // Only delete documents up to (now() -
                 // DOCUMENT_RETENTION_DELAY), even if min_document_snapshot_ts
                 // is ahead of that point.
@@ -1499,7 +1500,7 @@ impl LeaderRetentionWorkers {
                         );
                     },
                 }
-            };
+            });
             if let Err(mut err) = r {
                 report_error(&mut err).await;
                 let delay = error_backoff.fail(&mut rt.rng());
@@ -1671,7 +1672,8 @@ impl<RT: Runtime> RetentionValidator for LeaderRetentionManager<RT> {
             anyhow::bail!(snapshot_invalid_error(
                 ts,
                 *min_snapshot_ts,
-                RetentionType::Index
+                RetentionType::Index,
+                "leader",
             ));
         }
         Ok(())
@@ -1683,7 +1685,8 @@ impl<RT: Runtime> RetentionValidator for LeaderRetentionManager<RT> {
             anyhow::bail!(snapshot_invalid_error(
                 ts,
                 *min_snapshot_ts,
-                RetentionType::Document
+                RetentionType::Document,
+                "leader",
             ));
         }
         Ok(())
@@ -1694,7 +1697,12 @@ impl<RT: Runtime> RetentionValidator for LeaderRetentionManager<RT> {
         log_snapshot_verification_age(&self.rt, ts, *min_snapshot_ts, true, true);
         anyhow::ensure!(
             ts >= *min_snapshot_ts,
-            "leader retention bounds check failed: {ts} < {min_snapshot_ts}"
+            snapshot_invalid_error(
+                ts,
+                *min_snapshot_ts,
+                RetentionType::Index,
+                "optimistic leader",
+            )
         );
         Ok(())
     }
@@ -1771,14 +1779,16 @@ async fn load_snapshot_bounds(
         anyhow::bail!(snapshot_invalid_error(
             *repeatable_ts,
             *min_index_snapshot_ts,
-            RetentionType::Index
+            RetentionType::Index,
+            "follower initialization",
         ));
     }
     if repeatable_ts < min_document_snapshot_ts {
         anyhow::bail!(snapshot_invalid_error(
             *repeatable_ts,
             *min_document_snapshot_ts,
-            RetentionType::Document
+            RetentionType::Document,
+            "follower initialization",
         ));
     }
     Ok(SnapshotBounds {
@@ -1818,7 +1828,8 @@ impl<RT: Runtime> RetentionValidator for FollowerRetentionManager<RT> {
             anyhow::bail!(snapshot_invalid_error(
                 ts,
                 *min_snapshot_ts,
-                RetentionType::Index
+                RetentionType::Index,
+                "follower"
             ));
         }
         Ok(())
@@ -1830,7 +1841,8 @@ impl<RT: Runtime> RetentionValidator for FollowerRetentionManager<RT> {
             anyhow::bail!(snapshot_invalid_error(
                 ts,
                 *min_snapshot_ts,
-                RetentionType::Document
+                RetentionType::Document,
+                "follower"
             ));
         }
         Ok(())
@@ -1841,7 +1853,12 @@ impl<RT: Runtime> RetentionValidator for FollowerRetentionManager<RT> {
         log_snapshot_verification_age(&self.rt, ts, *min_snapshot_ts, true, false);
         anyhow::ensure!(
             ts >= *min_snapshot_ts,
-            "follower retention bounds check failed: {ts} < {min_snapshot_ts}"
+            snapshot_invalid_error(
+                ts,
+                *min_snapshot_ts,
+                RetentionType::Index,
+                "optimistic follower"
+            )
         );
         Ok(())
     }
@@ -1873,9 +1890,11 @@ fn snapshot_invalid_error(
     ts: Timestamp,
     min_snapshot_ts: Timestamp,
     retention_type: RetentionType,
+    context: &str,
 ) -> anyhow::Error {
     anyhow::anyhow!(ErrorMetadata::out_of_retention()).context(format!(
-        "{retention_type:?} snapshot timestamp out of retention window: {ts} < {min_snapshot_ts}"
+        "{retention_type:?} snapshot timestamp out of {context} retention window: {ts} < \
+         {min_snapshot_ts}"
     ))
 }
 
@@ -1953,7 +1972,8 @@ mod tests {
             anyhow::bail!(snapshot_invalid_error(
                 Timestamp::must(1),
                 Timestamp::must(30),
-                RetentionType::Document
+                RetentionType::Document,
+                "test"
             ));
         };
         let stream_throws = stream::once(async move { throws() });
@@ -2149,13 +2169,7 @@ mod tests {
         let scanned: Vec<_> = scanned_stream.try_collect().await?;
         let expired: Vec<_> = scanned
             .into_iter()
-            .filter_map(|doc| {
-                if doc.1.is_some() {
-                    Some((doc.0, doc.1.unwrap()))
-                } else {
-                    None
-                }
-            })
+            .filter_map(|doc| Some((doc.0, doc.1?)))
             .collect();
 
         assert_eq!(expired.len(), 5);
@@ -2223,13 +2237,7 @@ mod tests {
         let scanned: Vec<_> = scanned_stream.try_collect().await?;
         let expired: Vec<_> = scanned
             .into_iter()
-            .filter_map(|doc| {
-                if doc.1.is_some() {
-                    Some((doc.0, doc.1.unwrap()))
-                } else {
-                    None
-                }
-            })
+            .filter_map(|doc| Some((doc.0, doc.1?)))
             .collect();
 
         assert_eq!(expired.len(), 9);

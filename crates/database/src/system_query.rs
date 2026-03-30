@@ -44,7 +44,6 @@ use crate::{
     system_tables::{
         SystemIndex,
         SystemTable,
-        SystemTableMetadata,
     },
     Transaction,
 };
@@ -70,6 +69,7 @@ pub struct SystemQuery<'a, 'b, RT: Runtime, T: SystemTable> {
     tablet_id: TabletId,
     index_range: Interval,
     order: Order,
+    queue: std::vec::IntoIter<Arc<ParsedDocument<T::Metadata>>>,
 }
 
 impl<RT: Runtime> Transaction<RT> {
@@ -161,8 +161,7 @@ impl<'a, 'b, RT: Runtime, T: SystemTable> SystemQueryBuilder<'a, 'b, RT, T, EqFi
 }
 
 impl<'a, 'b, RT: Runtime, T: SystemTable, R: Into<Interval>> SystemQueryBuilder<'a, 'b, RT, T, R> {
-    /// Builds the query so that it can be iterated one page at a time with
-    /// [`SystemQuery::next_page`].
+    /// Builds the query so that it can be iterated with [`SystemQuery::next`].
     pub fn build(self) -> SystemQuery<'a, 'b, RT, T> {
         let Self {
             tx,
@@ -178,6 +177,7 @@ impl<'a, 'b, RT: Runtime, T: SystemTable, R: Into<Interval>> SystemQueryBuilder<
             tablet_id,
             index_range: index_range.into(),
             order,
+            queue: vec![].into_iter(),
         }
     }
 
@@ -217,6 +217,21 @@ impl<'a, 'b, RT: Runtime, T: SystemTable, R: Into<Interval>> SystemQueryBuilder<
 }
 
 impl<RT: Runtime, T: SystemTable> SystemQuery<'_, '_, RT, T> {
+    /// Returns the next document from the query, or `None if the query is
+    /// exhausted.
+    pub async fn next(&mut self) -> anyhow::Result<Option<Arc<ParsedDocument<T::Metadata>>>>
+    where
+        T::Metadata: ConvexSerializable,
+    {
+        if let Some(doc) = self.queue.next() {
+            return Ok(Some(doc));
+        }
+        let (page, _has_more) = self.next_page(*DEFAULT_QUERY_PREFETCH).await?;
+        self.queue = page.into_iter();
+        Ok(self.queue.next())
+    }
+
+    /// Lower-level function for reading one page at a time from the query.
     /// Returns the next (up to) `n` documents and a boolean indicating if more
     /// results are expected. Note that this could return `true` even if there
     /// aren't actually any more documents, if there's still an unexplored index
@@ -230,6 +245,10 @@ impl<RT: Runtime, T: SystemTable> SystemQuery<'_, '_, RT, T> {
     {
         if self.index_range.is_empty() {
             return Ok((vec![], false));
+        }
+
+        if !self.queue.as_slice().is_empty() {
+            return Ok((mem::take(&mut self.queue).collect(), true));
         }
 
         let Ok(tablet_index_id) = self
@@ -280,9 +299,6 @@ impl<RT: Runtime, T: SystemTable> SystemQuery<'_, '_, RT, T> {
             page.into_iter()
                 .map(|(_index_key, doc, _ts)| {
                     Ok(match doc {
-                        LazyDocument::Resolved(doc) => {
-                            Arc::new(SystemTableMetadata::parse_from_doc(doc)?)
-                        },
                         LazyDocument::Memory(doc) if !T::FOR_MIGRATION => {
                             doc.force::<T::Metadata>()?
                         },
@@ -296,6 +312,10 @@ impl<RT: Runtime, T: SystemTable> SystemQuery<'_, '_, RT, T> {
                 .collect::<anyhow::Result<Vec<_>>>()?,
             !self.index_range.is_empty(),
         ))
+    }
+
+    pub fn tx(&mut self) -> &mut Transaction<RT> {
+        self.tx
     }
 }
 
@@ -344,7 +364,7 @@ impl EqFields {
         indexed_fields_len: usize,
     ) -> anyhow::Result<()> {
         for &value in fields {
-            write_sort_key::<_, false>(value, &mut self.prefix).map_err(Into::into)?;
+            write_sort_key(value, &mut self.prefix).map_err(Into::into)?;
             self.fields += 1;
         }
         // Sanity checks against developer errors
@@ -380,7 +400,7 @@ impl EqFields {
             bound @ (Bound::Included(fields) | Bound::Excluded(fields)) => {
                 let mut start = self.prefix.clone();
                 for &value in fields {
-                    write_sort_key::<_, false>(value, &mut start).map_err(Into::into)?;
+                    write_sort_key(value, &mut start).map_err(Into::into)?;
                 }
                 if let Bound::Excluded(_) = bound {
                     let Some(key) = BinaryKey::from(start).increment() else {
@@ -398,7 +418,7 @@ impl EqFields {
             bound @ (Bound::Included(fields) | Bound::Excluded(fields)) => {
                 let mut end = self.prefix;
                 for &value in fields {
-                    write_sort_key::<_, false>(value, &mut end).map_err(Into::into)?;
+                    write_sort_key(value, &mut end).map_err(Into::into)?;
                 }
                 if let Bound::Included(_) = bound {
                     End::after_prefix(&end.into())
@@ -543,7 +563,7 @@ mod tests {
     }
 
     fn k<T: TryInto<ConvexValue, Error: Debug>, const N: usize>(values: [T; N]) -> BinaryKey {
-        BinaryKey::from(values_to_bytes::<false>(
+        BinaryKey::from(values_to_bytes(
             &values
                 .into_iter()
                 .map(|v| Some(v.try_into().unwrap()))

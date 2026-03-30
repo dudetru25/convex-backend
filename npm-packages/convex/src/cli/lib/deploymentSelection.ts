@@ -1,3 +1,4 @@
+import { PlatformProjectDetails } from "@convex-dev/platform/managementApi";
 import { BigBrainAuth, Context } from "../../bundler/context.js";
 import { logVerbose } from "../../bundler/log.js";
 import {
@@ -19,6 +20,7 @@ import {
   isProjectKey,
   stripDeploymentTypePrefix,
 } from "./deployment.js";
+import { parseDeploymentSelector } from "./deploymentSelector.js";
 import { getBuildEnvironment } from "./envvars.js";
 import { readGlobalConfig } from "./utils/globalConfig.js";
 import {
@@ -29,6 +31,7 @@ import {
   ENV_VAR_FILE_PATH,
   bigBrainAPI,
   processDeployKeyValue,
+  typedPlatformClient,
 } from "./utils/utils.js";
 import * as dotenv from "dotenv";
 
@@ -230,14 +233,16 @@ export type DeploymentSelection =
       deploymentToActOn: {
         url: string;
         adminKey: string;
-        deploymentFields: {
-          deploymentName: string;
-          deploymentType: DeploymentType;
-          projectSlug: string;
-          teamSlug: string;
-        } | null;
-        source: "selfHosted" | "deployKey" | "cliArgs";
-      };
+      } & (
+        | {
+            deploymentFields: DeploymentFields;
+            source: "deployKey";
+          }
+        | {
+            deploymentFields: null;
+            source: "selfHosted" | "cliArgs";
+          }
+      );
     }
   | {
       kind: "deploymentWithinProject";
@@ -258,6 +263,13 @@ export type DeploymentSelection =
       deploymentName: string | null;
       selectionWithinProject: DeploymentSelectionWithinProject;
     };
+
+type DeploymentFields = {
+  deploymentName: string;
+  deploymentType: DeploymentType;
+  projectSlug: string;
+  teamSlug: string;
+};
 
 export type ProjectSelection =
   | {
@@ -369,6 +381,41 @@ async function _getDeploymentSelection(
     };
   }
 
+  // If --deployment is a fully qualified selector (team:project:ref or a
+  // deployment name), we don't need a current project context — handle it
+  // before env var resolution.
+  if (cliArgs.deployment !== undefined) {
+    const parsed = parseDeploymentSelector(cliArgs.deployment);
+    if (parsed.kind === "inTeamProject") {
+      return {
+        kind: "deploymentWithinProject",
+        targetProject: {
+          kind: "teamAndProjectSlugs",
+          teamSlug: parsed.teamSlug,
+          projectSlug: parsed.projectSlug,
+        },
+        selectionWithinProject: {
+          kind: "deploymentSelector",
+          selector: cliArgs.deployment,
+        },
+      };
+    }
+    if (parsed.kind === "deploymentName") {
+      return {
+        kind: "deploymentWithinProject",
+        targetProject: {
+          kind: "deploymentName",
+          deploymentName: parsed.deploymentName,
+          deploymentType: null,
+        },
+        selectionWithinProject: {
+          kind: "deploymentSelector",
+          selector: cliArgs.deployment,
+        },
+      };
+    }
+  }
+
   if (cliArgs.envFile !== undefined) {
     // If an `--env-file` is specified, it must contain enough information for both auth and deployment selection.
     logVerbose(`Checking env file: ${cliArgs.envFile}`);
@@ -420,10 +467,12 @@ async function _getDeploymentSelection(
   }
   // none of these?
 
-  // Check if they're logged in
   const isLoggedIn = ctx.bigBrainAuth() !== null;
   if (
-    (!isLoggedIn || process.env.CONVEX_AGENT_MODE === "anonymous") &&
+    (!isLoggedIn ||
+      process.env.CONVEX_AGENT_MODE === "anonymous" ||
+      !process.stdin.isTTY) &&
+    !cliArgs.implicitProd &&
     shouldAllowAnonymousDevelopment()
   ) {
     return {
@@ -561,6 +610,22 @@ async function getDeploymentSelectionFromEnv(
     };
   }
 
+  // --deployment-name’s deployment may be in a different project from CONVEX_DEPLOYMENT.
+  if (selectionWithinProject.kind === "deploymentName") {
+    return {
+      kind: "success",
+      metadata: {
+        kind: "deploymentWithinProject",
+        targetProject: {
+          kind: "deploymentName",
+          deploymentName: selectionWithinProject.deploymentName,
+          deploymentType: null,
+        },
+        selectionWithinProject,
+      },
+    };
+  }
+
   if (convexDeployment !== null) {
     if (selfHostedUrl !== null || selfHostedAdminKey !== null) {
       return await ctx.crash({
@@ -571,6 +636,8 @@ async function getDeploymentSelectionFromEnv(
     }
     const targetDeploymentType =
       getDeploymentTypeFromConfiguredDeployment(convexDeployment);
+
+    // Commands can select a deployment within the project that this deployment belongs to.
     const targetDeploymentName = stripDeploymentTypePrefix(convexDeployment);
     const isAnonymous = isAnonymousDeployment(targetDeploymentName);
     if (isAnonymous) {
@@ -588,7 +655,7 @@ async function getDeploymentSelectionFromEnv(
         },
       };
     }
-    // Commands can select a deployment within the project that this deployment belongs to.
+
     return {
       kind: "success",
       metadata: {
@@ -678,3 +745,54 @@ export const shouldAllowAnonymousDevelopment = (): boolean => {
   }
   return true;
 };
+
+/**
+ * Fetch the project details corresponding to the given ProjectSelection.
+ */
+export async function getProjectDetails(
+  ctx: Context,
+  projectSelection: ProjectSelection,
+): Promise<PlatformProjectDetails> {
+  switch (projectSelection.kind) {
+    case "deploymentName": {
+      const deployment = (
+        await typedPlatformClient(ctx).GET("/deployments/{deployment_name}", {
+          params: {
+            path: { deployment_name: projectSelection.deploymentName },
+          },
+        })
+      ).data!;
+      return (
+        await typedPlatformClient(ctx).GET("/projects/{project_id}", {
+          params: { path: { project_id: deployment.projectId } },
+        })
+      ).data!;
+    }
+    case "teamAndProjectSlugs": {
+      return (
+        await typedPlatformClient(ctx).GET(
+          "/teams/{team_id_or_slug}/projects/{project_slug}",
+          {
+            params: {
+              path: {
+                team_id_or_slug: projectSelection.teamSlug,
+                project_slug: projectSelection.projectSlug,
+              },
+            },
+          },
+        )
+      ).data!;
+    }
+    case "projectDeployKey": {
+      const result = await fetchTeamAndProjectForKey(
+        ctx,
+        projectSelection.projectDeployKey,
+      );
+      return (
+        await typedPlatformClient(ctx).GET("/projects/{project_id}", {
+          params: { path: { project_id: result.projectId } },
+        })
+      ).data!;
+    }
+  }
+}

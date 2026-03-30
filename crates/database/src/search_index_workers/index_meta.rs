@@ -1,11 +1,16 @@
 use std::{
     collections::BTreeMap,
     fmt::Debug,
+    ops::RangeToInclusive,
     path::PathBuf,
     sync::Arc,
 };
 
 use async_trait::async_trait;
+pub use common::bootstrap_model::index::search_index::{
+    BackfillState,
+    SearchBackfillCursor,
+};
 use common::{
     bootstrap_model::index::{
         IndexConfig,
@@ -15,8 +20,10 @@ use common::{
         ParsedDocument,
         ResolvedDocument,
     },
+    index::IndexKeyBytes,
     persistence::{
         DocumentStream,
+        RepeatablePersistence,
         TimestampRange,
     },
     query::Order,
@@ -34,7 +41,7 @@ use storage::Storage;
 use sync_types::Timestamp;
 use value::{
     ConvexObject,
-    InternalId,
+    TableNumber,
     TabletId,
 };
 
@@ -70,13 +77,9 @@ pub trait SearchIndex: Clone + Debug {
 
     /// Returns the generalized `SearchIndexConfig` if it matches the type of
     /// the parser (e.g. Text vs Vector) and `None` otherwise.
-    fn get_config(_config: IndexConfig) -> Option<SearchIndexConfig<Self>>;
+    fn get_config(_config: &IndexConfig) -> Option<SearchIndexConfig<Self>>;
 
-    // TODO(CX-6589): Make this infallible
-    fn new_index_config(
-        spec: Self::Spec,
-        new_state: SearchOnDiskState<Self>,
-    ) -> anyhow::Result<IndexConfig>;
+    fn new_index_config(spec: Self::Spec, new_state: SearchOnDiskState<Self>) -> IndexConfig;
 
     fn extract_metadata(
         metadata: ParsedDocument<TabletIndexMetadata>,
@@ -116,6 +119,19 @@ pub trait SearchIndex: Clone + Debug {
     /// Convert a table scan document stream (DocumentLogEntry, no deletes)
     /// into this search type's `DocStream` format.
     fn table_scan_stream_to_doc_stream<'a>(documents: DocumentStream<'a>) -> Self::DocStream<'a>;
+
+    /// Load updates from the document log for previously-scanned documents
+    /// during an incremental backfill, and chain them after an existing
+    /// doc stream from the table scan. The doc log stream is filtered to only
+    /// documents within `filter_id_range`.
+    fn walk_document_log_for_updates<'a>(
+        scan_doc_stream: Self::DocStream<'a>,
+        reader: &'a RepeatablePersistence,
+        tablet_id: TabletId,
+        table_number: TableNumber,
+        range: TimestampRange,
+        filter_id_range: RangeToInclusive<IndexKeyBytes>,
+    ) -> Self::DocStream<'a>;
 
     async fn build_disk_index(
         schema: &Self::Schema,
@@ -181,18 +197,8 @@ pub struct SearchSnapshot<T: SearchIndex> {
     pub data: SnapshotData<T::Segment>,
 }
 
-#[derive(Debug)]
-pub struct BackfillState<T: SearchIndex> {
-    pub segments: Vec<T::Segment>,
-    pub cursor: Option<InternalId>,
-    pub backfill_snapshot_ts: Option<Timestamp>,
-    pub staged: bool,
-    /// The timestamp of the most recently-written-to segment
-    pub last_segment_ts: Option<Timestamp>,
-}
-
 pub enum SearchOnDiskState<T: SearchIndex> {
-    Backfilling(BackfillState<T>),
+    Backfilling(BackfillState<T::Segment>),
     Backfilled {
         snapshot: SearchSnapshot<T>,
         staged: bool,
@@ -209,13 +215,11 @@ impl<T: SearchIndex> SearchOnDiskState<T> {
         }
     }
 
-    pub fn ts(&self) -> Option<&Timestamp> {
+    pub fn ts(&self) -> Option<Timestamp> {
         match self {
-            SearchOnDiskState::Backfilling(backfill_state) => {
-                backfill_state.backfill_snapshot_ts.as_ref()
-            },
+            SearchOnDiskState::Backfilling(backfill_state) => backfill_state.backfill_ts(),
             SearchOnDiskState::Backfilled { snapshot, .. }
-            | SearchOnDiskState::SnapshottedAt(snapshot) => Some(&snapshot.ts),
+            | SearchOnDiskState::SnapshottedAt(snapshot) => Some(snapshot.ts),
         }
     }
 

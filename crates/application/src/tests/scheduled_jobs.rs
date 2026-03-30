@@ -1,5 +1,6 @@
 use std::{
     str::FromStr,
+    sync::Arc,
     time::Duration,
 };
 
@@ -25,6 +26,13 @@ use database::{
     Transaction,
 };
 use errors::ErrorMetadata;
+use events::{
+    testing::BasicTestUsageEventLogger,
+    usage::{
+        FunctionCallUsageFields,
+        UsageEvent,
+    },
+};
 use keybroker::Identity;
 use model::{
     backend_state::{
@@ -65,11 +73,13 @@ use crate::{
     scheduled_jobs::{
         SCHEDULED_JOB_COMMITTING,
         SCHEDULED_JOB_EXECUTED,
+        SCHEDULED_JOB_MUTATION_ERROR,
         SCHEDULED_JOB_QUERIED,
         SCHEDULED_JOB_SUCCEEDED,
         SCHEDULER_STARTED,
     },
     test_helpers::{
+        ApplicationFixtureArgs,
         ApplicationTestExt,
         OBJECTS_TABLE,
         OBJECTS_TABLE_COMPONENT,
@@ -422,46 +432,76 @@ async fn test_cancel_recursively_scheduled_job(rt: TestRuntime) -> anyhow::Resul
 }
 
 #[convex_macro::test_runtime]
-async fn test_scheduled_job_retry(
+async fn test_scheduled_job_retry_on_occ(
     rt: TestRuntime,
     pause_controller: PauseController,
 ) -> anyhow::Result<()> {
-    let application = Application::new_for_tests(&rt).await?;
+    let logger = BasicTestUsageEventLogger::new();
+    let application = Application::new_for_tests_with_args(
+        &rt,
+        ApplicationFixtureArgs::with_event_logger(Arc::new(logger.clone())),
+    )
+    .await?;
     application.load_udf_tests_modules().await?;
 
     let attempt_commit = pause_controller.hold(SCHEDULED_JOB_COMMITTING);
-    let attempt_execute = pause_controller.hold(SCHEDULED_JOB_EXECUTED);
 
     let mut tx = application.begin(Identity::system()).await?;
     let (job_id, _model) = create_scheduled_job(&rt, &mut tx, insert_object_path()).await?;
     application.commit_test(tx).await?;
 
-    // Simulate a failure in the scheduled job
+    // Simulate an OCC failure on the first commit attempt.
     let mut pause_guard = attempt_commit.wait_for_blocked().await.unwrap();
     pause_guard.inject_error(anyhow::anyhow!(ErrorMetadata::user_occ(
         None, None, None, None, None
     )));
-    // Pause the next attempt as well.
+    // The retry happens in-process within handle_mutation's OCC retry loop,
+    // so hold the next commit attempt directly.
     let second_attempt_commit = pause_controller.hold(SCHEDULED_JOB_COMMITTING);
+    let succeeded = pause_controller.hold(SCHEDULED_JOB_SUCCEEDED);
     pause_guard.unpause();
 
-    // Wait for the first attempt, which will fail.
-    // Hitting this label means the scheduler thread is freed up temporarily,
-    // so more jobs can execute while this one is backing off.
-    let pause_guard = attempt_execute.wait_for_blocked().await.unwrap();
-    let second_attempt_execute = pause_controller.hold(SCHEDULED_JOB_EXECUTED);
-    pause_guard.unpause();
-    // The second attempt throws no error.
+    // The second attempt commits successfully.
     let pause_guard = second_attempt_commit.wait_for_blocked().await.unwrap();
     pause_guard.unpause();
-    // Wait for the second attempt, which will succeed.
-    let pause_guard = second_attempt_execute.wait_for_blocked().await.unwrap();
+
+    // Wait for the job to complete.
+    let pause_guard = succeeded.wait_for_blocked().await.unwrap();
     pause_guard.unpause();
 
     let mut tx = application.begin(Identity::system()).await?;
     let mut model = SchedulerModel::new(&mut tx, TableNamespace::test_user());
     let state = model.check_status(job_id).await?.unwrap();
     assert_eq!(state, ScheduledJobState::Success);
+
+    // Verify usage is tracked for both the OCC'd attempt and the successful
+    // attempt.
+    let function_call_events: Vec<FunctionCallUsageFields> = logger
+        .collect()
+        .into_iter()
+        .filter_map(|event| {
+            if let UsageEvent::FunctionCall { fields } = event {
+                if fields.udf_id.contains("insertObject") {
+                    Some(fields)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // We expect two function call events: one for the OCC'd attempt and one for
+    // the successful retry.
+    assert_eq!(
+        function_call_events.len(),
+        2,
+        "Expected 2 function call usage events (1 OCC + 1 success), got {}: {:?}",
+        function_call_events.len(),
+        function_call_events,
+    );
+
     Ok(())
 }
 
@@ -525,6 +565,70 @@ async fn test_scheduler_continues_while_scheduled_jobs_table_deleted(
     // This test will hang here if the scheduler got blocked by errors from deleting
     // the scheduled jobs table.
     delete_handle.await??;
+
+    Ok(())
+}
+
+#[convex_macro::test_runtime]
+async fn test_scheduled_job_write_throughput_limit_exceeded(
+    rt: TestRuntime,
+    pause_controller: PauseController,
+) -> anyhow::Result<()> {
+    unsafe { std::env::set_var("MAX_BYTES_WRITTEN_PER_SECOND", "0") };
+
+    let logger = BasicTestUsageEventLogger::new();
+    let application = Application::new_for_tests_with_args(
+        &rt,
+        ApplicationFixtureArgs::with_event_logger(Arc::new(logger.clone())),
+    )
+    .await?;
+    application.load_udf_tests_modules().await?;
+
+    let mut tx = application.begin(Identity::system()).await?;
+    let (job_id, _model) = create_scheduled_job(&rt, &mut tx, insert_object_path()).await?;
+    application.commit_test(tx).await?;
+
+    // Wait for the scheduled job to execute (and fail due to write throughput
+    // limit).
+    let mutation_error_guard = pause_controller.hold(SCHEDULED_JOB_MUTATION_ERROR);
+    let pause_guard = mutation_error_guard.wait_for_blocked().await;
+
+    // The job should still be pending
+    let mut tx = application.begin(Identity::system()).await?;
+    let mut model = SchedulerModel::new(&mut tx, TableNamespace::test_user());
+    let state = model.check_status(job_id).await?.unwrap();
+    assert_eq!(state, ScheduledJobState::Pending);
+
+    // Change the write throughput limit so the job can succeed
+    unsafe { std::env::set_var("MAX_BYTES_WRITTEN_PER_SECOND", "10000000") };
+    pause_guard.unwrap().unpause();
+    let execution_guard = pause_controller.hold(SCHEDULED_JOB_EXECUTED);
+    wait_for_scheduled_job_execution(execution_guard).await;
+    let mut tx = application.begin(Identity::system()).await?;
+    let mut model = SchedulerModel::new(&mut tx, TableNamespace::test_user());
+    let state = model.check_status(job_id).await?.unwrap();
+    assert_eq!(state, ScheduledJobState::Success);
+
+    let function_call_events: Vec<FunctionCallUsageFields> = logger
+        .collect()
+        .into_iter()
+        .filter_map(|event| {
+            if let UsageEvent::FunctionCall { fields } = event {
+                if fields.udf_id.contains("insertObject") {
+                    Some(fields)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // FIXME: When we add logging for write throughput limit, we should also have
+    // another event with status "retry"
+    assert_eq!(function_call_events.len(), 1,);
+    assert_eq!(function_call_events[0].status, "success");
 
     Ok(())
 }

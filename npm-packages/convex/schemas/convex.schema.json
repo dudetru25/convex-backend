@@ -150,8 +150,8 @@
         },
         "legacyComponentApi": {
           "type": "boolean",
-          "description": "When true (or omitted, default is true), generates inline expanded types for component APIs. When false, generates import-based component API references instead. The import-based format is more modern and recommended for projects using components.\n\nNote: When false, component.ts files are automatically generated for each component.",
-          "default": true
+          "description": "When true, generates inline expanded types for component APIs. When false (recommended), generates import-based component API references instead.",
+          "default": false
         },
         "staticApi": {
           "type": "boolean",
@@ -193,6 +193,24 @@
     "projectId": {
       "type": "string",
       "description": "Project identifier for namespace ownership in multi-project deployments. The first project to claim a namespace owns it. Defaults to the functions directory name if namespace is set."
+    },
+    "aiFiles": {
+      "type": "object",
+      "description": "User-configurable settings for Convex AI files behavior.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "When false, disables all Convex AI files prompts and staleness messages in `npx convex dev`. Use `npx convex ai-files enable` to re-enable.",
+          "default": true
+        },
+        "disableStalenessMessage": {
+          "type": "boolean",
+          "description": "Deprecated. Use `enabled` instead.",
+          "deprecated": true,
+          "default": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

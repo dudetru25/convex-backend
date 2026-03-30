@@ -16,8 +16,7 @@ use crate::{
 fn test_value_size() -> anyhow::Result<()> {
     // Feel free to change this, but it's good to be aware of how large our values
     // are.
-    assert_eq!(mem::size_of::<ConvexValue>(), 56);
-    assert_eq!(mem::size_of::<ConvexValue>(), 56);
+    assert_eq!(mem::size_of::<ConvexValue>(), 48);
 
     // Changing the computed size of a value can make stored TableSummary
     // inconsistent, so when changing this you need to also rewrite all
@@ -147,12 +146,12 @@ fn test_object_keys() -> anyhow::Result<()> {
             .collect::<Vec<_>>(),
         vec![""]
     );
-    let control_char_key: anyhow::Result<_> = try { obj!("\t" => "tab")? };
+    let control_char_key = try bikeshed anyhow::Result<_> { obj!("\t" => "tab")? };
     assert!(control_char_key
         .unwrap_err()
         .to_string()
         .contains("Field names can only contain non-control ASCII characters"));
-    let dollar_sign_key: anyhow::Result<_> = try { obj!("$id" => "tab")? };
+    let dollar_sign_key = try bikeshed anyhow::Result<_> { obj!("$id" => "tab")? };
     assert!(dollar_sign_key
         .unwrap_err()
         .to_string()

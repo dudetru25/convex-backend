@@ -31,6 +31,7 @@ use common::{
         ResolvedHostname,
     },
     runtime::Runtime,
+    try_anyhow,
     value::heap_size::HeapSize,
     version::{
         self,
@@ -66,7 +67,6 @@ use tokio::sync::mpsc;
 mod metrics;
 
 use metrics::{
-    log_debug_sync_protocol_websockets_total,
     log_sync_protocol_websockets_total,
     log_websocket_client_timeout,
     log_websocket_closed,
@@ -90,38 +90,21 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// How long before lack of client response causes a timeout.
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(120);
 
-struct SyncSocketDropToken {}
+struct SyncSocketDropToken {
+    partition_id_label: String,
+}
 
 /// Tracker that exists for the lifetime of a run_sync_socket.
 impl SyncSocketDropToken {
-    fn new() -> Self {
-        log_sync_protocol_websockets_total(1);
-        SyncSocketDropToken {}
+    fn new(partition_id_label: String) -> Self {
+        log_sync_protocol_websockets_total(&partition_id_label, 1);
+        SyncSocketDropToken { partition_id_label }
     }
 }
 
 impl Drop for SyncSocketDropToken {
     fn drop(&mut self) {
-        log_sync_protocol_websockets_total(-1);
-    }
-}
-
-// TODO(presley): Remove. Used for debugging.
-struct DebugSyncSocketDropToken {
-    tag: &'static str,
-}
-
-/// Tracker that exists for the lifetime of a run_sync_socket.
-impl DebugSyncSocketDropToken {
-    fn new(tag: &'static str) -> Self {
-        log_debug_sync_protocol_websockets_total(tag, 1);
-        DebugSyncSocketDropToken { tag }
-    }
-}
-
-impl Drop for DebugSyncSocketDropToken {
-    fn drop(&mut self) {
-        log_debug_sync_protocol_websockets_total(self.tag, -1);
+        log_sync_protocol_websockets_total(&self.partition_id_label, -1);
     }
 }
 
@@ -145,7 +128,13 @@ async fn run_sync_socket(
     sentry_scope: sentry::Scope,
     on_connect: Box<dyn FnOnce(SessionId) + Send>,
 ) {
-    let _drop_token = SyncSocketDropToken::new();
+    // For segmenting metrics
+    let partition_id = st.api.partition_id(&host).await;
+    let partition_id_label = partition_id
+        .as_ref()
+        .map(|p| p.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let _drop_token = SyncSocketDropToken::new(partition_id_label.clone());
 
     let (mut tx, mut rx) = socket.split();
 
@@ -154,7 +143,6 @@ async fn run_sync_socket(
 
     let (client_tx, client_rx) = mpsc::unbounded_channel();
     let receive_messages = async {
-        let _receive_message_drop_token = DebugSyncSocketDropToken::new("receive_message");
         while let Some(message_r) = rx.next().await {
             let message = match message_r {
                 Ok(message) => message,
@@ -208,7 +196,6 @@ async fn run_sync_socket(
 
     let (server_tx, mut server_rx) = measurable_unbounded_channel();
     let send_messages = async {
-        let _send_message_drop_token = DebugSyncSocketDropToken::new("send_message");
         let mut ping_ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
         'top: loop {
             select_biased! {
@@ -246,15 +233,8 @@ async fn run_sync_socket(
         }
         Ok(())
     };
-    // For segmenting metrics
-    let partition_id = st.api.partition_id(&host).await;
-    let partition_id_label = partition_id
-        .as_ref()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
     let mut identity_version: Option<IdentityVersion> = None;
     let sync_worker_go = async {
-        let _sync_worker_drop_token = DebugSyncSocketDropToken::new("sync_worker");
         let mut sync_worker = SyncWorker::new(
             st.api.clone(),
             st.runtime.clone(),
@@ -313,10 +293,10 @@ async fn run_sync_socket(
             });
             // Only do a best-effort send of the final application message.
             if let Some(final_message) = final_message {
-                let r: anyhow::Result<_> = try {
+                let r: anyhow::Result<_> = try_anyhow!({
                     let serialized = serde_json::to_string(&JsonValue::from(final_message))?;
                     socket.send(Message::Text(serialized.into())).await?;
-                };
+                });
                 if let Err(mut e) = r {
                     if is_connection_closed_error(&*e) {
                         log_websocket_closed_error_not_reported(partition_id_label.clone())
@@ -462,12 +442,14 @@ pub async fn sync(
 
 #[cfg(test)]
 mod tests {
+
     use axum::{
         extract::State,
         routing::get,
         Router,
     };
     use common::http::{
+        server_socket,
         websocket::{
             Message,
             WebSocket,
@@ -520,10 +502,10 @@ mod tests {
                 .route("/test", get(ws_handler))
                 .with_state(ws_shutdown_tx),
         );
-        let port = portpicker::pick_unused_port().expect("No ports free");
-        let addr = format!("127.0.0.1:{port}").parse()?;
+        let sock = server_socket("127.0.0.1:0".parse()?)?;
+        let addr = sock.local_addr()?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let proxy_server = tokio::spawn(app.serve(addr, async move {
+        let proxy_server = tokio::spawn(app.serve(sock, async move {
             shutdown_rx.await.unwrap();
         }));
 

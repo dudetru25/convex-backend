@@ -84,10 +84,10 @@ use super::FunctionRunner;
 use crate::{
     server::{
         validate_run_function_result,
+        DeploymentStorage,
         FunctionMetadata,
         FunctionRunnerCore,
         HttpActionMetadata,
-        InstanceStorage,
         RunRequestArgs,
     },
     FunctionFinalTransaction,
@@ -95,7 +95,7 @@ use crate::{
 };
 
 pub struct InProcessFunctionRunner<RT: Runtime> {
-    server: FunctionRunnerCore<RT, InstanceStorage>,
+    server: FunctionRunnerCore<RT, DeploymentStorage>,
     persistence_reader: Arc<dyn PersistenceReader>,
 
     // Static information about the backend.
@@ -116,7 +116,7 @@ impl<RT: Runtime> InProcessFunctionRunner<RT> {
         convex_origin: ConvexOrigin,
         rt: RT,
         persistence_reader: Arc<dyn PersistenceReader>,
-        storage: InstanceStorage,
+        storage: DeploymentStorage,
         database: Database<RT>,
         fetch_client: Arc<dyn FetchClient>,
     ) -> anyhow::Result<Self> {
@@ -286,6 +286,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         udf_config: UdfConfig,
         modules: BTreeMap<CanonicalizedModulePath, ModuleConfig>,
         environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
+        max_user_heap_size: usize,
     ) -> anyhow::Result<Result<BTreeMap<CanonicalizedModulePath, AnalyzedModule>, JsError>> {
         self.server
             .analyze(
@@ -293,6 +294,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
                 modules,
                 environment_variables,
                 self.instance_name.clone(),
+                max_user_heap_size,
             )
             .await
     }

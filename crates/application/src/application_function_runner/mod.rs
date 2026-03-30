@@ -42,6 +42,7 @@ use common::{
         APPLICATION_MAX_CONCURRENT_QUERIES,
         APPLICATION_MAX_CONCURRENT_V8_ACTIONS,
         DEFAULT_APPLICATION_MAX_FUNCTION_CONCURRENCY,
+        ISOLATE_MAX_HEAP_FOR_ANALYZE,
         ISOLATE_MAX_USER_HEAP_SIZE,
         UDF_EXECUTOR_OCC_INITIAL_BACKOFF,
         UDF_EXECUTOR_OCC_MAX_BACKOFF,
@@ -163,13 +164,13 @@ use tokio::{
 };
 use udf::{
     environment::system_env_vars,
-    helpers::parse_udf_args,
     validation::{
         validate_schedule_args,
         ValidatedActionOutcome,
         ValidatedPathAndArgs,
         ValidatedUdfOutcome,
     },
+    warnings::scheduled_arg_size_warning,
     ActionOutcome,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
@@ -187,6 +188,7 @@ use value::{
     identifier::Identifier,
     serialized_args_ext::SerializedArgsExt,
     JsonPackedValue,
+    Size as _,
     TableNamespace,
 };
 use vector::{
@@ -823,22 +825,6 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 .database
                 .begin_with_usage(identity.clone(), usage_tracker.clone())
                 .await?;
-            match self.database.check_write_throughput_limit() {
-                Ok(()) => {},
-                Err(e)
-                    if e.is_rate_limited()
-                        && (backoff.failures() as usize) < *UDF_EXECUTOR_OCC_MAX_RETRIES =>
-                {
-                    let sleep = backoff.fail(&mut self.runtime.rng());
-                    tracing::warn!(
-                        "Write throughput limit exceeded, retrying {udf_path_string:?} after \
-                         {sleep:?}",
-                    );
-                    self.runtime.wait(sleep).await;
-                    continue;
-                },
-                Err(e) => return Err(e),
-            }
             let pause_client = self.runtime.pause_client();
             pause_client.wait("retry_mutation_loop_start").await;
             let identity = tx.inert_identity();
@@ -864,6 +850,17 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             let (mut tx, mut outcome) = match result {
                 Ok(r) => r,
                 Err(e) => {
+                    if e.short_msg() == "TooManyWrites"
+                        && (backoff.failures() as usize) < *UDF_EXECUTOR_OCC_MAX_RETRIES
+                    {
+                        let sleep = backoff.fail(&mut self.runtime.rng());
+                        tracing::warn!(
+                            "Write throughput limit exceeded, retrying {udf_path_string:?} after \
+                             {sleep:?}",
+                        );
+                        self.runtime.wait(sleep).await;
+                        continue;
+                    }
                     self.function_log
                         .log_mutation_system_error(
                             &e,
@@ -1045,6 +1042,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         context: ExecutionContext,
         mutation_queue_length: Option<usize>,
     ) -> anyhow::Result<(Transaction<RT>, ValidatedUdfOutcome)> {
+        self.database.check_write_throughput_limit()?;
         let result = self
             .run_mutation_inner(
                 tx,
@@ -1629,6 +1627,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             udf_config,
             isolate_modules,
             environment_variables.clone(),
+            *ISOLATE_MAX_HEAP_FOR_ANALYZE,
         );
 
         let node_future = async {
@@ -2147,7 +2146,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
         scheduled_ts: UnixTimestamp,
         context: ExecutionContext,
     ) -> anyhow::Result<DeveloperDocumentId> {
-        let (_ts, virtual_id, _stats) = self
+        let (_ts, (virtual_id, arg_size), _stats) = self
             .database
             .execute_with_occ_retries(
                 identity,
@@ -2162,23 +2161,37 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
                             path,
                             args.into_args()?,
                             scheduled_ts,
-                            // Scheduling from actions is not transaction and happens at latest
+                            // Scheduling from actions is not transactional and happens at latest
                             // timestamp.
                             self.database.runtime().unix_timestamp(),
                             tx,
                         )
                         .await?;
-                        let udf_args = parse_udf_args(&path.udf_path, udf_args.into_args()?)?;
+                        let arg_size = udf_args.size();
                         let virtual_id =
                             VirtualSchedulerModel::new(tx, scheduling_component.into())
                                 .schedule(path, udf_args, scheduled_ts, context)
                                 .await?;
-                        Ok(virtual_id)
+                        Ok((virtual_id, arg_size))
                     }
                     .into()
                 },
             )
             .await?;
+        if let Some(warning) =
+            scheduled_arg_size_warning(arg_size, &None /* system_udf_path */)
+        {
+            let timestamp = self.runtime.unix_timestamp();
+            self.function_log.log_action_progress(
+                // This is completely wrong - it should be the path of the caller function, but we
+                // don't know that here and it's at least a hint
+                scheduled_path,
+                timestamp,
+                context,
+                LogLines::from(vec![warning.into_log_line(timestamp)]),
+                ModuleEnvironment::Isolate,
+            );
+        }
         Ok(virtual_id)
     }
 

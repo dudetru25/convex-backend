@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use common::{
     knobs::SEARCH_INDEX_SIZE_SOFT_LIMIT,
+    persistence::PersistenceReader,
     runtime::Runtime,
 };
 use search::searcher::SegmentTermMetadataFetcher;
@@ -27,6 +28,7 @@ use crate::{
 pub async fn backfill_text_indexes<RT: Runtime>(
     runtime: RT,
     database: Database<RT>,
+    reader: Arc<dyn PersistenceReader>,
     storage: Arc<dyn Storage>,
     segment_term_metadata_fetcher: Arc<dyn SegmentTermMetadataFetcher>,
 ) -> anyhow::Result<()> {
@@ -42,6 +44,7 @@ pub async fn backfill_text_indexes<RT: Runtime>(
     let flusher = FlusherBuilder::new(
         runtime.clone(),
         database.clone(),
+        reader.clone(),
         storage.clone(),
         segment_term_metadata_fetcher.clone(),
         writer.clone(),
@@ -53,6 +56,7 @@ pub async fn backfill_text_indexes<RT: Runtime>(
     let flusher = FlusherBuilder::new(
         runtime,
         database,
+        reader,
         storage,
         segment_term_metadata_fetcher,
         writer,
@@ -67,6 +71,7 @@ pub async fn backfill_text_indexes<RT: Runtime>(
 pub(crate) struct FlusherBuilder<RT: Runtime> {
     runtime: RT,
     database: Database<RT>,
+    reader: Arc<dyn PersistenceReader>,
     storage: Arc<dyn Storage>,
     segment_term_metadata_fetcher: Arc<dyn SegmentTermMetadataFetcher>,
     limits: SearchIndexLimits,
@@ -78,6 +83,7 @@ impl<RT: Runtime> FlusherBuilder<RT> {
     pub(crate) fn new(
         runtime: RT,
         database: Database<RT>,
+        reader: Arc<dyn PersistenceReader>,
         storage: Arc<dyn Storage>,
         segment_term_metadata_fetcher: Arc<dyn SegmentTermMetadataFetcher>,
         writer: SearchIndexMetadataWriter<RT, TextSearchIndex>,
@@ -86,6 +92,7 @@ impl<RT: Runtime> FlusherBuilder<RT> {
         Self {
             runtime,
             database,
+            reader,
             storage,
             segment_term_metadata_fetcher,
             writer,
@@ -133,6 +140,7 @@ impl<RT: Runtime> FlusherBuilder<RT> {
         SearchFlusher::new(
             self.runtime,
             self.database,
+            self.reader,
             self.storage.clone(),
             self.limits,
             self.writer,
@@ -151,6 +159,7 @@ pub type TextIndexFlusher<RT> = SearchFlusher<RT, TextSearchIndex>;
 pub fn new_text_flusher_for_tests<RT: Runtime>(
     runtime: RT,
     database: Database<RT>,
+    reader: Arc<dyn PersistenceReader>,
     storage: Arc<dyn Storage>,
     segment_metadata_fetcher: Arc<dyn SegmentTermMetadataFetcher>,
 ) -> TextIndexFlusher<RT> {
@@ -166,6 +175,7 @@ pub fn new_text_flusher_for_tests<RT: Runtime>(
     FlusherBuilder::new(
         runtime,
         database,
+        reader,
         storage,
         segment_metadata_fetcher,
         writer,
@@ -177,6 +187,7 @@ pub fn new_text_flusher_for_tests<RT: Runtime>(
 pub(crate) fn new_text_flusher<RT: Runtime>(
     runtime: RT,
     database: Database<RT>,
+    reader: Arc<dyn PersistenceReader>,
     storage: Arc<dyn Storage>,
     segment_metadata_fetcher: Arc<dyn SegmentTermMetadataFetcher>,
     writer: SearchIndexMetadataWriter<RT, TextSearchIndex>,
@@ -185,6 +196,7 @@ pub(crate) fn new_text_flusher<RT: Runtime>(
     FlusherBuilder::new(
         runtime,
         database,
+        reader,
         storage,
         segment_metadata_fetcher,
         writer,
@@ -524,73 +536,6 @@ mod tests {
     }
 
     #[convex_macro::test_runtime]
-    async fn backfill_with_two_documents_0_max_segment_size_creates_two_segments(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let fixtures = TextFixtures::new(rt).await?;
-        let TextIndexData {
-            index_name,
-            index_id,
-            ..
-        } = fixtures.insert_backfilling_text_index().await?;
-
-        fixtures.add_document("some text").await?;
-        fixtures.add_document("some other text").await?;
-        let flusher = fixtures
-            .new_search_flusher_builder()
-            .set_incremental_multipart_threshold_bytes(0)
-            .build();
-
-        // Build the first segment, which stops because the document size is > 0
-        flusher.step().await?;
-        // Should have written backfill progress, and it is halfway done.
-        let progress = fixtures
-            .index_backfill_progress(index_id.developer_id)
-            .await?
-            .unwrap();
-        assert_eq!(progress.num_docs_indexed, 1);
-        assert_eq!(progress.total_docs, Some(2));
-
-        // Build the second segment and finalize the index metadata.
-        flusher.step().await?;
-        // Should have written backfill progress, and it is complete.
-        let progress = fixtures
-            .index_backfill_progress(index_id.developer_id)
-            .await?
-            .unwrap();
-        assert_eq!(progress.num_docs_indexed, 2);
-        assert_eq!(progress.total_docs, Some(2));
-
-        let segments = fixtures.get_segments_metadata(index_name).await?;
-        assert_eq!(segments.len(), 2);
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn backfill_with_two_documents_leaves_document_backfilling_after_first_flush(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let fixtures = TextFixtures::new(rt).await?;
-        let index_data = fixtures.insert_backfilling_text_index().await?;
-
-        fixtures.add_document("cat").await?;
-        fixtures.add_document("dog").await?;
-
-        let flusher = fixtures
-            .new_search_flusher_builder()
-            .set_incremental_multipart_threshold_bytes(0)
-            .build();
-        // Build the first segment, which stops because the document size is > 0
-        flusher.step().await?;
-        let metadata = fixtures.get_index_metadata(index_data.index_name).await?;
-        must_let!(let IndexConfig::Text { on_disk_state, .. }= &metadata.config);
-        must_let!(let TextIndexState::Backfilling(backfilling_meta) = on_disk_state);
-        assert_eq!(backfilling_meta.segments.len(), 1);
-
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
     async fn backfill_with_two_documents_0_max_segment_size_includes_both_documents(
         rt: TestRuntime,
     ) -> anyhow::Result<()> {
@@ -770,54 +715,6 @@ mod tests {
         let doc_id = fixtures.add_document("cat").await?;
         let mut tx = fixtures.db.begin_system().await?;
         tx.delete_inner(doc_id).await?;
-        fixtures.db.commit(tx).await?;
-
-        flusher.step().await?;
-        fixtures.enable_index(&index_name).await?;
-
-        let results = fixtures.search(index_name, "cat").await?;
-        assert!(results.is_empty());
-
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn backfill_one_doc_added_then_deleted_separate_builds_does_not_include_deleted_document(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let fixtures = TextFixtures::new(rt).await?;
-        let TextIndexData { index_name, .. } = fixtures.insert_backfilling_text_index().await?;
-        let flusher = fixtures.new_backfill_text_flusher();
-
-        let doc_id = fixtures.add_document("cat").await?;
-        flusher.step().await?;
-
-        let mut tx = fixtures.db.begin_system().await?;
-        tx.delete_inner(doc_id).await?;
-        fixtures.db.commit(tx).await?;
-
-        flusher.step().await?;
-        fixtures.enable_index(&index_name).await?;
-
-        let results = fixtures.search(index_name, "cat").await?;
-        assert!(results.is_empty());
-
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn backfill_one_doc_added_then_replaced_separate_builds_does_not_include_first_document(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let fixtures = TextFixtures::new(rt).await?;
-        let TextIndexData { index_name, .. } = fixtures.insert_backfilling_text_index().await?;
-        let flusher = fixtures.new_backfill_text_flusher();
-
-        let doc_id = fixtures.add_document("cat").await?;
-        flusher.step().await?;
-
-        let mut tx = fixtures.db.begin_system().await?;
-        tx.replace_inner(doc_id, assert_obj!()).await?;
         fixtures.db.commit(tx).await?;
 
         flusher.step().await?;
@@ -1082,6 +979,31 @@ mod tests {
         assert_eq!(compacted_segment.len(), 1);
         assert_eq!(new_segment.len(), 1);
         // TODO Verify segment contents
+
+        Ok(())
+    }
+
+    #[convex_macro::test_runtime]
+    async fn backfill_insert_then_replace_delete_in_memory(rt: TestRuntime) -> anyhow::Result<()> {
+        let fixtures = TextFixtures::new(rt).await?;
+        let TextIndexData { index_name, .. } = fixtures.insert_backfilling_text_index().await?;
+        let flusher = fixtures.new_backfill_text_flusher();
+
+        let doc_id = fixtures.add_document("cat").await?;
+        flusher.step().await?;
+        let segments = fixtures.get_segments_metadata(index_name.clone()).await?;
+        assert_eq!(segments.len(), 1);
+        fixtures.replace_document(doc_id, "new_text").await?;
+        let mut tx = fixtures.db.begin_system().await?;
+        tx.delete_inner(doc_id).await?;
+        fixtures.db.commit(tx).await?;
+
+        fixtures.enable_index(&index_name).await?;
+
+        let results = fixtures.search(index_name.clone(), "cat").await?;
+        assert!(results.is_empty());
+        let results = fixtures.search(index_name, "new_text").await?;
+        assert!(results.is_empty());
 
         Ok(())
     }

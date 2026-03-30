@@ -105,6 +105,14 @@ export interface ProjectConfig {
   namespace?: string | undefined;
   // Project identifier for namespace ownership. Defaults to functions directory name.
   projectId?: string | undefined;
+
+  // Convex AI files user preferences.
+  aiFiles?: {
+    // When false, disables all AI files prompts and staleness messages.
+    enabled?: boolean;
+    // @deprecated use `enabled` instead.
+    disableStalenessMessage?: boolean;
+  };
 }
 
 export interface Config {
@@ -131,9 +139,9 @@ export function usesTypeScriptCodegen(projectConfig: ProjectConfig): boolean {
   return projectConfig.codegen.fileType === "ts";
 }
 
-/** Whether the new component API import style should be used (default is false) */
+/** Whether the new component API import style should be used */
 export function usesComponentApiImports(projectConfig: ProjectConfig): boolean {
-  return projectConfig.codegen.legacyComponentApi === false;
+  return projectConfig.codegen.legacyComponentApi !== true;
 }
 
 /**
@@ -288,6 +296,11 @@ const BundlerSchema = z.object({
     ),
 });
 
+const AiFilesSchema = z.object({
+  enabled: z.boolean().optional(),
+  disableStalenessMessage: z.boolean().optional(),
+});
+
 const refineToObject = <T extends z.ZodTypeAny>(schema: T) =>
   schema.refine((val) => val !== null && !Array.isArray(val), {
     message: "Expected `convex.json` to contain an object",
@@ -326,6 +339,7 @@ const createProjectConfigSchema = (strict: boolean) => {
     $schema: z.string().optional(),
     // WorkOS AuthKit integration configuration
     authKit: AuthKitConfigSchema.optional(),
+    aiFiles: AiFilesSchema.optional(),
 
     // Multi-project deployment configuration
     namespace: z
@@ -562,6 +576,7 @@ export async function readProjectConfig(ctx: Context): Promise<{
           staticApi: false,
           staticDataModel: false,
         },
+        aiFiles: {},
       },
       configPath: configName(),
     };

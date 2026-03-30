@@ -674,6 +674,53 @@
         ]
       }
     },
+    "/deployments/{deployment_name}/transfer": {
+      "post": {
+        "tags": [
+          "Deployments"
+        ],
+        "summary": "Transfer deployment",
+        "description": "Transfer a deployment from its current project to another project within the\nsame team. For production deployments, the caller must be a project admin on\nboth the source and destination projects. For other deployment types, any\nteam member can transfer deployments they created, or project admins can\ntransfer any deployment.",
+        "operationId": "transfer deployment",
+        "parameters": [
+          {
+            "name": "deployment_name",
+            "in": "path",
+            "description": "Deployment Name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformTransferDeploymentArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
     "/teams/{team_id}/list_deployment_classes": {
       "get": {
         "tags": [
@@ -744,6 +791,9 @@
     },
     "/teams/{team_id}/list_deployments": {
       "get": {
+        "tags": [
+          "Deployments"
+        ],
         "summary": "List deployments for team",
         "description": "Lists deployments for a team with pagination, sorting, and filtering.",
         "operationId": "list deployments for team",
@@ -777,7 +827,7 @@
             }
           },
           {
-            "name": "sort_by",
+            "name": "sortBy",
             "in": "query",
             "description": "Sort field: createTime, lastDeployTime, reference",
             "required": false,
@@ -786,7 +836,7 @@
             }
           },
           {
-            "name": "sort_order",
+            "name": "sortOrder",
             "in": "query",
             "description": "Sort order: asc, desc",
             "required": false,
@@ -795,7 +845,7 @@
             }
           },
           {
-            "name": "deployment_type",
+            "name": "deploymentType",
             "in": "query",
             "description": "Filter by type: dev, prod, preview, custom",
             "required": false,
@@ -813,7 +863,7 @@
             }
           },
           {
-            "name": "project_id",
+            "name": "projectId",
             "in": "query",
             "description": "Filter by project ID",
             "required": false,
@@ -831,7 +881,7 @@
             }
           },
           {
-            "name": "is_default",
+            "name": "isDefault",
             "in": "query",
             "description": "Filter by default deployment status",
             "required": false,
@@ -864,6 +914,9 @@
     },
     "/teams/{team_id}/list_local_deployments": {
       "get": {
+        "tags": [
+          "Deployments"
+        ],
         "summary": "List local deployments",
         "description": "Lists the local deployments for a team.",
         "operationId": "list local deployments for team",
@@ -1109,6 +1162,15 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/ProjectId"
+            }
+          },
+          {
+            "name": "includeManaged",
+            "in": "query",
+            "description": "If true, include managed preview deploy keys (e.g., created by external\nintegrations like Vercel) in the response. Defaults to false.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -1382,6 +1444,106 @@
           }
         ]
       }
+    },
+    "/teams/create_team": {
+      "post": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Create a team",
+        "operationId": "create team",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformCreateTeamArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Team created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not authorized to create teams"
+          }
+        },
+        "security": []
+      }
+    },
+    "/teams/{team_id}/create_access_token": {
+      "post": {
+        "tags": [
+          "Access Tokens"
+        ],
+        "summary": "Create a team access token",
+        "operationId": "create team access token",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Team access token created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTeamAccessTokenResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not authorized to create team access tokens"
+          }
+        },
+        "security": []
+      }
+    },
+    "/teams/{team_id}/invite_team_member": {
+      "post": {
+        "tags": [
+          "Team Members"
+        ],
+        "operationId": "invite team member",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitationArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": []
+      }
     }
   },
   "components": {
@@ -1398,6 +1560,36 @@
           "preview",
           "custom"
         ]
+      },
+      "CreateInvitationArgs": {
+        "type": "object",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        }
+      },
+      "CreateTeamAccessTokenResponse": {
+        "type": "object",
+        "required": [
+          "accessToken",
+          "tokenType"
+        ],
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "tokenType": {
+            "type": "string"
+          }
+        }
       },
       "DeploymentClass": {
         "type": "string",
@@ -1508,6 +1700,27 @@
           }
         }
       },
+      "ManagedBy": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "vercel"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "oauthApp"
+            ],
+            "properties": {
+              "oauthApp": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
       "MemberId": {
         "type": "integer",
         "format": "int64",
@@ -1585,6 +1798,13 @@
               "null"
             ],
             "description": "The class to use for this deployment. If not provided, the default\ndeployment class for your team will be used."
+          },
+          "isDefault": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "When creating a prod deployment, whether the deployment is the default\nproduction deployment for the project (i.e. the one used by default\nwhen running `npx convex deploy`).\nWhen creating a dev deployment, whether the deployment is the default\ndevelopment deployment for the member that creates it (i.e. the one used\nby default when running `npx convex dev`).\nThis option can’t be set on other types of deployments.\nIf not provided, defaults to `true` when creating a dev or prod\ndeployment without providing a reference (and defaults to `false`\notherwise)."
           },
           "reference": {
             "type": [
@@ -1702,6 +1922,21 @@
           }
         }
       },
+      "PlatformCreateTeamArgs": {
+        "type": "object",
+        "required": [
+          "defaultRegion",
+          "name"
+        ],
+        "properties": {
+          "defaultRegion": {
+            "$ref": "#/components/schemas/RegionName"
+          },
+          "name": {
+            "$ref": "#/components/schemas/ProposedTeamName"
+          }
+        }
+      },
       "PlatformCustomDomainResponse": {
         "type": "object",
         "required": [
@@ -1811,6 +2046,17 @@
             ],
             "format": "int64",
             "description": "Timestamp in milliseconds when this token was last used (if ever)."
+          },
+          "managedBy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedBy",
+                "description": "The external integration that manages this deploy key, if any."
+              }
+            ]
           },
           "name": {
             "type": "string",
@@ -2150,6 +2396,18 @@
           }
         ]
       },
+      "PlatformTransferDeploymentArgs": {
+        "type": "object",
+        "required": [
+          "destinationProjectId"
+        ],
+        "properties": {
+          "destinationProjectId": {
+            "$ref": "#/components/schemas/ProjectId"
+          }
+        },
+        "additionalProperties": false
+      },
       "PlatformUpdateDeploymentArgs": {
         "type": "object",
         "properties": {
@@ -2197,6 +2455,12 @@
         "type": "string"
       },
       "ProjectSlug": {
+        "type": "string"
+      },
+      "ProposedTeamName": {
+        "type": "string"
+      },
+      "ReferralCode": {
         "type": "string"
       },
       "RegionName": {
@@ -2250,6 +2514,88 @@
           "role": {
             "$ref": "#/components/schemas/Role",
             "description": "The role of the team member"
+          }
+        }
+      },
+      "TeamName": {
+        "type": "string"
+      },
+      "TeamResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "suspended",
+          "referralCode"
+        ],
+        "properties": {
+          "creator": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MemberId"
+              }
+            ]
+          },
+          "defaultRegion": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RegionName"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/TeamId"
+          },
+          "managedBy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedBy"
+              }
+            ]
+          },
+          "managedByUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "$ref": "#/components/schemas/TeamName"
+          },
+          "referralCode": {
+            "$ref": "#/components/schemas/ReferralCode"
+          },
+          "referredBy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TeamId"
+              }
+            ]
+          },
+          "slug": {
+            "$ref": "#/components/schemas/TeamSlug"
+          },
+          "ssoLoginId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "suspended": {
+            "type": "boolean"
           }
         }
       },

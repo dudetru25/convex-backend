@@ -6,7 +6,6 @@ import {
 import {
   ChevronUpIcon,
   ChevronDownIcon,
-  QuestionMarkCircledIcon,
   ArrowRightIcon,
 } from "@radix-ui/react-icons";
 import { Button } from "@ui/Button";
@@ -23,11 +22,12 @@ import {
 } from "generatedApi";
 import { captureMessage } from "@sentry/nextjs";
 import startCase from "lodash/startCase";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useDeploymentById } from "api/deployments";
 import { BackupIdentifier } from "elements/BackupIdentifier";
 import { TeamMemberLink } from "elements/TeamMemberLink";
 import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { formatUsd } from "@common/lib/utils";
 import { useProjectById } from "api/projects";
 
@@ -256,17 +256,27 @@ function EntryAction({
       return <span>updated the team</span>;
     case "deleteTeam":
       return <span>deleted the team</span>;
-    case "createDeployment":
-      if (!metadata.current?.type || !metadata.current?.projectId) {
+    case "createDeployment": {
+      const deploymentType =
+        metadata.current?.deploymentType ?? metadata.current?.type;
+      if (!deploymentType || !metadata.current?.projectId) {
         captureMessage(`Found malformed metadata for ${action}`, "error");
         return <UnhandledAction action={action} />;
       }
 
       return (
         <span>
-          created a{" "}
-          <span className="font-semibold">{metadata.current.type}</span>{" "}
-          deployment for{" "}
+          created a <span className="font-semibold">{deploymentType}</span>{" "}
+          deployment
+          {metadata.current?.reference && (
+            <>
+              {" "}
+              <span className="font-semibold">
+                {metadata.current.reference}
+              </span>
+            </>
+          )}{" "}
+          for{" "}
           <ProjectLink
             projectId={metadata.current.projectId}
             metadata={metadata}
@@ -274,16 +284,27 @@ function EntryAction({
           />
         </span>
       );
-    case "deleteDeployment":
-      if (!metadata.previous?.type || !metadata.previous?.projectId) {
+    }
+    case "deleteDeployment": {
+      const deploymentType =
+        metadata.previous?.deploymentType ?? metadata.previous?.type;
+      if (!deploymentType || !metadata.previous?.projectId) {
         captureMessage(`Found malformed metadata for ${action}`, "error");
         return <UnhandledAction action={action} />;
       }
       return (
         <span>
-          deleted a{" "}
-          <span className="font-semibold">{metadata.previous.type}</span>{" "}
-          deployment for{" "}
+          deleted a <span className="font-semibold">{deploymentType}</span>{" "}
+          deployment
+          {metadata.previous?.reference && (
+            <>
+              {" "}
+              <span className="font-semibold">
+                {metadata.previous.reference}
+              </span>
+            </>
+          )}{" "}
+          for{" "}
           <ProjectLink
             projectId={metadata.previous.projectId}
             metadata={metadata}
@@ -291,6 +312,7 @@ function EntryAction({
           />
         </span>
       );
+    }
     case "updateDeployment": {
       return (
         <span>
@@ -603,6 +625,39 @@ function EntryAction({
     case "retrieveProjectWorkosEnvironmentCredentials": {
       return <span>retrieved project WorkOS environment credentials</span>;
     }
+    case "transferDeployment": {
+      return (
+        <span>
+          transferred deployment{" "}
+          <span className="font-semibold">
+            {metadata.previous?.reference ?? "unknown"}
+          </span>{" "}
+          from{" "}
+          {metadata.previous?.projectId ? (
+            <ProjectLink
+              projectId={metadata.previous.projectId}
+              metadata={metadata}
+              team={team}
+            />
+          ) : (
+            <span className="font-semibold">unknown project</span>
+          )}{" "}
+          to{" "}
+          {metadata.current?.projectId ? (
+            <ProjectLink
+              projectId={metadata.current.projectId}
+              metadata={metadata}
+              team={team}
+            />
+          ) : (
+            <span className="font-semibold">unknown project</span>
+          )}
+        </span>
+      );
+    }
+    case "receiveDeployment": {
+      return <span>received a deployment from another project</span>;
+    }
     default:
       action satisfies never;
       captureMessage(`Unhandled audit log action: ${action}`, "error");
@@ -630,7 +685,7 @@ export function ProjectLink({
   return project ? (
     <Link
       href={`/t/${team.slug}/${project.slug}/settings`}
-      className="font-semibold text-content-link hover:underline"
+      className="font-semibold"
       target="_blank"
     >
       {projectName}
@@ -848,7 +903,7 @@ function DeploymentSettingsLink({
     <>
       <Link
         href={`/t/${team.slug}/${project.slug}/${deployment.name}/settings${urlSuffix}`}
-        className="font-semibold text-content-link hover:underline"
+        className="font-semibold"
         target="_blank"
       >
         {deploymentDisplayName(deployment)}
@@ -873,7 +928,7 @@ function ProjectSettingsLink({
   return (
     <Link
       href={`/t/${team.slug}/${project.slug}/settings`}
-      className="font-semibold text-content-link hover:underline"
+      className="font-semibold"
       target="_blank"
     >
       {project.name}
@@ -960,9 +1015,7 @@ function SpendingLimitLine({
     <div className="contents">
       <header className="mr-2 flex items-center gap-1">
         <div className="text-content-secondary">{label}</div>
-        <Tooltip tip={tooltip} side="top">
-          <QuestionMarkCircledIcon className="text-content-tertiary" />
-        </Tooltip>
+        <HelpTooltip tipSide="top">{tooltip}</HelpTooltip>
       </header>
       <SpendingValue valueCents={previousValue} />
       <ArrowRightIcon className="text-content-tertiary" />

@@ -191,13 +191,14 @@ impl FastForwardIndexWorker {
         let fast_forward_ts = *tx.begin_timestamp();
         let expected_version = Worker::current_version(&mut tx);
 
-        for index_doc in IndexModel::new(&mut tx).get_all_indexes().await? {
-            let (index_id, index_metadata) = index_doc.into_id_and_value();
+        IndexModel::new(&mut tx).take_indexes_dependency()?;
+        for index_doc in tx.index.index_registry().clone().all_indexes() {
+            let index_id = index_doc.id();
             let internal_id = index_id.internal_id();
 
-            let TabletIndexMetadata { name, config } = index_metadata;
+            let TabletIndexMetadata { name, config } = &**index_doc;
 
-            let Some((ts, version)) = Worker::snapshot_info(&config) else {
+            let Some((ts, version)) = Worker::snapshot_info(config) else {
                 continue;
             };
 
@@ -236,7 +237,7 @@ impl FastForwardIndexWorker {
                 .replace(worker_meta_doc_id, worker_meta.try_into()?)
                 .await?;
 
-            indexes_fast_forwarded.push((name, ts));
+            indexes_fast_forwarded.push((name.clone(), ts));
         }
         if !indexes_fast_forwarded.is_empty() {
             tracing::info!("Fast-forwarding {indexes_fast_forwarded:?} to {fast_forward_ts}");
@@ -278,7 +279,7 @@ pub async fn load_metadata_fast_forward_ts(
     let metadata_index_internal_id = registry.get_enabled(&metadata_index_id).unwrap().id();
 
     let id_value = ConvexValue::String(index.internal_id().to_string().try_into()?);
-    let id_value_bytes = values_to_bytes::<false>(&[Some(id_value)]);
+    let id_value_bytes = values_to_bytes(&[Some(id_value)]);
     let interval = Interval::prefix(BinaryKey::from(id_value_bytes));
 
     let stream = snapshot.index_scan(

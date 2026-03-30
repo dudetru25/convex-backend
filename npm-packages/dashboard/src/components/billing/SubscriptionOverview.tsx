@@ -22,8 +22,7 @@ import {
   OrbSubscriptionResponse,
   TeamResponse,
 } from "generatedApi";
-import { Tooltip } from "@ui/Tooltip";
-import { QuestionMarkCircledIcon } from "@radix-ui/react-icons";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { Callout } from "@ui/Callout";
 import { formatUsd } from "@common/lib/utils";
 import { planNameMap } from "components/billing/planCards/PlanCard";
@@ -115,7 +114,7 @@ export function SubscriptionOverview({
             team={team}
             hasAdminPermissions={hasAdminPermissions}
           />
-          {!team.managedBy && (
+          {team.managedBy !== "vercel" && (
             <>
               <hr />
               <BillingContactForm
@@ -139,9 +138,11 @@ export function SubscriptionOverview({
           )}
         </Sheet>
       )}
-      {!team.managedBy && invoices && (invoices.length > 0 || subscription) && (
-        <Invoices invoices={invoices} />
-      )}
+      {team.managedBy !== "vercel" &&
+        invoices &&
+        (invoices.length > 0 || subscription) && (
+          <Invoices invoices={invoices} />
+        )}
     </>
   );
 }
@@ -305,9 +306,7 @@ function CostLabel({
     <div className="flex flex-col gap-0.5">
       <span className="flex items-center gap-1 text-content-secondary">
         {label}
-        <Tooltip tip={tooltip} side="top">
-          <QuestionMarkCircledIcon className="text-content-tertiary" />
-        </Tooltip>
+        <HelpTooltip tipSide="top">{tooltip}</HelpTooltip>
       </span>
       <span className="flex items-baseline gap-1">
         {/* eslint-disable-next-line no-restricted-syntax */}
@@ -459,7 +458,7 @@ function BillingAddressForm({
   return (
     <div className="flex flex-col gap-4" ref={ref}>
       <h4>Billing Address</h4>
-      {team.managedBy && (
+      {team.managedBy === "vercel" && (
         <Callout>
           <div>
             This team is managed by {startCase(team.managedBy)}. You may add a
@@ -606,7 +605,7 @@ function PaymentMethodForm({
   return (
     <div className="flex flex-col gap-4">
       <h4>Payment Method</h4>
-      {team.managedBy && (
+      {team.managedBy === "vercel" && (
         <Callout>
           <div>
             This team is managed by {startCase(team.managedBy)}. You may add a

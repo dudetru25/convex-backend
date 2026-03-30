@@ -4,7 +4,7 @@ description = "Client library for Convex (convex.dev)"
 authors = ["Convex, Inc. <no-reply@convex.dev>"]
 version = "0.10.3"
 edition = "2021"
-rust-version = "1.80.1"
+rust-version = "1.85"
 resolver = "2"
 license = "Apache-2.0"
 repository = "https://github.com/get-convex/convex-rs"
@@ -16,12 +16,7 @@ native-tls = ["tokio-tungstenite/native-tls"]
 native-tls-vendored = ["tokio-tungstenite/native-tls-vendored"]
 rustls-tls-native-roots = ["tokio-tungstenite/rustls-tls-native-roots"]
 rustls-tls-webpki-roots = ["tokio-tungstenite/rustls-tls-webpki-roots"]
-testing = [
-    "convex_sync_types/testing",
-    "proptest",
-    "proptest-derive",
-    "parking_lot",
-]
+testing = ["convex_sync_types/testing", "proptest", "proptest-derive", "parking_lot"]
 
 [dependencies]
 anyhow = { workspace = true }

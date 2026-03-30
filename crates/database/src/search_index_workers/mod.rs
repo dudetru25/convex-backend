@@ -17,9 +17,11 @@ use common::{
         SEARCH_WORKER_PASSIVE_PAGES_PER_SECOND,
     },
     runtime::Runtime,
+    types::RepeatableTimestamp,
 };
 use rand::Rng;
-use value::ResolvedDocumentId;
+
+use crate::table_iteration::TableScanCursor;
 
 pub const MAX_BACKOFF: Duration = Duration::from_secs(10 * 60);
 
@@ -77,6 +79,6 @@ pub async fn timeout_with_jitter<RT: Runtime>(rt: &RT, duration: Duration) {
 
 #[derive(Debug)]
 pub struct MultiSegmentBackfillResult {
-    pub new_cursor: Option<ResolvedDocumentId>,
-    pub is_backfill_complete: bool,
+    pub new_cursor: TableScanCursor,
+    pub new_ts: RepeatableTimestamp,
 }

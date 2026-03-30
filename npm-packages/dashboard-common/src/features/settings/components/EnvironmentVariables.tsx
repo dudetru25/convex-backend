@@ -1,4 +1,4 @@
-import { Form, Formik, getIn, useFormikContext } from "formik";
+import { Form, Formik, FormikTouched, getIn, useFormikContext } from "formik";
 
 import {
   ClipboardCopyIcon,
@@ -96,11 +96,19 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
     newVars: initialFormValues ?? [],
     deletedVars: [],
   };
+  const initialTouched = {
+    newVars: initialValues.newVars.map(({ name, value }) =>
+      name !== "" || value !== ""
+        ? ({ name: true, value: true } as FormikTouched<T>)
+        : ({} as FormikTouched<T>),
+    ),
+  } as FormikTouched<FormState<T>>;
 
   return (
     <Formik
       enableReinitialize
       initialValues={initialValues}
+      initialTouched={initialTouched}
       onSubmit={async (values, helpers) => {
         await updateEnvironmentVariables(
           values.newVars,
@@ -406,6 +414,7 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
       <div className="flex min-h-(--env-var-contents-height) min-w-0 items-center gap-1 font-mono">
         <Button
           tip={showValue ? "Hide" : "Show"}
+          aria-label={showValue ? "Hide" : "Show"}
           type="button"
           onClick={() => setShowValue(!showValue)}
           variant="neutral"
@@ -436,6 +445,7 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
               ? "You do not have permission to edit environment variables."
               : "Edit"
           }
+          aria-label="Edit"
           type="button"
           onClick={() => onEdit()}
           variant="neutral"
@@ -444,6 +454,7 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
         />
         <Button
           tip="Copy Value"
+          aria-label="Copy Value"
           type="button"
           onClick={async () => {
             await copyTextToClipboard(environmentVariable.value);
@@ -462,6 +473,7 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
               ? "You do not have permission to delete environment variables."
               : "Delete"
           }
+          aria-label="Delete"
           type="button"
           onClick={() => onDelete()}
           variant="danger"
@@ -539,7 +551,6 @@ const EnvVarName = z
 
 const EnvVarValue = z
   .string()
-  .min(1, "Environment variable value is required.")
   .max(8192, "Environment variable value cannot be larger than 8KB");
 
 function EditEnvVarForm<T extends BaseEnvironmentVariable>({
@@ -907,6 +918,7 @@ function NewEnvVar<T extends BaseEnvironmentVariable>({
 
       <Button
         tip="Remove"
+        aria-label="Remove"
         type="button"
         onClick={() => {
           onDelete();
@@ -945,6 +957,7 @@ function EnvVarNameInput({
     <TextInput
       id={id}
       className="font-mono"
+      label="Name"
       labelHidden
       disabled={formState.isSubmitting}
       {...formState.getFieldProps(formKey)}
@@ -977,6 +990,8 @@ function EnvVarValueInput({
   const hasLeadingOrTrailingWhitespace =
     value.length > 0 && value !== value.trim();
   const hasReturnCharacter = value.includes("\n");
+  const emptyStringWarning =
+    touched && value === "" ? "This value is an empty string." : "";
 
   // Build whitespace warning message
   let whitespaceWarning = "";
@@ -1026,12 +1041,17 @@ function EnvVarValueInput({
           hint: error,
           hintStyle: "error" as const,
         }
-      : whitespaceWarning
+      : emptyStringWarning
         ? {
-            hint: whitespaceWarning,
+            hint: emptyStringWarning,
             hintStyle: "warning" as const,
           }
-        : { hint: null, hintStyle: null };
+        : whitespaceWarning
+          ? {
+              hint: whitespaceWarning,
+              hintStyle: "warning" as const,
+            }
+          : { hint: null, hintStyle: null };
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1050,6 +1070,7 @@ function EnvVarValueInput({
         <textarea
           ref={textareaRef}
           id={id}
+          aria-label="Value"
           className={cn(
             "block min-h-(--env-var-contents-height) w-full",
             "resize-none",

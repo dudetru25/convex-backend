@@ -10,7 +10,6 @@ use cmd_util::env::env_config;
 use common::{
     bootstrap_model::index::{
         vector_index::{
-            VectorIndexBackfillState,
             VectorIndexSnapshot,
             VectorIndexSnapshotData,
             VectorIndexSpec,
@@ -24,6 +23,7 @@ use common::{
         MULTI_SEGMENT_FULL_SCAN_THRESHOLD_KB,
         VECTOR_INDEX_SIZE_SOFT_LIMIT,
     },
+    persistence::PersistenceReader,
     runtime::Runtime,
     types::{
         unchecked_repeatable_ts,
@@ -108,6 +108,7 @@ const TABLE_NAMESPACE: TableNamespace = TableNamespace::test_user();
 struct Scenario<RT: Runtime> {
     rt: RT,
     database: Database<RT>,
+    reader: Arc<dyn PersistenceReader>,
     search_storage: Arc<dyn Storage>,
     searcher: Arc<dyn Searcher>,
 }
@@ -115,6 +116,7 @@ struct Scenario<RT: Runtime> {
 impl<RT: Runtime> Scenario<RT> {
     async fn new(rt: RT) -> anyhow::Result<Self> {
         let DbFixtures {
+            tp,
             db,
             searcher,
             search_storage,
@@ -133,6 +135,7 @@ impl<RT: Runtime> Scenario<RT> {
         let self_ = Self {
             rt,
             database: db,
+            reader: tp.reader(),
             search_storage,
             searcher,
         };
@@ -150,6 +153,7 @@ impl<RT: Runtime> Scenario<RT> {
         new_vector_flusher_for_tests(
             self.rt.clone(),
             self.database.clone(),
+            self.reader.clone(),
             self.search_storage.clone(),
             *VECTOR_INDEX_SIZE_SOFT_LIMIT,
             *MULTI_SEGMENT_FULL_SCAN_THRESHOLD_KB,
@@ -227,6 +231,7 @@ impl<RT: Runtime> Scenario<RT> {
         backfill_vector_indexes(
             self.rt.clone(),
             self.database.clone(),
+            self.reader.clone(),
             self.search_storage.clone(),
         )
         .await?;
@@ -270,16 +275,14 @@ impl<RT: Runtime> Scenario<RT> {
         let mut tx = self.database.begin_system().await?;
         let mut model = IndexModel::new(&mut tx);
         Ok(model
-            .get_all_indexes()
-            .await?
-            .into_iter()
+            .get_all_indexes()?
             .filter_map(|idx| {
                 if let IndexConfig::Vector {
                     spec,
                     on_disk_state,
-                } = idx.config.clone()
+                } = &idx.config
                 {
-                    Some((spec, on_disk_state))
+                    Some((spec.clone(), on_disk_state.clone()))
                 } else {
                     None
                 }
@@ -773,7 +776,6 @@ async fn test_index_backfill_is_incremental(rt: TestRuntime) -> anyhow::Result<(
 
     let flusher = scenario.new_backfill_flusher(incremental_index_size);
 
-    let mut backfill_ts = None;
     for i in 0..num_parts {
         // Do a backfill iteration
         flusher.step().await?;
@@ -786,24 +788,16 @@ async fn test_index_backfill_is_incremental(rt: TestRuntime) -> anyhow::Result<(
         // Verify that on_disk_state remains in backfilling until last iteration
         // and each iteration adds a new segment.
         if i < num_parts - 1 {
-            must_let!(let VectorIndexState::Backfilling(
-                VectorIndexBackfillState {
-                    segments,
-                    backfill_snapshot_ts,
-                    ..
-                }) = on_disk_state);
-            assert_eq!(segments.len(), (i + 1) as usize);
-            backfill_ts = backfill_snapshot_ts;
+            must_let!(let VectorIndexState::Backfilling(backfill_state) = on_disk_state);
+            assert_eq!(backfill_state.segments.len(), (i + 1) as usize);
         } else {
             must_let!(let VectorIndexState::Backfilled {
                 snapshot: VectorIndexSnapshot {
                     data,
-                    ts,
+                    ..
                 },
                 ..
             } = on_disk_state);
-            // Verify snapshot timestamp matches backfill timestamp
-            assert_eq!(backfill_ts.unwrap(), ts);
             must_let!(let VectorIndexSnapshotData::MultiSegment(segments) = data);
             assert_eq!(segments.len(), (num_parts) as usize);
         }

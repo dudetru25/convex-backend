@@ -24,7 +24,9 @@ export default defineSchema({
     created: v.optional(v.string()),
     duration: v.optional(v.number()),
     authorId: v.optional(v.id("users")),
-  }).index("by_task_list_id", ["taskListId"]),
+  })
+    .index("by_task_list_id", ["taskListId"])
+    .index("by_status", ["status"]),
   taskLists: defineTable({}),
   messages: defineTable({
     body: v.string(),
@@ -35,13 +37,16 @@ export default defineSchema({
     type: v.string(),
   }),
   channels: defineTable({}),
-  purchases: defineTable({
-    buyer: v.string(),
-    value: v.number(),
-  }).index("by_buyer", ["buyer"]),
-  events: defineTable({
-    attendeeIds: v.array(v.id("users")),
-  }),
+  grades: defineTable({
+    studentId: v.string(),
+    subject: v.string(),
+    grade: v.number(),
+  }).index("by_studentId", ["studentId"]),
+  events: defineTable({}),
+  attendees: defineTable({
+    eventId: v.id("events"),
+    userId: v.id("users"),
+  }).index("by_eventId", ["eventId"]),
   users: defineTable({
     name: v.optional(v.string()),
     preferencesId: v.id("preferences"),

@@ -1,4 +1,5 @@
 #![feature(try_blocks)]
+#![feature(try_blocks_heterogeneous)]
 #![feature(iterator_try_collect)]
 #![feature(coroutines)]
 #![feature(exhaustive_patterns)]
@@ -53,7 +54,7 @@ use file_storage::{
 };
 use function_runner::{
     in_process_function_runner::InProcessFunctionRunner,
-    server::InstanceStorage,
+    server::DeploymentStorage,
     FunctionRunner,
 };
 use governor::Quota;
@@ -61,7 +62,6 @@ use http_client::CachedHttpClient;
 use model::{
     initialize_application_system_tables,
     virtual_system_mapping,
-    REFRESHABLE_APP_TABLES,
 };
 use node_executor::{
     local::LocalNodeExecutor,
@@ -163,7 +163,6 @@ pub async fn make_app(
         searcher.clone(),
         preempt_tx.clone(),
         virtual_system_mapping().clone(),
-        REFRESHABLE_APP_TABLES.clone(),
         Arc::new(new_rate_limiter(
             runtime.clone(),
             Quota::per_second(*DOCUMENT_RETENTION_RATE_LIMIT),
@@ -221,7 +220,7 @@ pub async fn make_app(
             config.convex_origin_url()?,
             runtime.clone(),
             persistence.reader(),
-            InstanceStorage {
+            DeploymentStorage {
                 files_storage: application_storage.files_storage.clone(),
                 modules_storage: application_storage.modules_storage.clone(),
             },

@@ -342,7 +342,9 @@ fn start_local_usher(logs: &LogInterleaver, release: bool) -> anyhow::Result<Chi
             .arg("--port")
             .arg(USHER_PORT.to_string())
             .arg("--register-service")
-            .arg("convex-backend-carnitas=127.0.0.1:8000,grpc.port=7999")
+            .arg("convex-conductor-0=127.0.0.1:8000,grpc.port=7999")
+            .arg("--partition-mapping")
+            .arg("carnitas=0")
             .arg("--region=local")
             .kill_on_drop(true),
     )
@@ -470,7 +472,7 @@ async fn provision(
             let funrun_handle = udf_use_funrun
                 .then(|| start_local_funrun(logs, release, &db_path))
                 .transpose()?;
-            // Give it 15 seconds to start up (30 retries at 500ms)
+            // Give it ~15 seconds to start up (5 retries with 500ms exponential backoff)
             wait_for_http_health(
                 &USHER_INSTANCE_URL.parse()?,
                 Some("0.0.0-backendharness"),
@@ -478,7 +480,7 @@ async fn provision(
                 // admin key. Right now the admin key is static, so either we use a static name
                 // which will always match, or we refactor to allow dynamic admin keys here.
                 None,
-                30,
+                5,
                 Duration::from_millis(500),
             )
             .await
@@ -529,7 +531,7 @@ async fn provision(
                     .kill_on_drop(true),
             )?;
             let backend_url = "http://127.0.0.1:8000".to_string();
-            // Give it 15 seconds to start up (30 retries at 500ms)
+            // Give it ~15 seconds to start up (5 retries with 500ms exponential backoff)
             wait_for_http_health(
                 &backend_url.parse()?,
                 Some("0.0.0-backendharness"),
@@ -537,7 +539,7 @@ async fn provision(
                 // admin key. Right now the admin key is static, so either we use a static name
                 // which will always match, or we refactor to allow dynamic admin keys here.
                 None,
-                30,
+                5,
                 Duration::from_millis(500),
             )
             .await
@@ -582,7 +584,7 @@ async fn provision(
             let backend_handle =
                 logs.spawn_with_prefixed_logs("docker up".into(), &mut docker_up_cmd)?;
             let backend_url = "http://127.0.0.1:8000".to_string();
-            // Give it 15 seconds to start up (30 retries at 500ms)
+            // Give it ~15 seconds to start up (5 retries with 500ms exponential backoff)
             wait_for_http_health(
                 &backend_url.parse()?,
                 Some("0.0.0-backendharness"),
@@ -590,7 +592,7 @@ async fn provision(
                 // admin key. Right now the admin key is static, so either we use a static name
                 // which will always match, or we refactor to allow dynamic admin keys here.
                 None,
-                30,
+                5,
                 Duration::from_millis(500),
             )
             .await
@@ -637,7 +639,7 @@ async fn provision_from_big_brain(
     provision_request: &ProvisionRequest,
     metric_label: StaticMetricLabel,
 ) -> anyhow::Result<DeploymentSelector> {
-    let result: anyhow::Result<_> = try {
+    let result: anyhow::Result<_> = try bikeshed anyhow::Result<_> {
         let ProvisionHostCredentials {
             provision_host,
             access_token,
@@ -787,7 +789,7 @@ async fn deploy(
                     .arg(url)
             },
         };
-        let push_result: anyhow::Result<()> = try {
+        let push_result: anyhow::Result<()> = try bikeshed anyhow::Result<_> {
             logs.spawn_with_prefixed_logs(
                 "npx convex deploy".into(),
                 push_command.current_dir(package_dir),
@@ -815,7 +817,7 @@ async fn delete_project(
     tracing::info!("Tearing down project");
     let big_brain_client = BigBrainClient::new(provision_host.into(), access_token);
 
-    let result: anyhow::Result<()> = try {
+    let result: anyhow::Result<()> = try bikeshed anyhow::Result<_> {
         let deployment_name = get_configured_deployment_name(package_dir)?;
         let project_id = big_brain_client
             .get_project_and_team_for_deployment(deployment_name)

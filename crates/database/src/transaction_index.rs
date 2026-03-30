@@ -34,6 +34,7 @@ use common::{
         SearchVersion,
     },
     runtime,
+    try_anyhow,
     types::{
         DatabaseIndexUpdate,
         DatabaseIndexValue,
@@ -129,8 +130,9 @@ impl TransactionIndex {
         index_registry: &IndexRegistry,
         database_index_updates: &'a OrdMap<IndexId, TransactionIndexMap>,
         range_request: &'a RangeRequest,
-    ) -> anyhow::Result<
-        impl DoubleEndedIterator<Item = (IndexKeyBytes, Option<ResolvedDocument>)> + 'a,
+    ) -> Result<
+        impl DoubleEndedIterator<Item = (IndexKeyBytes, Option<PackedDocument>)> + 'a,
+        anyhow::Error,
     > {
         let iter = match index_registry.require_enabled(
             &range_request.index_name,
@@ -223,7 +225,7 @@ impl TransactionIndex {
                 .next()
                 .unwrap_or_else(|| Err(anyhow::anyhow!("fewer persistence results than expected")));
 
-            let result = try {
+            let result = try_anyhow!({
                 let (snapshot_result_vec, cursor) = snapshot_result?;
                 let mut snapshot_it = snapshot_result_vec.into_iter();
                 let pending_it = Self::pending_iter_for_request(
@@ -312,7 +314,7 @@ impl TransactionIndex {
                     ))?;
                 }
                 (range_results, cursor)
-            };
+            });
             results.push(result);
         }
         assert_eq!(results.len(), batch_size);
@@ -351,7 +353,7 @@ impl TransactionIndex {
             .index_registry
             .require_enabled(&index_name, &query.printable_index_name()?)?;
         let empty = vec![];
-        let pending_updates = self.text_index_updates.get(&index.id).unwrap_or(&empty);
+        let pending_updates = self.text_index_updates.get(&index.id()).unwrap_or(&empty);
         let results = self
             .text_index_snapshot
             .search(&index, query, version, pending_updates)
@@ -388,13 +390,13 @@ impl TransactionIndex {
             fetch_result,
         ) in ranges.iter().zip(fetch_results)
         {
-            let result: anyhow::Result<_> = try {
+            let result: anyhow::Result<_> = try_anyhow!({
                 let (documents, fetch_cursor) = fetch_result?;
                 let mut total_bytes = 0;
                 let mut within_bytes_limit = true;
                 let out: Vec<_> = documents
                     .into_iter()
-                    .map(|(key, doc, ts)| (key, doc.unpack(), ts))
+                    .map(|(key, doc, ts)| (key, doc.pack(), ts))
                     .take(*max_size)
                     .take_while(|(_, document, _)| {
                         within_bytes_limit = total_bytes < *TRANSACTION_MAX_READ_SIZE_BYTES;
@@ -423,7 +425,7 @@ impl TransactionIndex {
                     ))?;
                 }
                 IndexRangeResponse { page: out, cursor }
-            };
+            });
             results.push(result);
         }
         assert_eq!(results.len(), batch_size);
@@ -570,7 +572,7 @@ impl TransactionIndex {
             // Add the update to all affected text search indexes.
             for index in self.index_registry.text_indexes_by_table(id.tablet_id) {
                 self.text_index_updates
-                    .entry(index.id)
+                    .entry(index.id())
                     .or_default()
                     .push(DocumentUpdate {
                         id,
@@ -681,10 +683,10 @@ impl TransactionIndexMap {
     pub fn range(
         &self,
         interval: &Interval,
-    ) -> impl DoubleEndedIterator<Item = (IndexKeyBytes, Option<ResolvedDocument>)> + use<'_> {
+    ) -> impl DoubleEndedIterator<Item = (IndexKeyBytes, Option<PackedDocument>)> + use<'_> {
         self.inner
             .range(interval)
-            .map(|(k, v)| (IndexKeyBytes(k.clone()), v.as_ref().map(|v| v.unpack())))
+            .map(|(k, v)| (IndexKeyBytes(k.clone()), v.clone()))
     }
 
     pub fn insert(&mut self, k: IndexKeyBytes, v: Option<&ResolvedDocument>) {
@@ -1213,7 +1215,7 @@ mod tests {
             result,
             vec![(
                 doc.index_key(&IndexedFields::by_id()[..]).to_bytes(),
-                doc,
+                PackedDocument::pack(&doc),
                 WriteTimestamp::Pending
             )],
         );
@@ -1359,17 +1361,17 @@ mod tests {
             vec![
                 (
                     alice.index_key(&by_id_fields[..]).to_bytes(),
-                    alice.clone(),
+                    PackedDocument::pack(&alice),
                     WriteTimestamp::Committed(now1)
                 ),
                 (
                     zack.index_key(&by_id_fields[..]).to_bytes(),
-                    zack.clone(),
+                    PackedDocument::pack(&zack),
                     WriteTimestamp::Committed(now3)
                 ),
                 (
                     david.index_key(&by_id_fields[..]).to_bytes(),
-                    david.clone(),
+                    PackedDocument::pack(&david),
                     WriteTimestamp::Pending
                 ),
             ]
@@ -1393,17 +1395,17 @@ mod tests {
             vec![
                 (
                     alice.index_key(&by_name_fields[..]).to_bytes(),
-                    alice.clone(),
+                    PackedDocument::pack(&alice),
                     WriteTimestamp::Committed(now1)
                 ),
                 (
                     david.index_key(&by_name_fields[..]).to_bytes(),
-                    david.clone(),
+                    PackedDocument::pack(&david),
                     WriteTimestamp::Pending
                 ),
                 (
                     zack.index_key(&by_name_fields[..]).to_bytes(),
-                    zack.clone(),
+                    PackedDocument::pack(&zack),
                     WriteTimestamp::Committed(now3)
                 ),
             ]
@@ -1431,12 +1433,12 @@ mod tests {
             vec![
                 (
                     alice.index_key(&by_name_fields[..]).to_bytes(),
-                    alice.clone(),
+                    PackedDocument::pack(&alice),
                     WriteTimestamp::Committed(now1)
                 ),
                 (
                     david.index_key(&by_name_fields[..]).to_bytes(),
-                    david.clone(),
+                    PackedDocument::pack(&david),
                     WriteTimestamp::Pending
                 ),
             ]
@@ -1461,17 +1463,17 @@ mod tests {
             vec![
                 (
                     zack.index_key(&by_name_fields[..]).to_bytes(),
-                    zack,
+                    PackedDocument::pack(&zack),
                     WriteTimestamp::Committed(now3)
                 ),
                 (
                     david.index_key(&by_name_fields[..]).to_bytes(),
-                    david,
+                    PackedDocument::pack(&david),
                     WriteTimestamp::Pending
                 ),
                 (
                     alice.index_key(&by_name_fields[..]).to_bytes(),
-                    alice,
+                    PackedDocument::pack(&alice),
                     WriteTimestamp::Committed(now1)
                 ),
             ]
@@ -1558,7 +1560,7 @@ mod tests {
             results,
             vec![(
                 doc.index_key(&IndexedFields::by_id()[..]).to_bytes(),
-                doc.clone(),
+                PackedDocument::pack(&doc),
                 WriteTimestamp::Pending,
             )],
         );
@@ -1600,7 +1602,7 @@ mod tests {
                 updated_doc
                     .index_key(&IndexedFields::by_id()[..])
                     .to_bytes(),
-                updated_doc.clone(),
+                PackedDocument::pack(&updated_doc),
                 WriteTimestamp::Pending,
             )],
         );

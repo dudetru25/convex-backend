@@ -22,7 +22,7 @@ import {
   TeamResponse,
   TeamEntitlementsResponse,
 } from "generatedApi";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
 import { useHasProjectAdminPermissions } from "api/roles";
@@ -53,6 +53,26 @@ export function Backups({
   const canPerformActions =
     deployment.deploymentType !== "prod" || hasAdminPermissions;
 
+  if (deployment.kind === "cloud" && deployment.class.startsWith("d")) {
+    return (
+      <div className="flex h-full flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <h3 className="min-w-fit">Backup & Restore</h3>
+        </div>
+        <Callout className="max-w-prose">
+          <span>
+            Backups for {deployment.class.toUpperCase()} deployments are
+            produced every 12 hours. Contact the Convex team to restore from a
+            backup{" "}
+            <Link href="https://docs.convex.dev/database/backup-restore">
+              Learn more about backups
+            </Link>
+          </span>
+        </Callout>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -60,11 +80,8 @@ export function Backups({
         <span className="text-sm">
           Use this page to automatically or manually backup and restore your
           deployment data.{" "}
-          <Link
-            href="https://docs.convex.dev/database/backup-restore"
-            className="text-content-link"
-          >
-            Learn more
+          <Link href="https://docs.convex.dev/database/backup-restore">
+            Learn more about backups
           </Link>
         </span>
       </div>
@@ -106,6 +123,13 @@ export function Backups({
             periodicBackupsEnabled={periodicBackupsEnabled}
             maxCloudBackups={maxCloudBackups}
           />
+          <p className="text-xs text-content-secondary">
+            Backups generation incurs{" "}
+            <Link href="https://docs.convex.dev/database/backup-restore#how-are-they-priced">
+              storage and bandwidth usage
+            </Link>
+            .
+          </p>
         </Sheet>
 
         <div className="flex flex-col gap-4 pb-8 xl:grow xl:pb-0">
@@ -121,7 +145,6 @@ export function Backups({
                   your last snapshot{" "}
                   <Link
                     href={`/t/${team.slug}/${project?.slug}/${deployment.name}/settings/snapshots`}
-                    className="text-content-link hover:underline"
                   >
                     here
                   </Link>
@@ -160,14 +183,14 @@ function BackupProCallouts({
         <LocalDevCallout
           className="mt-6 flex-col"
           tipText="Tip: Run this to enable automatic backups locally:"
-          command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement periodic_backups_enabled --team-id ${team?.id} --reason "local" true --for-real`}
+          command={`cargo run --bin big-brain-tool -- --dev entitlement grant --team-entitlement periodic_backups_enabled --team-id ${team?.id} --reason "local" true --for-real`}
         />
       )}
       {maxCloudBackups <= 2 && (
         <LocalDevCallout
           className="mt-6 flex-col"
           tipText="Tip: Run this to increase the backup limit locally:"
-          command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement max_cloud_backups --team-id ${team?.id} --reason "local" 50 --for-real`}
+          command={`cargo run --bin big-brain-tool -- --dev entitlement grant --team-entitlement max_cloud_backups --team-id ${team?.id} --reason "local" 50 --for-real`}
         />
       )}
     </>

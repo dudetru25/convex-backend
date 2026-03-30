@@ -1,13 +1,18 @@
-import { Command } from "@commander-js/extra-typings";
+import { Command, Option } from "@commander-js/extra-typings";
 import { invoke } from "./executor";
 import { v4 as uuidv4 } from "uuid";
 import { log, setDebugLogging } from "./log";
 import os from "node:os";
+import http from "node:http";
 import express, { Request, Response } from "express";
 
 const DEFAULT_PORT = 3002;
 
-async function startServer(port: number, debug: boolean, tempdir: string) {
+async function startServer(
+  listenTarget: number | { path: string },
+  debug: boolean,
+  tempdir: string,
+) {
   setDebugLogging(debug);
   const app = express();
   app.use(express.json({ limit: "6MB" })); // 5 MiB for args (https://docs.convex.dev/production/state/limits#functions) + extra space
@@ -52,8 +57,16 @@ async function startServer(port: number, debug: boolean, tempdir: string) {
     }
   });
 
-  app.listen(port, () => {
-    log(`Node executor server listening on port ${port}`);
+  const server = http.createServer(app);
+  server.listen(listenTarget, () => {
+    const addr = server.address();
+    const addrStr =
+      typeof addr === "object" && addr
+        ? `port ${addr.port}`
+        : typeof listenTarget === "object" && "path" in listenTarget
+          ? `path ${listenTarget.path}`
+          : String(listenTarget);
+    log(`Node executor server listening on ${addrStr}`);
   });
 }
 
@@ -66,14 +79,23 @@ program
   .usage("command [options]")
   .option("--debug", "print debug output", false)
   .option("--port <number>", "port to listen on", DEFAULT_PORT.toString())
+  .addOption(
+    new Option(
+      "--ipc-path <path>",
+      "listen on a Unix domain socket or Windows named pipe path",
+    ).conflicts(["port"]),
+  )
   .option(
     "--tempdir <path>",
     "temporary directory to use for downloading code and dependencies",
     "",
   )
   .action(async (options) => {
-    const port = parseInt(options.port, 10);
-    await startServer(port, options.debug, options.tempdir);
+    const listenTarget =
+      options.ipcPath !== undefined
+        ? { path: options.ipcPath }
+        : parseInt(options.port, 10);
+    await startServer(listenTarget, options.debug, options.tempdir);
   });
 
 program.parseAsync(process.argv);

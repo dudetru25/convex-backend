@@ -1,7 +1,7 @@
 import classNames from "classnames";
 import { useCurrentTeam } from "api/teams";
 import { useListInvoices } from "api/billing";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 
 export function FailedPaymentBanner() {
   const team = useCurrentTeam();
@@ -13,11 +13,7 @@ export function FailedPaymentBanner() {
       )}
     >
       Your latest subscription payment has failed.{" "}
-      <Link
-        href={`/t/${team?.slug}/settings/billing#paymentMethod`}
-        passHref
-        className="text-content-link hover:underline"
-      >
+      <Link href={`/t/${team?.slug}/settings/billing#paymentMethod`} passHref>
         Update your payment method
       </Link>{" "}
       to avoid a service interruption.
@@ -27,7 +23,9 @@ export function FailedPaymentBanner() {
 
 export function useShowFailedPaymentBanner() {
   const team = useCurrentTeam();
-  const { invoices } = useListInvoices(team?.managedBy ? undefined : team?.id);
+  const { invoices } = useListInvoices(
+    team?.managedBy === "vercel" ? undefined : team?.id,
+  );
   const failedInvoice = invoices
     ? invoices.find(
         (invoice) => invoice.status === "issued" && invoice.hasFailedPayment,

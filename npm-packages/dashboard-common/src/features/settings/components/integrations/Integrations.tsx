@@ -10,7 +10,7 @@ import {
   LogIntegration,
 } from "@common/lib/integrationHelpers";
 
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import {
   DeploymentInfo,
   DeploymentInfoContext,
@@ -24,6 +24,7 @@ export function Integrations({
   integrations,
   workosData,
   onAddedIntegration,
+  showPostHogIntegrations = false,
 }: {
   team: ReturnType<DeploymentInfo["useCurrentTeam"]>;
   entitlements: ReturnType<DeploymentInfo["useTeamEntitlements"]>;
@@ -32,6 +33,7 @@ export function Integrations({
     DeploymentInfo["workOSOperations"]["useDeploymentWorkOSEnvironment"]
   >;
   onAddedIntegration?: (kind: string) => void;
+  showPostHogIntegrations?: boolean;
 }) {
   const {
     useCurrentDeployment,
@@ -53,15 +55,15 @@ export function Integrations({
     integrations.map((integration) => [integration.config.type, integration]),
   );
 
-  const logIntegrations: LogIntegration[] = LOG_INTEGRATIONS.map(
-    (integrationKind) => {
-      const existing = configuredIntegrationsMap[integrationKind];
-      return {
-        kind: integrationKind,
-        existing: existing ?? null,
-      } as LogIntegration;
-    },
-  );
+  const logIntegrations: LogIntegration[] = LOG_INTEGRATIONS.filter(
+    (kind) => showPostHogIntegrations || kind !== "postHogLogs",
+  ).map((integrationKind) => {
+    const existing = configuredIntegrationsMap[integrationKind];
+    return {
+      kind: integrationKind,
+      existing: existing ?? null,
+    } as LogIntegration;
+  });
 
   const authIntegrations: AuthIntegration[] = workosIntegrationEnabled
     ? [
@@ -74,7 +76,9 @@ export function Integrations({
     : [];
 
   const exceptionReportingIntegrations: ExceptionReportingIntegration[] =
-    EXC_INTEGRATIONS.map((kind) => {
+    EXC_INTEGRATIONS.filter(
+      (kind) => showPostHogIntegrations || kind !== "postHogErrorTracking",
+    ).map((kind) => {
       const existing = configuredIntegrationsMap[kind];
       return {
         kind,
@@ -88,7 +92,7 @@ export function Integrations({
       <LocalDevCallout
         key="log-streaming"
         tipText="Tip: Run this to enable log streaming locally:"
-        command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement log_streaming_enabled --team-id ${team?.id} --reason "local" true --for-real`}
+        command={`cargo run --bin big-brain-tool -- --dev entitlement grant --team-entitlement log_streaming_enabled --team-id ${team?.id} --reason "local" true --for-real`}
       />,
     );
   }
@@ -98,7 +102,7 @@ export function Integrations({
         key="streaming-export"
         className="flex-col"
         tipText="Tip: Run this to enable streaming export locally:"
-        command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement streaming_export_enabled --team-id ${team?.id} --reason "local" true --for-real`}
+        command={`cargo run --bin big-brain-tool -- --dev entitlement grant --team-entitlement streaming_export_enabled --team-id ${team?.id} --reason "local" true --for-real`}
       />,
     );
   }
@@ -137,7 +141,6 @@ export function Integrations({
             <Link
               href="https://docs.convex.dev/production/integrations/"
               target="_blank"
-              className="text-content-link hover:underline"
             >
               Learn more
             </Link>{" "}
