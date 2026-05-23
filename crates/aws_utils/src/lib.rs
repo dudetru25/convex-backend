@@ -14,6 +14,7 @@ use aws_credential_types::provider::ProvideCredentials;
 use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_types::region::Region;
 
+pub mod firehose;
 pub mod s3;
 
 static S3_ENDPOINT_URL: LazyLock<Option<String>> =
@@ -54,7 +55,7 @@ pub async fn must_config_from_env() -> anyhow::Result<ConfigLoader> {
     // Check for credentials using the default provider chain
     let _creds = preflight_credentials().await?;
 
-    Ok(aws_config::defaults(BehaviorVersion::v2025_08_07()).region(region))
+    Ok(aws_config::defaults(BehaviorVersion::v2026_01_12()).region(region))
 }
 
 pub async fn must_s3_config_from_env() -> anyhow::Result<S3ConfigBuilder> {

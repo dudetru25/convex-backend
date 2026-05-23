@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import { useContext } from "react";
 import {
   useDeploymentAuthHeader,
   useDeploymentUrl,
@@ -10,13 +11,29 @@ import {
   udfRate,
   cacheHitPercentage,
   latencyPercentiles,
+  useSubscriptionInvalidationsTopK,
 } from "@common/lib/appMetrics";
+import { HealthCard } from "@common/elements/HealthCard";
+import { ChartForFunctionRate } from "@common/features/health/components/ChartForFunctionRate";
 import { calcBuckets } from "@common/lib/charts/buckets";
+import { PermissionsContext } from "@common/lib/deploymentContext";
+import { NoPermissionMessage } from "@common/elements/NoPermissionMessage";
 
 export function PerformanceGraphs() {
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewMetrics = useIsOperationAllowed("ViewMetrics");
   const currentOpenFunction = useCurrentOpenFunction();
   const deploymentUrl = useDeploymentUrl();
   const authHeader = useDeploymentAuthHeader();
+
+  if (!canViewMetrics) {
+    return (
+      <NoPermissionMessage
+        message="You do not have permission to view metrics in this deployment."
+        missingPermission="deployment:metrics:view"
+      />
+    );
+  }
 
   if (!currentOpenFunction) {
     return null;
@@ -194,6 +211,41 @@ export function PerformanceGraphs() {
           syncId="fnMetrics"
         />
       )}
+      {currentOpenFunction.udfType === "Mutation" && (
+        <SubscriptionInvalidationsGraph
+          udfIdentifier={file.displayName}
+          componentPath={file.componentPath ?? undefined}
+          udfType={file.udfType}
+        />
+      )}
     </div>
+  );
+}
+
+function SubscriptionInvalidationsGraph({
+  udfIdentifier,
+  componentPath,
+  udfType,
+}: {
+  udfIdentifier: string;
+  componentPath?: string;
+  udfType: "Query" | "Mutation" | "Action" | "HttpAction";
+}) {
+  const chartData = useSubscriptionInvalidationsTopK(5, {
+    udfIdentifier,
+    componentPath,
+    udfType,
+  });
+
+  return (
+    <HealthCard
+      title="Subscription Invalidations"
+      tip="The tables whose subscriptions are most frequently invalidated by this mutation, bucketed by minute."
+    >
+      <ChartForFunctionRate
+        chartData={chartData}
+        kind="subscriptionInvalidations"
+      />
+    </HealthCard>
   );
 }

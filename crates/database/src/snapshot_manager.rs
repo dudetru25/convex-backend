@@ -762,15 +762,15 @@ impl SnapshotManager {
         self.write_throughput_limiter.record_write(ts, write_bytes);
     }
 
-    pub fn check_write_throughput_limit(&self) -> anyhow::Result<()> {
-        if !self.write_throughput_limiter.check_limit() {
+    pub fn check_write_throughput_limit(&self, ts: Timestamp) -> anyhow::Result<()> {
+        if !self.write_throughput_limiter.check_limit(ts) {
             anyhow::bail!(ErrorMetadata::rate_limited(
                 "TooManyWrites",
                 format!(
-                    "Too many writes per second. Your deployment is limited to {} writes per \
-                     {}ms. Reduce your write rate.",
-                    *MAX_BYTES_WRITTEN_PER_SECOND,
-                    WRITE_THROUGHPUT_WINDOW.as_millis(),
+                    "Too many writes per second. Your deployment is limited to {} bytes written \
+                     per {}. Reduce your write rate or upgrade to a larger deployment.",
+                    common::fmt::format_bytes(*MAX_BYTES_WRITTEN_PER_SECOND),
+                    common::fmt::format_duration(*WRITE_THROUGHPUT_WINDOW),
                 )
             ));
         }

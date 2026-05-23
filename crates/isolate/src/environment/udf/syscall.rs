@@ -14,6 +14,7 @@ use database::{
     DeveloperQuery,
 };
 use errors::ErrorMetadata;
+use keybroker::DeploymentOp;
 use model::virtual_system_mapping;
 use serde::{
     Deserialize,
@@ -52,6 +53,8 @@ pub trait SyscallProvider<RT: Runtime> {
 
     fn start_query(&mut self, query: Query, version: Option<Version>) -> anyhow::Result<u32>;
     fn cleanup_query(&mut self, query_id: u32) -> bool;
+
+    fn require_operation(&mut self, op: DeploymentOp) -> anyhow::Result<()>;
 }
 
 impl<RT: Runtime> SyscallProvider<RT> for DatabaseUdfEnvironment<RT> {
@@ -103,6 +106,10 @@ impl<RT: Runtime> SyscallProvider<RT> for DatabaseUdfEnvironment<RT> {
     fn cleanup_query(&mut self, query_id: u32) -> bool {
         self.query_manager.cleanup_developer(query_id)
     }
+
+    fn require_operation(&mut self, op: DeploymentOp) -> anyhow::Result<()> {
+        self.phase.tx()?.identity().require_operation(op)
+    }
 }
 
 pub fn syscall_impl<RT: Runtime, P: SyscallProvider<RT>>(
@@ -115,24 +122,12 @@ pub fn syscall_impl<RT: Runtime, P: SyscallProvider<RT>>(
         "1.0/queryStream" => syscall_query_stream(provider, args),
         "1.0/db/normalizeId" => syscall_normalize_id(provider, args),
         "1.0/componentArgument" => syscall_component_argument(provider, args),
+        "1.0/requireOperation" => syscall_require_operation(provider, args),
 
-        #[cfg(any(test, feature = "testing"))]
-        "throwSystemError" => anyhow::bail!("I can't go for that."),
-        "throwOcc" => anyhow::bail!(ErrorMetadata::user_occ(None, None, None, None, None)),
+        "throwOcc" => anyhow::bail!(ErrorMetadata::user_occ(None, None, None)),
         "throwOverloaded" => {
             anyhow::bail!(ErrorMetadata::overloaded("Busy", "I'm a bit busy."))
         },
-        #[cfg(test)]
-        "slowSyscall" => {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            Ok(JsonValue::Number(1017.into()))
-        },
-        #[cfg(test)]
-        "reallySlowSyscall" => {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            Ok(JsonValue::Number(1017.into()))
-        },
-
         _ => {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "UnknownOperation",
@@ -251,4 +246,27 @@ fn syscall_query_cleanup<RT: Runtime, P: SyscallProvider<RT>>(
         with_argument_error("queryCleanup", || Ok(serde_json::from_value(args)?))?;
     let cleaned_up = provider.cleanup_query(args.query_id);
     Ok(serde_json::to_value(cleaned_up)?)
+}
+
+fn syscall_require_operation<RT: Runtime, P: SyscallProvider<RT>>(
+    provider: &mut P,
+    args: JsonValue,
+) -> anyhow::Result<JsonValue> {
+    #[derive(Deserialize)]
+    struct RequireOperationArgs {
+        operation: String,
+    }
+    let operation = with_argument_error("requireOperation", || {
+        let args: RequireOperationArgs = serde_json::from_value(args)?;
+        let op: DeploymentOp = serde_json::from_value(json!(args.operation))?;
+        if op == DeploymentOp::Unknown {
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "UnknownOperation",
+                format!("Unknown deployment operation: {:?}", args.operation),
+            ));
+        }
+        Ok(op)
+    })?;
+    provider.require_operation(operation)?;
+    Ok(json!({}))
 }

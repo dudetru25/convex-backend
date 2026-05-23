@@ -1,20 +1,141 @@
 # Changelog
 
-## 1.35.0 (Unreleased)
+## 1.39.1
 
+- Fixes package.json `bin` entrypoint bug in 1.39.0.
+
+## 1.39.0
+
+- Apps and components may now declare typesafe env vars that they require. Both `defineApp`
+  and `defineComponent` now accept an `env` object with string keys and validator values.
+  Declared environment variables must be present and match the validators before deployment.
+- Allow `--local-cloud-port`, `--local-site-port`, `--local-backend-version` and 
+  `--local-force-upgrade` options to `npx convex dev` to be used whenever using a local deployment.
+- The `AsyncLocalStorage` and `AsyncResource` APIs from `node:async_hooks` are now available
+  in the standard Convex runtime. Note that stored values will not be threaded through calls to
+  `ctx.runQuery`/`ctx.runMutation`/`ctx.runAction`.
+
+## 1.38.0
+
+- Adds `ctx.meta.getRequestMetadata()` to access request metadata in mutations and actions:
+  request ID, client IP, and client User-Agent.
+- Default env vars are now imported when creating a new local deployment.
+- Allows creating new local deployments using `npx convex deployment select local`.
+- Adds support for `--expiry` and `--expires` aliases for `--expiration` in `npx
+  convex deployment create`.
+- Supports using `import "server-only"` to mark files as server-only.
+- Removes the `npx convex disable-local-deployments` command.
+- Fixes an issue where stdout/stderr would be truncated after exit in the CLI.
+- Updated `usePaginatedQuery_experimental` overload that has an object-based API similar
+  to `useQuery_experimental`.
+
+## 1.37.0
+
+- Adds `useQuery_experimental`, which accepts object-based args and returns an
+  object with status, data, and error that doesn't throw errors by default.
+- Adds `npx convex deployment token create my-token --save-env`, enabling
+  scripts to configure agent environments with access only to develop and deploy
+  against their own cloud deployment. e.g.
+  ```sh
+  npx convex deployment create dev/foo --select --expiration "in 7 days" --type dev
+  # npx convex env set ... (optional - typically default env vars suffice)
+  npx convex deployment token create foo --save-env
+  # npx convex dev --once (optional)
+  ```
+- Re-exports ValidatorTypeToReturnType from convex/server
+- AI Files will no longer prompt when connecting to an existing project.
+- Updates the `VisibilityProperties` type to allow types like `RegisteredQuery`
+  to be more easily extended without losing covariance.
+- New `ctx.meta.getDeploymentMetadata()` function.
+  - Includes the name, region and class of the deployment.
+
+## 1.36.1
+
+- Updated `npx convex login --vercel` to ask before joining a Convex team
+  through the Vercel Marketplace.
+- Allows targeting a project or specific deployment type rather than just a
+  deployment for `npx convex env default *`.
+
+## 1.36.0
+
+- `npx convex run` now supports `--inline-query` for evaluating readonly queries
+  without creating a named function first, for example:
+  `npx convex run --inline-query 'await ctx.db.query("messages").take(5)'`.
+- Added `ctx.meta` to access extra metadata at runtime:
+  - `ctx.meta.getFunctionMetadata()`: the current function's name, component,
+    visibility, and whether it's a query, mutation, or action.
+  - `ctx.meta.getTransactionMetrics()`: how much capacity remains in the current
+    transaction. Only available in queries and mutations.
+- Added a `npx convex env default` command for getting and setting default
+  environment variables for a project.
+- `npx convex deploy` now supports a `--message` option that allows you to write
+  details in the deployment’s audit log. When running `npx convex deploy` on CI
+  runners on popular platforms (including GitHub Actions, Vercel, and Netlify),
+  a default message will be provided if you don’t provide one (e.g. “Deployed
+  from GitHub Actions • e83c516”).
+- When deploying to a preview deployment, you can now reuse the existing
+  deployment instead of creating a new one by using `--preview-name` instead of
+  `--preview-create`. This behavior is also used when deploying to preview
+  deployments from the CI without specifying `--preview-create` explictly, but
+  you can specify `--preview-create` explicitly to restore the old behavior.
+  When using the `--preview-run` flag, the function only runs when a new
+  deployment is created.
+- `npx convex codegen` can now automatically start a local backend when
+  necessary.
+- You can now increase the timeout used by the CLI when starting a local backend
+  with `CONVEX_LOCAL_BACKEND_STARTUP_TIMEOUT_SECS`; this can be useful when
+  using large local databases.
+- Fixed a bug where `npx convex ai-files remove` would also remove skill files
+  that were not installed by `npx convex ai-files`
+- Fixed a bug where the automatically-generated files would sometimes sort
+  imports in inconsistent order across platforms.
+- Fixed a bug in `npx convex dev --start` where, in some cases, the `--start`
+  command would continue to run after closing the Convex dev server with
+  <kbd>Ctrl+C</kbd>.
+- Generating APIs via function-spec now supports validators with int64 literals.
+
+## 1.35.1
+
+- Adds support for automatic preview deployments on Cloudflare Pages
+- Removes a new API in `useQuery` that was accidentally included as part of the
+  `1.35.0` release.
+
+## 1.35.0
+
+- You can now create and select local deployments explicitly with the CLI:
+  - `npx convex deployment create local --select`: initialize local development.
+  - `npx convex deployment select dev`: switch to your cloud dev deployment.
+  - `npx convex deployment select local`: switch back to your local deployment.
+  - To run a single command on your local deployment, use `--deployment local`.
+- `npx convex deployment create` now has a `--expiration` flag allowing you to
+  create temporary dpeloyments.
+- Components can now define HTTP routes in their own `http.ts` file. The routes
+  exposed by a component are accessible through a URL prefix that isolates them
+  from the other HTTP routes (e.g.
+  `app.use(component, { httpPrefix: "/foo" })`).
+- `npx convex dev` now supports a new `--start` flag that runs a command in
+  parallel with the Convex dev server (e.g. `npx convex dev --start 'vite'`).
+  This new option can be used to simplify the `dev` command of most projects.
+  This flag was previously called `--run-sh`, and used to not allow long-running
+  commands; now, `--run-sh` is an alias of `--start`.
 - Defaults non-interactive commands to target an anonymous deployment if one is
   not configured or specified by the deploy key. This enables coding agents to
-  more easily develop without needing the CONVEX_AGENT_MODE env variable.
-  By default, the CLI will avoid prompting in non-interactive terminals when
+  more easily develop without needing the CONVEX_AGENT_MODE env variable. By
+  default, the CLI will avoid prompting in non-interactive terminals when
   possible.
 - You can now develop against your anonymous local deployments even when logged
   in. You will be prompted to link the deployment to a project if the terminal
   is interactive.
-- Changes the default codegen to use the component's `ComponentApi` type instead
-  of static code generation for components in `_generated/api.d.ts`.
-  To get the old behavior, set `{ "codegen": { "legacyComponentApi": true } }`
-  in `convex.json`.
 - Enables `npx convex deployment create` when you don't yet have a project.
+- Improved formatting of sizes in error messages.
+- Changes the default codegen to use the component's `ComponentApi` type instead
+  of static code generation for components in `_generated/api.d.ts`. To get the
+  old behavior, set `{ "codegen": { "legacyComponentApi": true } }` in
+  `convex.json`.
+- Fixed a bug where `npx convex dev` would not use the correct deployment after
+  running `npx convex deployment select`.
+- Improved the definition of the `AnyDataModel` type to support using default
+  indexes (`by_id`, `by_creation_time`) in a typesafe way.
 
 ## 1.34.1
 

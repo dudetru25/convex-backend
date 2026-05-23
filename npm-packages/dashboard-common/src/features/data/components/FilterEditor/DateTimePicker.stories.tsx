@@ -1,16 +1,25 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { DateTimePicker } from "@common/features/data/components/FilterEditor/DateTimePicker";
 import { fn } from "storybook/test";
+import { Sheet } from "@ui/Sheet";
 
 const meta = {
   component: DateTimePicker,
   args: {
     onChange: fn(),
     date: new Date("2024-10-07T14:35:32"),
+    "aria-label": "Date and time",
   },
   parameters: {
     a11y: { test: "todo" },
   },
+  decorators: [
+    (Story) => (
+      <Sheet>
+        <Story />
+      </Sheet>
+    ),
+  ],
 } satisfies Meta<typeof DateTimePicker>;
 
 export default meta;

@@ -50,7 +50,14 @@ impl ConcurrencyLimiter {
         Self { tx, rx, tracker }
     }
 
-    // TODO(presley): Replace this when we have isolate_v2.
+    pub fn active_permits(&self) -> usize {
+        self.tx.len()
+    }
+
+    pub fn max_permits(&self) -> Option<usize> {
+        self.tx.capacity()
+    }
+
     // If a client uses a thread for too long. We still want to log periodically.
     pub fn go_log<RT: Runtime>(
         &self,
@@ -96,7 +103,6 @@ impl ConcurrencyLimiter {
 struct PermitId(usize);
 
 // This is allow us to track the currently acquired permits.
-// TODO(presley): Remove this when we have isolate_v2.
 #[derive(Debug)]
 struct ActivePermitsTracker {
     // Generate a separate id for each concurrency limit to simplify deregistering.
@@ -163,6 +169,10 @@ impl ConcurrencyPermit {
         let limiter = self.limiter.clone();
         SuspendedPermit { client_id, limiter }
     }
+
+    pub fn limiter(&self) -> &ConcurrencyLimiter {
+        &self.limiter
+    }
 }
 
 impl Drop for ConcurrencyPermit {
@@ -181,61 +191,5 @@ pub struct SuspendedPermit {
 impl SuspendedPermit {
     pub async fn acquire(self) -> ConcurrencyPermit {
         self.limiter.acquire(self.client_id).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        sync::Arc,
-        time::Duration,
-    };
-
-    use common::runtime::Runtime;
-    use futures::{
-        select_biased,
-        FutureExt,
-    };
-    use runtime::testing::TestDriver;
-
-    use crate::ConcurrencyLimiter;
-
-    #[test]
-    fn test_limiter() -> anyhow::Result<()> {
-        let td = TestDriver::new();
-        let rt = td.rt();
-        let limiter = ConcurrencyLimiter::new(8);
-
-        // Acquire all permits.
-        let mut permits = Vec::new();
-        for _ in 0..8 {
-            permits.push(td.run_until(limiter.acquire(Arc::new("test".to_owned()))));
-        }
-
-        // Taking another permit should fail.
-        let result = td.run_until(async {
-            select_biased! {
-                permit = limiter.acquire(Arc::new("test".to_owned())).fuse() => Ok(permit),
-                _ = rt.wait(Duration::from_secs(1)) => { anyhow::bail!("Time out"); }
-            }
-        });
-        assert!(result.is_err());
-
-        // Dropping two permits should allow us to reacquire them.
-        for _ in 0..2 {
-            permits.pop();
-        }
-        for _ in 0..2 {
-            permits.push(td.run_until(limiter.acquire(Arc::new("test".to_owned()))));
-        }
-        let result = td.run_until(async {
-            select_biased! {
-                permit = limiter.acquire(Arc::new("test".to_owned())).fuse() => Ok(permit),
-                _ = rt.wait(Duration::from_secs(1)) => { anyhow::bail!("Time out"); }
-            }
-        });
-        assert!(result.is_err());
-
-        Ok(())
     }
 }

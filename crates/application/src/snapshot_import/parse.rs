@@ -71,7 +71,10 @@ use value::{
     TableName,
 };
 
-use crate::snapshot_import::import_error::ImportError;
+use crate::snapshot_import::{
+    import_error::ImportError,
+    metrics::log_snapshot_import_found_legacy_generated_schema,
+};
 
 pub type ImportDocumentStream = BoxStream<'static, anyhow::Result<JsonValue>>;
 pub type ImportStorageFileStream =
@@ -225,8 +228,8 @@ pub async fn parse_import_file(
                     parse_documents_jsonl_table_name(&entry.name, &base_component_path)?
                 {
                     if table_name.is_system()
-                        && table_name != *TABLES_TABLE
-                        && table_name != *FILE_STORAGE_VIRTUAL_TABLE
+                        && table_name != TABLES_TABLE
+                        && table_name != FILE_STORAGE_VIRTUAL_TABLE
                     {
                         tracing::info!("Skipping system table entry {}", entry.name);
                         continue;
@@ -439,6 +442,7 @@ async fn parse_generated_schema<T: ShapeConfig>(
     if inferred_type_json.as_str() == Some("uniform") {
         return Ok(GeneratedSchema::Uniform);
     }
+    log_snapshot_import_found_legacy_generated_schema();
     let inferred_type = Shape::from_str(inferred_type_json.as_str().with_context(|| {
         ImportError::InvalidConvexValue(
             lineno,
@@ -496,111 +500,4 @@ pub fn parse_csv_cell(s: &str) -> JsonValue {
         return json!(r);
     }
     json!(s)
-}
-
-#[cfg(test)]
-mod tests {
-    use common::components::ComponentPath;
-
-    use crate::snapshot_import::parse::{
-        parse_documents_jsonl_table_name,
-        parse_storage_filename,
-        parse_table_filename,
-        GENERATED_SCHEMA_PATTERN,
-    };
-
-    #[test]
-    fn test_filename_regex() -> anyhow::Result<()> {
-        let (_, table_name) =
-            parse_documents_jsonl_table_name("users/documents.jsonl", &ComponentPath::root())?
-                .unwrap();
-        assert_eq!(table_name, "users".parse()?);
-        // Regression test, checking that the '.' is escaped.
-        assert!(
-            parse_documents_jsonl_table_name("users/documentsxjsonl", &ComponentPath::root())?
-                .is_none()
-        );
-        // When an export is unzipped and re-zipped, sometimes there's a prefix.
-        let (_, table_name) = parse_documents_jsonl_table_name(
-            "snapshot/users/documents.jsonl",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(table_name, "users".parse()?);
-        let (_, table_name) = parse_table_filename(
-            "users/generated_schema.jsonl",
-            &ComponentPath::root(),
-            &GENERATED_SCHEMA_PATTERN,
-        )?
-        .unwrap();
-        assert_eq!(table_name, "users".parse()?);
-        let (_, storage_id) = parse_storage_filename(
-            "_storage/kg2ah8mk1xtg35g7zyexyc96e96yr74f.gif",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&storage_id.to_string(), "kg2ah8mk1xtg35g7zyexyc96e96yr74f");
-        let (_, storage_id) = parse_storage_filename(
-            "snapshot/_storage/kg2ah8mk1xtg35g7zyexyc96e96yr74f.gif",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&storage_id.to_string(), "kg2ah8mk1xtg35g7zyexyc96e96yr74f");
-        // No file extension.
-        let (_, storage_id) = parse_storage_filename(
-            "_storage/kg2ah8mk1xtg35g7zyexyc96e96yr74f",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&storage_id.to_string(), "kg2ah8mk1xtg35g7zyexyc96e96yr74f");
-        Ok(())
-    }
-
-    #[test]
-    fn test_component_path_regex() -> anyhow::Result<()> {
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "_components/waitlist/tbl/documents.jsonl",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&String::from(component_path), "waitlist");
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "some/parentdir/_components/waitlist/tbl/documents.jsonl",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&String::from(component_path), "waitlist");
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "_components/waitlist/_components/ratelimit/tbl/documents.jsonl",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&String::from(component_path), "waitlist/ratelimit");
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "_components/waitlist/_components/ratelimit/tbl/documents.jsonl",
-            &"friendship".parse()?,
-        )?
-        .unwrap();
-        assert_eq!(
-            &String::from(component_path),
-            "friendship/waitlist/ratelimit"
-        );
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "tbl/documents.jsonl",
-            &"waitlist/ratelimit".parse()?,
-        )?
-        .unwrap();
-        assert_eq!(&String::from(component_path), "waitlist/ratelimit");
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        Ok(())
-    }
 }

@@ -7,6 +7,7 @@
 /api/interfaces/server.ActionCtx    /generated-api/server#actionctx
 /api/classes/values.GenericId       /api/modules/values#genericid
 /dashboard/teams                    /dashboard/teams/teams
+/dashboard/teams/sso                /team-management/sso
 /database/import-export/airbyte     /database/import-export/streaming
 /database/indexes                   /database/reading-data/indexes
 /database/indexes/indexes-and-query-perf            /database/reading-data/indexes/indexes-and-query-perf
@@ -66,6 +67,7 @@
 /production/best-practices                       /understanding/best-practices
 /using/environment-variables                     /production/environment-variables
 /production/hosting/environment-variables        /production/environment-variables
+/production/hosting/preview-deployments          /production/multiple-deployments#preview
 /production/log-streams                          /production/integrations/log-streams/
 /search/using-cursor                            /ai/using-cursor
 /streaming-export-api               /production/integrations/streaming-import-export
@@ -119,3 +121,4 @@
 /zen                                /understanding/zen
 /open-source                        /self-hosting
 /components/using-components        /components/using
+/chef                               /chef/migration-guide

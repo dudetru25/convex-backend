@@ -23,6 +23,9 @@ const ENTRY_POINTS_TO_DOCUMENT = [
 ];
 
 const config: Config = {
+  future: {
+    v4: true,
+  },
   title: "Convex Developer Hub",
   tagline: "The source for documentation about Convex.",
   url: "https://docs.convex.dev",
@@ -148,7 +151,7 @@ const config: Config = {
     prism: {
       theme: lightCodeTheme,
       darkTheme: darkCodeTheme,
-      additionalLanguages: ["rust", "kotlin", "swift"],
+      additionalLanguages: ["rust", "kotlin", "swift", "bash", "shell-session"],
     },
     image: "img/social.png",
     metadata: [
@@ -405,7 +408,7 @@ const config: Config = {
         docsPluginId: "classic", // configured for preset-classic
         config: {
           management: {
-            specPath: "../@convex-dev/platform/management-openapi.json",
+            specPath: ".openapi-filtered/management-openapi.json",
             outputDir: "docs/management-api",
             sidebarOptions: {
               groupPathsBy: "tag",
@@ -413,7 +416,7 @@ const config: Config = {
             hideSendButton: false,
           } satisfies OpenApiPlugin.Options,
           publicDeployment: {
-            specPath: "../@convex-dev/platform/public-deployment-openapi.json",
+            specPath: ".openapi-filtered/public-deployment-openapi.json",
             outputDir: "docs/public-deployment-api",
             sidebarOptions: {
               groupPathsBy: "tag",
@@ -421,7 +424,7 @@ const config: Config = {
             hideSendButton: false,
           } satisfies OpenApiPlugin.Options,
           deployment: {
-            specPath: "../@convex-dev/platform/deployment-openapi.json",
+            specPath: ".openapi-filtered/deployment-openapi.json",
             outputDir: "docs/deployment-api",
             sidebarOptions: {
               groupPathsBy: "tag",

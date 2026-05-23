@@ -9,7 +9,10 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { CreateNewTable } from "@common/features/data/components/DataSidebar";
 import { EmptySection } from "@common/elements/EmptySection";
 import { useNents } from "@common/lib/useNents";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
 import { useTableMetadata } from "@common/lib/useTableMetadata";
 import { Loading } from "@ui/Loading";
 import { Button } from "@ui/Button";
@@ -38,18 +41,10 @@ export function EmptyDataContent({
 }) {
   const { selectedNent } = useNents();
 
-  const {
-    useCurrentDeployment,
-    useHasProjectAdminPermissions,
-    useLogDeploymentEvent,
-  } = useContext(DeploymentInfoContext);
+  const { useLogDeploymentEvent } = useContext(DeploymentInfoContext);
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
 
-  const deployment = useCurrentDeployment();
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
-  const canAddDocuments =
-    deployment?.deploymentType !== "prod" || hasAdminPermissions;
+  const canAddDocuments = useIsOperationAllowed("WriteData");
   const tableMetadata = useTableMetadata();
   const log = useLogDeploymentEvent();
 
@@ -236,7 +231,7 @@ export function EmptyDataContent({
                         selectedNent && selectedNent.state !== "active"
                           ? "Cannot add documents in an unmounted component."
                           : !canAddDocuments &&
-                            "You do not have permission to add documents in production."
+                            "You do not have permission to add documents in this deployment."
                       }
                       icon={<PlusIcon aria-hidden="true" />}
                     >

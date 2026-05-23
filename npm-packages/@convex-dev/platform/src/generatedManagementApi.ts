@@ -472,6 +472,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/list_personal_access_tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List personal access tokens
+         * @description Lists all personal access tokens for the authenticated user.
+         */
+        get: operations["list personal access tokens"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/create_personal_access_token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create personal access token
+         * @description Creates a new personal access token for the authenticated user.
+         */
+        post: operations["create personal access token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/delete_personal_access_token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete personal access token
+         * @description Deletes a personal access token for the authenticated user. The `id` in the
+         *     request body can be the encoded token secret or the name of the token.
+         */
+        post: operations["delete personal access token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/token_details": {
         parameters: {
             query?: never;
@@ -614,7 +675,201 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /**
+         * Invite a team member
+         * @description Invite a member to the given team by email. `role` is required and must be
+         *     one of `admin`, `developer`, or `custom`. Pass `custom` together with a
+         *     non-empty `customRoles` list to invite a member into a custom role; for
+         *     `admin` and `developer`, `customRoles` must be omitted.
+         */
         post: operations["invite team member"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/list_pending_invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List pending team invitations
+         * @description List the pending invitations for the given team.
+         */
+        get: operations["list pending team invites"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/cancel_team_member_invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a pending team invitation */
+        post: operations["cancel team member invite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/list_default_environment_variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List default environment variables
+         * @description Lists all default environment variables for the specified project, with
+         *     optional filtering by name and deployment type.
+         */
+        get: operations["list default environment variables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project_id}/update_default_environment_variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update default environment variables
+         * @description Creates, updates, or deletes default environment variables for the specified
+         *     project. When `value` is a string, the variable is upserted. When `value` is
+         *     null, the variable is deleted.
+         */
+        post: operations["update default environment variables"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/create_custom_role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a custom role
+         * @description Creates a new custom role for the team with the specified name,
+         *     description, and permission statements.
+         */
+        post: operations["create custom role"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/list_custom_roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List custom roles
+         * @description Lists all custom roles for the team with cursor-based pagination.
+         */
+        get: operations["list custom roles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/update_custom_role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update a custom role
+         * @description Updates an existing custom role's name, description, and permission
+         *     statements.
+         */
+        post: operations["update custom role"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/delete_custom_role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete a custom role
+         * @description Deletes a custom role from the team. Fails with `CustomRoleInUse` if
+         *     the role is still attached to any team members; reassign those members
+         *     (e.g. via `update_team_member_role`) before retrying.
+         */
+        post: operations["delete custom role"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/update_team_member_role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update a team member's role
+         * @description Sets either the member's built-in `role` (admin/developer) or their
+         *     `customRoles`. The two fields are mutually exclusive: setting `role`
+         *     clears `customRoles`, and setting `customRoles` (must be non-empty)
+         *     puts the member in the `custom` role.
+         */
+        post: operations["update team member role"];
         delete?: never;
         options?: never;
         head?: never;
@@ -627,15 +882,82 @@ export interface components {
     schemas: {
         /** @description Encrypted admin key */
         AdminKey: string;
+        CancelInvitationArgs: {
+            email: string;
+        };
+        CreateCustomRoleArgs: {
+            description?: string | null;
+            name: string;
+            statements: components["schemas"]["RoleStatement"][];
+        };
         /** @enum {string} */
         CreateDeploymentType: "dev" | "prod" | "preview" | "custom";
         CreateInvitationArgs: {
+            /** @description Custom roles to attach when `role` is `custom`. Required and non-empty
+             *     in that case, and forbidden otherwise. */
+            customRoles?: components["schemas"]["CustomRoleId"][] | null;
             email: string;
+            /** @description Role to assign when the invitation is accepted.
+             *     Pass `custom` together with a non-empty `customRoles` list to invite a
+             *     member into a custom role; `admin` and `developer` must be sent without
+             *     `customRoles`. */
             role: components["schemas"]["Role"];
+        };
+        CreatePersonalAccessTokenArgs: {
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds when this personal access token will
+             *     expire. Must be at least 30 minutes in the future.
+             */
+            expiresAt?: number | null;
+            /** @description Name for the personal access token. */
+            name: string;
+        };
+        CreatePersonalAccessTokenResponse: {
+            /** @description The generated personal access token. */
+            accessToken: string;
         };
         CreateTeamAccessTokenResponse: {
             accessToken: string;
             tokenType: string;
+        };
+        /** Format: int64 */
+        CustomRoleId: number;
+        CustomRoleResponse: {
+            /** Format: int64 */
+            createTime: number;
+            creator?: null | components["schemas"]["MemberId"];
+            description?: string | null;
+            id: components["schemas"]["CustomRoleId"];
+            name: string;
+            statements: components["schemas"]["RoleStatement"][];
+            teamId: components["schemas"]["TeamId"];
+        };
+        DefaultEnvironmentVariableChangeArgs: {
+            deploymentType: components["schemas"]["DeploymentType"];
+            name: string;
+            /** @description Set to a value to upsert the default environment variable
+             *     with the given name and type. If null, will delete the
+             *     environment variable with the given name and deployment
+             *     type if it exists (and do nothing if it doesn’t exist). */
+            value?: string | null;
+        };
+        DefaultEnvironmentVariableResponse: {
+            /** @description The deployment types that this env var name + value apply to.
+             *     Note that when filtering by a particular deployment type,
+             *     all items in the result will have a single element
+             *     in `deploymentType`. */
+            deploymentTypes: components["schemas"]["DeploymentType"][];
+            name: string;
+            value: string;
+        };
+        DeleteCustomRoleArgs: {
+            id: components["schemas"]["CustomRoleId"];
+        };
+        DeletePersonalAccessTokenArgs: {
+            /** @description The token to delete. This can be the secret value of the token or the
+             *     token's unique name. */
+            id: string;
         };
         /** @enum {string} */
         DeploymentClass: "s16" | "s256" | "d1024";
@@ -655,9 +977,21 @@ export interface components {
         /** @enum {string} */
         DeploymentType: "dev" | "prod" | "preview" | "custom";
         DeviceName: string;
+        InvitationResponse: {
+            /** @description The custom roles attached to this invitation. Present iff `role` is
+             *     `custom`. */
+            customRoles?: components["schemas"]["TeamMemberCustomRole"][] | null;
+            email: string;
+            expired: boolean;
+            role: components["schemas"]["Role"];
+        };
         /** @description Indicates whether the deployment is the default prod deployment for the
          *     project, or the default cloud dev deployment for the member in the project. */
         IsDefaultDeployment: boolean;
+        ListCustomRolesResponse: {
+            items: components["schemas"]["CustomRoleResponse"][];
+            pagination: components["schemas"]["PaginationMetadata"];
+        };
         ListDeploymentClassesResponse: {
             items: components["schemas"]["DeploymentClassMetadata"][];
         };
@@ -672,15 +1006,39 @@ export interface components {
         };
         /** Format: int64 */
         MemberId: number;
+        PaginatedDefaultEnvironmentVariablesResponse: {
+            items: components["schemas"]["DefaultEnvironmentVariableResponse"][];
+            pagination: components["schemas"]["PaginationMetadata"];
+        };
         PaginatedDeploymentsResponse: {
             items: components["schemas"]["PlatformDeploymentResponse"][];
+            pagination: components["schemas"]["PaginationMetadata"];
+        };
+        PaginatedPersonalAccessTokensResponse: {
+            items: components["schemas"]["PersonalAccessTokenResponse"][];
             pagination: components["schemas"]["PaginationMetadata"];
         };
         PaginationMetadata: {
             hasMore: boolean;
             nextCursor?: string | null;
         };
+        PersonalAccessTokenResponse: {
+            /** Format: int64 */
+            creationTime: number;
+            /** Format: int64 */
+            expiresAt?: number | null;
+            /** Format: int64 */
+            lastUsedTime?: number | null;
+            name: components["schemas"]["DeviceName"];
+            ssoTeamId?: null | components["schemas"]["TeamId"];
+        };
         PlatformCreateDeployKeyArgs: {
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds when this deploy key will expire. Must be
+             *     at least 30 minutes in the future.
+             */
+            expiresAt?: number | null;
             /** @description Name for the deploy key. */
             name: string;
         };
@@ -692,6 +1050,15 @@ export interface components {
             /** @description The class to use for this deployment. If not provided, the default
              *     deployment class for your team will be used. */
             class?: string | null;
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds when this deployment will be deleted.
+             *     Preview deployments have this set by default unless overridden.
+             *     Must be at least 30 minutes in the future and cannot exceed the
+             *     team’s preview deployment retention days entitlement from now.
+             *     Set to `null` to clear the expiration.
+             */
+            expiresAt?: number | null;
             /** @description When creating a prod deployment, whether the deployment is the default
              *     production deployment for the project (i.e. the one used by default
              *     when running `npx convex deploy`).
@@ -716,6 +1083,12 @@ export interface components {
             type: components["schemas"]["CreateDeploymentType"];
         };
         PlatformCreatePreviewDeployKeyArgs: {
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds when this preview deploy key will expire.
+             *     Must be at least 30 minutes in the future.
+             */
+            expiresAt?: number | null;
             /** @description Name for the preview deploy key. */
             name: string;
         };
@@ -741,7 +1114,11 @@ export interface components {
             /** @description Deployment cloud URL, where this deployment lives. Only present when a
              *     deployment was requested. */
             deploymentUrl?: string | null;
+            id: components["schemas"]["ProjectId"];
+            /** @description Deprecated alias for `id`, kept for backwards compatibility. */
             projectId: components["schemas"]["ProjectId"];
+            /** @description The shortened version of the project name used in Convex Dashboard URLs. */
+            slug: components["schemas"]["ProjectSlug"];
         };
         PlatformCreateTeamArgs: {
             defaultRegion: components["schemas"]["RegionName"];
@@ -789,6 +1166,11 @@ export interface components {
              */
             creationTime: number;
             creator?: null | components["schemas"]["MemberId"];
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds when this deploy key will expire.
+             */
+            expiresAt?: number | null;
             /**
              * Format: int64
              * @description Timestamp in milliseconds when this token was last used (if ever).
@@ -885,6 +1267,9 @@ export interface components {
             /** @description List of custom domains configured for this deployment. */
             domains: components["schemas"]["PlatformCustomDomainResponse"][];
         };
+        PlatformListInvitationsResponse: {
+            items: components["schemas"]["InvitationResponse"][];
+        };
         PlatformListPreviewDeployKeysResponse: {
             /** @description The list of preview deploy keys. */
             items: components["schemas"]["PlatformDeployKeyResponse"][];
@@ -936,12 +1321,16 @@ export interface components {
             destinationProjectId: components["schemas"]["ProjectId"];
         };
         PlatformUpdateDeploymentArgs: {
+            /** @description The deployment class to move this deployment to (e.g. "s16", "s256").
+             *     Requires the deployment class selection entitlement. */
+            class?: string | null;
             /** @description Controls whether the dashboard requires a confirmation before allowing
              *     edits during a browser session for this deployment. If set to `null`,
              *     the setting is reset to the default behavior (true for prod deployments,
              *     false for dev and preview deployments). If set to `true` or `false`, the
              *     setting is explicitly overridden. */
             dashboardEditConfirmation?: boolean | null;
+            deploymentType?: null | components["schemas"]["DeploymentType"];
             /**
              * Format: int64
              * @description Timestamp in milliseconds when this deployment will be deleted.
@@ -951,6 +1340,15 @@ export interface components {
              *     Set to `null` to clear the expiration.
              */
             expiresAt?: number | null;
+            /** @description For a prod deployment, whether the deployment is the default
+             *     production deployment for the project (i.e. the one used by default
+             *     when running `npx convex deploy`).
+             *     For a dev deployment, whether the deployment is the default
+             *     development deployment for the member that created it (i.e. the one
+             *     used by default when running `npx convex dev`).
+             *     Setting this to `true` will fail on preview or custom deployments,
+             *     or if there is already a matching default deployment in the project. */
+            isDefault?: boolean | null;
             /** @description The reference of the deployment. When provided, must match the following
              *     rules:
              *       - be unique across deployment references in the project
@@ -981,17 +1379,52 @@ export interface components {
         /** @enum {string} */
         RequestDestination: "convexCloud" | "convexSite";
         /** @enum {string} */
-        Role: "admin" | "developer";
+        Role: "admin" | "developer" | "custom";
+        /** @description A single permission rule within a custom role. */
+        RoleStatement: {
+            actions: components["schemas"]["RoleStatementActions"];
+            effect: components["schemas"]["RoleStatementEffect"];
+            /**
+             * @description Resource path like `project:*`, `project:slug=my-app`, or
+             *     `project:*:deployment:type=prod`.
+             * @example project:*
+             */
+            resource: string;
+        };
+        /**
+         * @description An action that can be allowed or denied by a custom role statement.
+         * @enum {string}
+         */
+        RoleStatementAction: "team:update" | "team:delete" | "project:create" | "project:transfer" | "project:receive" | "project:update" | "project:delete" | "project:view" | "project:updateMemberRole" | "defaultEnvironmentVariable:create" | "defaultEnvironmentVariable:update" | "defaultEnvironmentVariable:delete" | "defaultEnvironmentVariable:view" | "deployment:create" | "deployment:transfer" | "deployment:receive" | "deployment:updateReference" | "deployment:updateDashboardEditConfirmation" | "deployment:updateExpiresAt" | "deployment:updateSendLogsToClient" | "deployment:updateClass" | "deployment:updateIsDefault" | "deployment:updateType" | "deployment:delete" | "deployment:view" | "deployment:integrations:view" | "deployment:integrations:write" | "deployment:customDomain:create" | "deployment:customDomain:delete" | "deployment:customDomain:view" | "member:invite" | "member:cancelInvitation" | "member:remove" | "member:updateRole" | "member:view" | "billing:paymentMethod:update" | "billing:contact:update" | "billing:address:update" | "billing:subscription:changePlan" | "billing:spendingLimit:update" | "billing:view" | "billing:invoices:view" | "team:auditLog:view" | "team:token:create" | "team:token:update" | "team:token:delete" | "team:token:view" | "project:token:create" | "project:token:update" | "project:token:delete" | "project:token:view" | "deployment:token:create" | "deployment:token:update" | "deployment:token:delete" | "deployment:token:view" | "oauthApplication:create" | "oauthApplication:update" | "oauthApplication:delete" | "oauthApplication:view" | "oauthApplication:generateClientSecret" | "team:usage:view" | "deployment:insights:view" | "deployment:backups:create" | "deployment:backups:import" | "deployment:backups:configurePeriodic" | "deployment:backups:disablePeriodic" | "deployment:backups:delete" | "deployment:backups:view" | "sso:enable" | "sso:disable" | "sso:update" | "sso:view" | "customRole:view" | "integration:view" | "integration:create" | "integration:update" | "integration:delete" | "deployment:deploy" | "deployment:env:view" | "deployment:env:write" | "deployment:pause" | "deployment:unpause" | "deployment:logs:view" | "deployment:metrics:view" | "deployment:data:view" | "deployment:data:write" | "deployment:backups:download" | "deployment:functions:actAsUser" | "deployment:functions:runInternalQueries" | "deployment:functions:runInternalMutations" | "deployment:functions:runInternalActions" | "deployment:functions:runTestQuery" | "deployment:auditLog:view";
+        RoleStatementActions: components["schemas"]["RoleStatementWildcardAction"] | components["schemas"]["RoleStatementAction"][];
+        /**
+         * @description Whether a rule grants or revokes access.
+         * @enum {string}
+         */
+        RoleStatementEffect: "allow" | "deny";
+        /** @enum {string} */
+        RoleStatementWildcardAction: "*";
         /** Format: int64 */
         TeamId: number;
         TeamMember: {
+            /** @description The custom roles attached to this team member. Present iff
+             *     `role` is `custom`. */
+            customRoles?: components["schemas"]["TeamMemberCustomRole"][] | null;
             /** @description The email of the team member */
             email: string;
             id: components["schemas"]["MemberId"];
             /** @description The name of the team member */
             name?: string | null;
-            /** @description The role of the team member */
+            /** @description The role of the team member. `custom` indicates the member's
+             *     permissions come from the attached `customRoles`. */
             role: components["schemas"]["Role"];
+        };
+        /** @description A custom role attached to a team member, denormalized with the
+         *     role's display name so API consumers can render members without a
+         *     separate roles lookup. */
+        TeamMemberCustomRole: {
+            id: components["schemas"]["CustomRoleId"];
+            name: string;
         };
         TeamName: string;
         TeamResponse: {
@@ -1008,6 +1441,22 @@ export interface components {
             suspended: boolean;
         };
         TeamSlug: string;
+        UpdateCustomRoleArgs: {
+            description?: string | null;
+            id: components["schemas"]["CustomRoleId"];
+            name: string;
+            statements: components["schemas"]["RoleStatement"][];
+        };
+        UpdateDefaultEnvironmentVariablesArgs: {
+            changes: components["schemas"]["DefaultEnvironmentVariableChangeArgs"][];
+        };
+        UpdateTeamMemberRoleArgs: {
+            /** @description Replace the member's custom roles. Mutually exclusive with `role`.
+             *     Must be non-empty. Sets the member's role to `custom`. */
+            customRoles?: components["schemas"]["CustomRoleId"][] | null;
+            memberId: components["schemas"]["MemberId"];
+            role?: null | components["schemas"]["Role"];
+        };
     };
     responses: never;
     parameters: never;
@@ -1016,9 +1465,19 @@ export interface components {
     pathItems: never;
 }
 export type AdminKey = components['schemas']['AdminKey'];
+export type CancelInvitationArgs = components['schemas']['CancelInvitationArgs'];
+export type CreateCustomRoleArgs = components['schemas']['CreateCustomRoleArgs'];
 export type CreateDeploymentType = components['schemas']['CreateDeploymentType'];
 export type CreateInvitationArgs = components['schemas']['CreateInvitationArgs'];
+export type CreatePersonalAccessTokenArgs = components['schemas']['CreatePersonalAccessTokenArgs'];
+export type CreatePersonalAccessTokenResponse = components['schemas']['CreatePersonalAccessTokenResponse'];
 export type CreateTeamAccessTokenResponse = components['schemas']['CreateTeamAccessTokenResponse'];
+export type CustomRoleId = components['schemas']['CustomRoleId'];
+export type CustomRoleResponse = components['schemas']['CustomRoleResponse'];
+export type DefaultEnvironmentVariableChangeArgs = components['schemas']['DefaultEnvironmentVariableChangeArgs'];
+export type DefaultEnvironmentVariableResponse = components['schemas']['DefaultEnvironmentVariableResponse'];
+export type DeleteCustomRoleArgs = components['schemas']['DeleteCustomRoleArgs'];
+export type DeletePersonalAccessTokenArgs = components['schemas']['DeletePersonalAccessTokenArgs'];
 export type DeploymentClass = components['schemas']['DeploymentClass'];
 export type DeploymentClassMetadata = components['schemas']['DeploymentClassMetadata'];
 export type DeploymentId = components['schemas']['DeploymentId'];
@@ -1026,14 +1485,19 @@ export type DeploymentReference = components['schemas']['DeploymentReference'];
 export type DeploymentRegionMetadata = components['schemas']['DeploymentRegionMetadata'];
 export type DeploymentType = components['schemas']['DeploymentType'];
 export type DeviceName = components['schemas']['DeviceName'];
+export type InvitationResponse = components['schemas']['InvitationResponse'];
 export type IsDefaultDeployment = components['schemas']['IsDefaultDeployment'];
+export type ListCustomRolesResponse = components['schemas']['ListCustomRolesResponse'];
 export type ListDeploymentClassesResponse = components['schemas']['ListDeploymentClassesResponse'];
 export type ListDeploymentRegionsResponse = components['schemas']['ListDeploymentRegionsResponse'];
 export type ListLocalDeploymentsResponse = components['schemas']['ListLocalDeploymentsResponse'];
 export type ManagedBy = components['schemas']['ManagedBy'];
 export type MemberId = components['schemas']['MemberId'];
+export type PaginatedDefaultEnvironmentVariablesResponse = components['schemas']['PaginatedDefaultEnvironmentVariablesResponse'];
 export type PaginatedDeploymentsResponse = components['schemas']['PaginatedDeploymentsResponse'];
+export type PaginatedPersonalAccessTokensResponse = components['schemas']['PaginatedPersonalAccessTokensResponse'];
 export type PaginationMetadata = components['schemas']['PaginationMetadata'];
+export type PersonalAccessTokenResponse = components['schemas']['PersonalAccessTokenResponse'];
 export type PlatformCreateDeployKeyArgs = components['schemas']['PlatformCreateDeployKeyArgs'];
 export type PlatformCreateDeployKeyResponse = components['schemas']['PlatformCreateDeployKeyResponse'];
 export type PlatformCreateDeploymentArgs = components['schemas']['PlatformCreateDeploymentArgs'];
@@ -1049,6 +1513,7 @@ export type PlatformDeletePreviewDeployKeyArgs = components['schemas']['Platform
 export type PlatformDeployKeyResponse = components['schemas']['PlatformDeployKeyResponse'];
 export type PlatformDeploymentResponse = components['schemas']['PlatformDeploymentResponse'];
 export type PlatformListCustomDomainsResponse = components['schemas']['PlatformListCustomDomainsResponse'];
+export type PlatformListInvitationsResponse = components['schemas']['PlatformListInvitationsResponse'];
 export type PlatformListPreviewDeployKeysResponse = components['schemas']['PlatformListPreviewDeployKeysResponse'];
 export type PlatformListTeamMembersResponse = components['schemas']['PlatformListTeamMembersResponse'];
 export type PlatformProjectDetails = components['schemas']['PlatformProjectDetails'];
@@ -1064,11 +1529,20 @@ export type ReferralCode = components['schemas']['ReferralCode'];
 export type RegionName = components['schemas']['RegionName'];
 export type RequestDestination = components['schemas']['RequestDestination'];
 export type Role = components['schemas']['Role'];
+export type RoleStatement = components['schemas']['RoleStatement'];
+export type RoleStatementAction = components['schemas']['RoleStatementAction'];
+export type RoleStatementActions = components['schemas']['RoleStatementActions'];
+export type RoleStatementEffect = components['schemas']['RoleStatementEffect'];
+export type RoleStatementWildcardAction = components['schemas']['RoleStatementWildcardAction'];
 export type TeamId = components['schemas']['TeamId'];
 export type TeamMember = components['schemas']['TeamMember'];
+export type TeamMemberCustomRole = components['schemas']['TeamMemberCustomRole'];
 export type TeamName = components['schemas']['TeamName'];
 export type TeamResponse = components['schemas']['TeamResponse'];
 export type TeamSlug = components['schemas']['TeamSlug'];
+export type UpdateCustomRoleArgs = components['schemas']['UpdateCustomRoleArgs'];
+export type UpdateDefaultEnvironmentVariablesArgs = components['schemas']['UpdateDefaultEnvironmentVariablesArgs'];
+export type UpdateTeamMemberRoleArgs = components['schemas']['UpdateTeamMemberRoleArgs'];
 export type $defs = Record<string, never>;
 export interface operations {
     "create project": {
@@ -1647,6 +2121,74 @@ export interface operations {
             };
         };
     };
+    "list personal access tokens": {
+        parameters: {
+            query?: {
+                /** @description Cursor for pagination */
+                cursor?: string;
+                /** @description Maximum number of tokens to return (default 10, max 100) */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedPersonalAccessTokensResponse"];
+                };
+            };
+        };
+    };
+    "create personal access token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePersonalAccessTokenArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatePersonalAccessTokenResponse"];
+                };
+            };
+        };
+    };
+    "delete personal access token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeletePersonalAccessTokenArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     "get token details": {
         parameters: {
             query?: never;
@@ -1823,6 +2365,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
+                /** @description Team ID */
                 team_id: string;
             };
             cookie?: never;
@@ -1830,6 +2373,230 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["CreateInvitationArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "list pending team invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformListInvitationsResponse"];
+                };
+            };
+        };
+    };
+    "cancel team member invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelInvitationArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "list default environment variables": {
+        parameters: {
+            query?: {
+                /** @description Filter by exact environment variable name. */
+                name?: string | null;
+                /** @description Filter by deployment type */
+                deploymentType?: null | components["schemas"]["DeploymentType"];
+            };
+            header?: never;
+            path: {
+                /** @description Project ID */
+                project_id: components["schemas"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedDefaultEnvironmentVariablesResponse"];
+                };
+            };
+        };
+    };
+    "update default environment variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID */
+                project_id: components["schemas"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDefaultEnvironmentVariablesArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "create custom role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: components["schemas"]["TeamId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCustomRoleArgs"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRoleResponse"];
+                };
+            };
+        };
+    };
+    "list custom roles": {
+        parameters: {
+            query?: {
+                /** @description Cursor for pagination */
+                cursor?: string;
+                /** @description Max results per page (default: 100, max: 100) */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: components["schemas"]["TeamId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListCustomRolesResponse"];
+                };
+            };
+        };
+    };
+    "update custom role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: components["schemas"]["TeamId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCustomRoleArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomRoleResponse"];
+                };
+            };
+        };
+    };
+    "delete custom role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: components["schemas"]["TeamId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteCustomRoleArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "update team member role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: components["schemas"]["TeamId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTeamMemberRoleArgs"];
             };
         };
         responses: {

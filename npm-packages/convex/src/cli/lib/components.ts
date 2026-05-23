@@ -45,11 +45,10 @@ import { withTmpDir } from "../../bundler/fs.js";
 import { handleDebugBundlePath } from "./debugBundlePath.js";
 import { chalkStderr } from "chalk";
 import { StartPushRequest, StartPushResponse } from "./deployApi/startPush.js";
-import { loadSelectedDeploymentCredentials } from "./api.js";
+import { DetailedDeploymentCredentials } from "./api.js";
 import { FinishPushDiff } from "./deployApi/finishPush.js";
 import { Reporter, Span } from "./tracing.js";
 import { DEFINITION_FILENAME_TS } from "./components/constants.js";
-import { DeploymentSelection } from "./deploymentSelection.js";
 import { DeploymentType } from "./api.js";
 import { deploymentDashboardUrlPage } from "./dashboard.js";
 import { formatIndex, LargeIndexDeletionCheck } from "./indexes.js";
@@ -80,11 +79,12 @@ export type PushOptions = {
   // Multi-project deployment options
   namespace?: string | undefined;
   projectId?: string | undefined;
+  message: string | null;
 };
 
 export async function runCodegen(
   ctx: Context,
-  deploymentSelection: DeploymentSelection,
+  credentials: DetailedDeploymentCredentials | null,
   options: CodegenOptions,
 ) {
   // This also ensures the current directory is the project root.
@@ -101,19 +101,9 @@ export async function runCodegen(
   }
 
   if (!options.systemUdfs) {
-    // Early exit for a better error message trying to use a preview key.
-    if (deploymentSelection.kind === "preview") {
-      return await ctx.crash({
-        exitCode: 1,
-        errorType: "invalid filesystem data",
-        printedMessage: `Codegen requires an existing deployment so doesn't support CONVEX_DEPLOY_KEY.\nGenerate code in dev and commit it to the repo instead.\nhttps://docs.convex.dev/understanding/best-practices/other-recommendations#check-generated-code-into-version-control`,
-      });
+    if (credentials === null) {
+      return;
     }
-
-    const credentials = await loadSelectedDeploymentCredentials(
-      ctx,
-      deploymentSelection,
-    );
 
     await startComponentsPushAndCodegen(
       ctx,
@@ -408,12 +398,12 @@ async function startComponentsPushAndCodegen(
 
   const { unchangedModuleHashes, changedModules } = options.pushAllModules
     ? {
-      unchangedModuleHashes: [],
-      changedModules: appImplementation.functions,
-    }
+        unchangedModuleHashes: [],
+        changedModules: appImplementation.functions,
+      }
     : await parentSpan.enterAsync("getUnchangedModuleHashesFromServer", () =>
-      getUnchangedModuleHashesFromServer(ctx, appImplementation, options),
-    );
+        getUnchangedModuleHashesFromServer(ctx, appImplementation, options),
+      );
 
   const appDefinition: AppDefinitionConfig = {
     ...appDefinitionSpecWithoutImpls,
@@ -446,7 +436,9 @@ async function startComponentsPushAndCodegen(
   // Resolve namespace: CLI flag takes priority, then convex.json config
   const namespace = options.namespace ?? projectConfig.namespace;
   const projectId =
-    options.projectId ?? projectConfig.projectId ?? (namespace ? projectConfig.functions : undefined);
+    options.projectId ??
+    projectConfig.projectId ??
+    (namespace ? projectConfig.functions : undefined);
 
   // Validate namespace if provided
   if (namespace) {
@@ -478,8 +470,7 @@ async function startComponentsPushAndCodegen(
 
     if (originalSchemaPath) {
       const originalSchema = nodeFs.readFileSync(originalSchemaPath, "utf-8");
-      const tableNamePattern =
-        /([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*defineTable/g;
+      const tableNamePattern = /([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*defineTable/g;
       const tableNames: string[] = [];
       let match;
       while ((match = tableNamePattern.exec(originalSchema)) !== null) {
@@ -530,9 +521,7 @@ async function startComponentsPushAndCodegen(
     // "Catalog/products:list" instead of "products:list".
     const pathPrefix = `${namespace}/`;
     const skipPathPrefix = (p: string) =>
-      p === "http.js" ||
-      p === "crons.js" ||
-      p === "auth.config.js";
+      p === "http.js" || p === "crons.js" || p === "auth.config.js";
     for (const mod of changedModules) {
       if (skipPathPrefix(mod.path)) {
         continue;
@@ -546,9 +535,7 @@ async function startComponentsPushAndCodegen(
       hashMod.path = `${pathPrefix}${hashMod.path}`;
     }
     logMessage(
-      chalkStderr.gray(
-        `  Prefixed function paths with "${pathPrefix}"`,
-      ),
+      chalkStderr.gray(`  Prefixed function paths with "${pathPrefix}"`),
     );
   }
 
@@ -563,6 +550,7 @@ async function startComponentsPushAndCodegen(
     // Multi-project deployment fields
     ...(namespace ? { namespace } : {}),
     ...(projectId ? { projectId } : {}),
+    forCodegen: !!options.codegenOnlyThisComponent,
   };
   if (options.writePushRequest) {
     const pushRequestPath = path.resolve(options.writePushRequest);
@@ -754,9 +742,10 @@ export async function runComponentsPush(
     );
 
     logFinishedStep(
-      `Remote config ${options.dryRun ? "would" : "will"
+      `Remote config ${
+        options.dryRun ? "would" : "will"
       } be overwritten with the following changes:\n  ` +
-      diffString.replace(/\n/g, "\n  "),
+        diffString.replace(/\n/g, "\n  "),
     );
   }
 

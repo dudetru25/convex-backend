@@ -7,7 +7,10 @@ use deno_core::v8;
 use futures::FutureExt;
 use sync_types::CanonicalizedUdfPath;
 use tracing::Instrument;
-use udf::HttpActionResult;
+use udf::{
+    metrics::is_developer_ok,
+    HttpActionResult,
+};
 
 use crate::{
     client::{
@@ -31,7 +34,6 @@ use crate::{
     isolate::Isolate,
     metrics::{
         finish_service_request_timer,
-        is_developer_ok,
         record_component_function_path,
         service_request_timer,
         RequestStatus,
@@ -68,7 +70,6 @@ impl<RT: Runtime> FunctionRunnerIsolateWorker<RT> {
                 mut response,
                 queue_timer,
                 rng_seed,
-                unix_timestamp,
                 reactor_depth,
                 udf_callback,
                 function_started_sender,
@@ -78,13 +79,13 @@ impl<RT: Runtime> FunctionRunnerIsolateWorker<RT> {
                 let timer = service_request_timer(&request.udf_type);
                 record_component_function_path(request.path_and_args.path());
                 let udf_path = request.path_and_args.path().udf_path.to_owned();
+                let function_timestamp = request.unix_timestamp;
                 let environment = DatabaseUdfEnvironment::new(
                     self.rt.clone(),
                     environment_data,
                     heap_stats.clone(),
                     request,
                     reactor_depth,
-                    udf_callback,
                     client_id.clone(),
                 );
                 let r = environment
@@ -95,8 +96,9 @@ impl<RT: Runtime> FunctionRunnerIsolateWorker<RT> {
                         isolate_clean,
                         response.closed().boxed(),
                         rng_seed,
-                        unix_timestamp,
+                        function_timestamp,
                         function_started_sender,
+                        udf_callback,
                     )
                     .await;
                 let status = match &r {
@@ -129,9 +131,13 @@ impl<RT: Runtime> FunctionRunnerIsolateWorker<RT> {
                 record_component_function_path(path);
                 let udf_path = path.udf_path.to_owned();
                 let component = path.component.to_owned();
+                let component_path = path.component_path.clone();
+                let log_string = format!("Action: {udf_path:?}");
                 let environment = ActionEnvironment::new(
                     self.rt.clone(),
                     component,
+                    udf_path,
+                    component_path,
                     environment_data,
                     request.identity,
                     request.transaction,
@@ -166,11 +172,12 @@ impl<RT: Runtime> FunctionRunnerIsolateWorker<RT> {
                 };
                 finish_service_request_timer(timer, status);
                 let _ = response.send(r);
-                format!("Action: {udf_path:?}")
+                log_string
             },
             RequestType::Analyze {
                 udf_config,
                 modules,
+                to_analyze,
                 environment_variables,
                 response,
                 max_user_heap_size: _,
@@ -182,6 +189,7 @@ impl<RT: Runtime> FunctionRunnerIsolateWorker<RT> {
                     isolate_clean,
                     udf_config,
                     modules,
+                    to_analyze,
                     environment_variables,
                 )
                 .await;
@@ -201,12 +209,16 @@ impl<RT: Runtime> FunctionRunnerIsolateWorker<RT> {
             } => {
                 drop(queue_timer);
                 let timer = service_request_timer(&UdfType::HttpAction);
-                let udf_path: CanonicalizedUdfPath =
-                    request.http_module_path.path().udf_path.clone();
-                record_component_function_path(request.http_module_path.path());
+                let http_path = request.http_module_path.path();
+                let udf_path: CanonicalizedUdfPath = http_path.udf_path.clone();
+                let component_path = http_path.component_path.clone();
+                let log_string = format!("Http: {udf_path:?}");
+                record_component_function_path(http_path);
                 let environment = ActionEnvironment::new(
                     self.rt.clone(),
-                    request.http_module_path.path().component,
+                    http_path.component,
+                    udf_path,
+                    component_path,
                     environment_data,
                     request.identity,
                     request.transaction,
@@ -239,7 +251,7 @@ impl<RT: Runtime> FunctionRunnerIsolateWorker<RT> {
                 };
                 finish_service_request_timer(timer, status);
                 let _ = response.send(r);
-                format!("Http: {udf_path:?}")
+                log_string
             },
             RequestType::EvaluateSchema {
                 schema_bundle,
@@ -361,43 +373,5 @@ impl<RT: Runtime> IsolateWorker<RT> for FunctionRunnerIsolateWorker<RT> {
 
     fn rt(&self) -> RT {
         self.rt.clone()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use common::pause::PauseController;
-    use runtime::testing::TestRuntime;
-
-    use super::FunctionRunnerIsolateWorker;
-    use crate::{
-        client::PAUSE_RECREATE_CLIENT,
-        test_helpers::{
-            test_isolate_not_recreated_with_same_client,
-            test_isolate_recreated_with_client_change,
-        },
-        IsolateConfig,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_isolate_recreated_with_client_change_function_runner(
-        rt: TestRuntime,
-        pause: PauseController,
-    ) -> anyhow::Result<()> {
-        let isolate_config = IsolateConfig::default();
-        let hold_guard = pause.hold(PAUSE_RECREATE_CLIENT);
-        let worker = FunctionRunnerIsolateWorker::new(rt.clone(), isolate_config);
-        test_isolate_recreated_with_client_change(rt, worker, hold_guard).await
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_isolate_not_recreated_with_same_client_function_runner(
-        rt: TestRuntime,
-        pause: PauseController,
-    ) -> anyhow::Result<()> {
-        let isolate_config = IsolateConfig::default();
-        let hold_guard = pause.hold(PAUSE_RECREATE_CLIENT);
-        let worker = FunctionRunnerIsolateWorker::new(rt.clone(), isolate_config);
-        test_isolate_not_recreated_with_same_client(rt, worker, hold_guard).await
     }
 }

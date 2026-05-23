@@ -41,26 +41,33 @@ pub use actions::{
 pub use admin_key::{
     format_admin_key,
     remove_type_prefix_from_admin_key,
-    remove_type_prefix_from_instance_name,
+    remove_type_prefix_from_deployment_name,
     split_admin_key,
     AdminKey,
     AdminKeyParts,
-    PreviewDeploymentAdminKeyParts,
     SystemKey,
 };
 pub use backend_info::{
     BackendInfo,
     DEFAULT_PROVISION_CONCURRENCY,
 };
-pub use backend_state::BackendState;
+pub use backend_state::{
+    BackendState,
+    OldBackendState,
+    SystemStopState,
+    UserStopState,
+};
 pub use deployments::{
     DeploymentClass,
+    DeploymentMetadata,
     DeploymentType,
 };
 pub use environment_variables::{
     env_var_limit_met,
     env_var_name_forbidden,
     env_var_name_not_unique,
+    env_var_total_size,
+    env_var_total_size_limit_met,
     EnvVarName,
     EnvVarValue,
     EnvironmentVariable,
@@ -102,8 +109,6 @@ pub use region::{
 pub use search_index_metric_labels::SearchIndexMetricLabels;
 pub use snapshot_export::SetExportExpirationRequest;
 pub use table::TableStats;
-#[cfg(any(test, feature = "testing"))]
-pub use timestamp::unchecked_repeatable_ts;
 pub use timestamp::{
     RepeatableReason,
     RepeatableTimestamp,
@@ -115,6 +120,7 @@ tuple_struct_u64!(MemberId);
 tuple_struct_u64!(TeamId);
 tuple_struct_u64!(DeploymentId);
 tuple_struct_u64!(ProjectId);
+tuple_struct_u64!(CustomRoleId);
 tuple_struct_string!(ConvexOrigin);
 tuple_struct_string!(ConvexSite);
 
@@ -127,14 +133,6 @@ pub type CursorMs = f64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PersistenceVersion {
     V5,
-}
-
-#[cfg(any(test, feature = "testing"))]
-#[allow(clippy::derivable_impls)]
-impl Default for PersistenceVersion {
-    fn default() -> Self {
-        Self::V5
-    }
 }
 
 impl PersistenceVersion {

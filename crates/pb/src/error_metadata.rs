@@ -1,4 +1,7 @@
-use std::fmt::Display;
+use std::{
+    error::Error as _,
+    fmt::Display,
+};
 
 use anyhow::Context;
 use errors::{
@@ -65,6 +68,7 @@ impl ErrorCodeProto {
                 table_name: occ_info.table_name,
                 document_id: occ_info.document_id,
                 write_source: occ_info.write_source,
+                component_path: occ_info.component_path,
                 is_system: occ_info.is_system,
                 write_ts: occ_info.write_ts,
             },
@@ -89,12 +93,14 @@ impl From<ErrorMetadata> for ErrorMetadataProto {
                     table_name,
                     document_id,
                     write_source,
+                    component_path,
                     is_system,
                     write_ts,
                 } => Some(OccInfoProto {
                     table_name,
                     document_id,
                     write_source,
+                    component_path,
                     is_system,
                     write_ts,
                 }),
@@ -152,15 +158,21 @@ impl ErrorMetadataStatusExt for tonic::Status {
                 return anyhow::anyhow!("Failed to decode StatusDetails proto: {}", err);
             },
         };
-        let mut error: anyhow::Error = self.into();
+        let message = self.message().to_string();
+        let mut source_chain = String::new();
+        let mut source = self.source();
+        while let Some(s) = source {
+            source_chain.push_str(&format!(": {s}"));
+            source = s.source();
+        }
+        let mut error: anyhow::Error =
+            anyhow::anyhow!("status: {code:?}, message: {message:?}{source_chain}");
         if let Some(error_metadata) = details.error_metadata {
             let error_metadata = match ErrorMetadata::try_from(error_metadata) {
                 Ok(error_metadata) => error_metadata,
                 Err(err) => return err.context("Failed to parse ErrorMetadata proto"),
             };
             error = error.context(error_metadata)
-        } else if error.downcast_ref::<tonic::transport::Error>().is_some() {
-            error = error.context(ErrorMetadata::operational_internal_server_error());
         } else if code == tonic::Code::ResourceExhausted {
             error = error.context(ErrorMetadata::overloaded(
                 INTERNAL_SERVER_ERROR,
@@ -175,95 +187,5 @@ impl ErrorMetadataStatusExt for tonic::Status {
         C: Display + Send + Sync + 'static,
     {
         self.into_anyhow().context(context)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use errors::{
-        ErrorCode,
-        ErrorMetadataAnyhowExt,
-        INTERNAL_SERVER_ERROR_MSG,
-    };
-    use proptest::prelude::*;
-    use value::testing::assert_roundtrips;
-
-    use super::ErrorMetadata;
-    use crate::{
-        error_metadata::ErrorMetadataStatusExt,
-        errors::ErrorMetadata as ErrorMetadataProto,
-    };
-
-    #[test]
-    fn too_early_round_trips_between_error_code_protos() {
-        let metadata = ErrorMetadata::too_early();
-        let proto: ErrorMetadataProto = metadata.clone().into();
-        let round_trip = ErrorMetadata::try_from(proto).expect("metadata should round trip");
-        assert_eq!(round_trip.code, ErrorCode::TooEarly);
-    }
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_error_metadata_roundtrips(left in any::<ErrorMetadata>()) {
-            assert_roundtrips::<ErrorMetadata, ErrorMetadataProto>(left);
-        }
-
-        #[test]
-        fn test_status_propagates_metadata(original_metadata in any::<ErrorMetadata>()) {
-            let status = tonic::Status::from_anyhow(anyhow::anyhow!("Error").context(original_metadata.clone()));
-            let error = status.into_anyhow();
-            if let Some(received_metadata) = error.downcast_ref::<ErrorMetadata>() {
-                assert_eq!(*received_metadata, original_metadata);
-            } else {
-                panic!("Didn't propagate error_metadata via Status");
-            }
-        }
-    }
-
-    #[test]
-    fn test_status_no_error_metadata() {
-        let status = tonic::Status::from_anyhow(anyhow::anyhow!("Error"));
-        // Empty status details should parse as zero bytes.
-        assert!(status.details().is_empty());
-
-        // We should have no ErrorMetadata in the context.
-        let error = status.into_anyhow();
-        assert!(error.downcast_ref::<ErrorMetadata>().is_none());
-    }
-
-    #[test]
-    fn test_context_no_error_metadata() {
-        let status = tonic::Status::from_anyhow(anyhow::anyhow!("My special error"));
-
-        let error = status.context("Test context");
-        // Check the error we log to sentry includes the original error and the context
-        let error_string = format!("{error:#}");
-        assert!(error_string.contains("My special error"));
-        assert!(error_string.contains("Test context"));
-
-        // Check that the user facing portions haven't changed
-        assert_eq!(error.user_facing_message(), INTERNAL_SERVER_ERROR_MSG);
-    }
-
-    #[test]
-    fn test_context_with_error_metadata() {
-        let status = tonic::Status::from_anyhow(
-            ErrorMetadata::overloaded("ShortMsg", "Test long message").into(),
-        );
-
-        let error = status.context("Test context");
-        // Check the error we log to sentry includes the original error and the context
-        let error_string = format!("{error:#}");
-        assert!(error_string.contains("Test long message"));
-        assert!(error_string.contains("Test context"));
-
-        // Check that the user facing portions haven't changed
-        assert_eq!(error.user_facing_message(), "Test long message");
-        assert_eq!(error.short_msg(), "ShortMsg")
     }
 }

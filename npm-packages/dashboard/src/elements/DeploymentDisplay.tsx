@@ -16,7 +16,7 @@ import { Button } from "@ui/Button";
 import { ContextMenu } from "@common/features/data/components/ContextMenu";
 import { DeploymentMenuOptions } from "components/header/ProjectSelector/DeploymentMenuOptions";
 import { useCurrentProject } from "api/projects";
-import { useRef, useState, useEffect } from "react";
+import { useContext, useRef, useState, useEffect } from "react";
 import {
   PROVISION_DEV_PAGE_NAME,
   PROVISION_PROD_PAGE_NAME,
@@ -27,6 +27,7 @@ import { useListVanityDomains } from "api/vanityDomains";
 import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
 import { DeploymentProvider } from "components/projectSettings/CustomDomains";
+import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { useContainerWidth } from "../hooks/useContainerWidth";
 
 function DeploymentDomainInfo({
@@ -39,6 +40,9 @@ function DeploymentDomainInfo({
   whoseName: string | null;
 }) {
   const team = useCurrentTeam();
+  const deploymentInfo = useContext(DeploymentInfoContext);
+  const canViewData =
+    deploymentInfo?.useIsOperationAllowed("ViewData") ?? false;
   const hasEntitlement = !!useTeamEntitlements(team?.id)?.customDomainsEnabled;
   const domains = useListVanityDomains(
     hasEntitlement ? deployment?.name : undefined,
@@ -46,7 +50,13 @@ function DeploymentDomainInfo({
   const vanityCloudDomains = domains?.filter(
     (d) => d.requestDestination === "convexCloud",
   );
-  const canonicalCloudUrl = useQuery(udfs.convexCloudUrl.default);
+  // Skip the system UDF when the member can't view data; otherwise the
+  // query throws and the error escapes React's error boundary on the
+  // next WebSocket notify (uncatchable in userland).
+  const canonicalCloudUrl = useQuery(
+    udfs.convexCloudUrl.default,
+    canViewData ? undefined : "skip",
+  );
   const vanityDomain =
     vanityCloudDomains?.find((d) => d.domain === canonicalCloudUrl) ||
     vanityCloudDomains?.[0];
@@ -267,6 +277,7 @@ export function DeploymentLabel({
       <Button
         variant="unstyled"
         id="select-deployment"
+        data-testid="select-deployment"
         className={cn(
           "flex h-[2.3125rem] items-center gap-2 truncate rounded-full border text-sm font-medium transition-opacity hover:opacity-80",
           menuTarget && "opacity-80",

@@ -12,15 +12,15 @@ import { PauseDeployment } from "@common/features/settings/components/PauseDeplo
 import { DeploymentSummary } from "@common/features/health/components/DeploymentSummary";
 import { useScrollToHash } from "@common/lib/useScrollToHash";
 import { usePostHog } from "hooks/usePostHog";
-import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { useCurrentTeam, useTeamMembers } from "api/teams";
 import { useCurrentProject } from "api/projects";
-import { useListCloudBackups } from "api/backups";
-import { useMemo, useRef } from "react";
+import { useListCloudBackupsIfAvailable } from "api/backups";
+import { PermissionsContext } from "@common/lib/deploymentContext";
+import { useContext, useMemo, useRef } from "react";
 
 export { getServerSideProps } from "lib/ssr";
 
-export default withAuthenticatedPage(() => {
+export function DeploymentSettingsPage() {
   const router = useRouter();
   const envVars = router.query.var;
   const pathname = usePathname();
@@ -40,32 +40,36 @@ export default withAuthenticatedPage(() => {
       <DeploymentURLAndDeployKey />
     </DeploymentSettingsLayout>
   );
-});
+}
+
+export default withAuthenticatedPage(DeploymentSettingsPage);
 
 function DeploymentURLAndDeployKey() {
   const deployment = useCurrentDeployment();
   const { capture } = usePostHog();
   const pauseDeploymentRef = useRef<HTMLDivElement | null>(null);
   useScrollToHash("#pause-deployment", pauseDeploymentRef);
-  const { transferDeployment } = useLaunchDarkly();
 
   const team = useCurrentTeam();
   const project = useCurrentProject();
-  const backups = useListCloudBackups(team?.id || 0);
   const teamMembers = useTeamMembers(team?.id);
   const { regions } = useDeploymentRegions(team?.id);
 
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewBackups = useIsOperationAllowed("ViewBackups");
+  const backups = useListCloudBackupsIfAvailable(
+    canViewBackups ? deployment : undefined,
+  );
+
+  // backups is null when not available (d1024, non-cloud), undefined when loading
   const lastBackupTime = useMemo(() => {
-    if (!backups || !deployment || deployment.kind !== "cloud") {
-      return undefined;
-    }
-    const deploymentsBackups = backups.filter(
-      (b) => b.sourceDeploymentId === deployment.id && b.state === "complete",
-    );
+    if (backups === null) return null;
+    if (backups === undefined) return undefined;
+    const deploymentsBackups = backups.filter((b) => b.state === "complete");
     return deploymentsBackups.length > 0
       ? deploymentsBackups[0].requestedTime
       : null;
-  }, [backups, deployment]);
+  }, [backups]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -91,7 +95,7 @@ function DeploymentURLAndDeployKey() {
         />
       </div>
       <DeleteDeployment />
-      {transferDeployment && <TransferDeployment />}
+      <TransferDeployment />
     </div>
   );
 }

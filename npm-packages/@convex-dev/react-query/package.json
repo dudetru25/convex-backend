@@ -37,10 +37,10 @@
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5.0.0",
-    "convex": "^1.34.1"
+    "convex": "^1.39.1"
   },
   "devDependencies": {
-    "@convex-dev/auth": "^0.0.90",
+    "@convex-dev/auth": "^0.0.91",
     "@convex-dev/eslint-plugin": "workspace:*",
     "@eslint/compat": "~2.0.0",
     "@eslint/eslintrc": "^3",
@@ -61,7 +61,7 @@
     "tshy": "^3.0.0",
     "typescript": "~5.0.3",
     "typescript-eslint": "^8.45.0",
-    "vite": "^6.4.1",
+    "vite": "^6.4.2",
     "vitest": "^3.2.4"
   },
   "exports": {

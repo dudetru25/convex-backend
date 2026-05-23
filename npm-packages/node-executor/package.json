@@ -12,12 +12,12 @@
   "dependencies": {
     "adm-zip": "^0.5.10",
     "archiver": "~7.0.0",
-    "commander": "^14.0.2",
+    "commander": "^14.0.3",
     "concat-stream": "^2.0.0",
     "convex": "workspace:*",
     "express": "^5.0.0",
-    "prettier": "^3.8.0",
-    "uuid": "^13.0.0"
+    "prettier": "3.8.1",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.171.0",
@@ -31,7 +31,7 @@
     "@types/uuid": "^11.0.0",
     "auth0": "^4.3.1",
     "esbuild": "0.27.0",
-    "googleapis": "^166.0.0",
+    "googleapis": "^171.0.0",
     "stripe": "^19.0.0",
     "twilio": "^5.0.0",
     "typescript": "~5.0.3",

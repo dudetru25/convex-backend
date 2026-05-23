@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useContext } from "react";
 import { cn } from "@ui/cn";
 import { ChevronDownIcon } from "@radix-ui/react-icons";
 import { SchedulerStatus } from "@common/elements/SchedulerStatus";
@@ -12,7 +12,11 @@ import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
 import { HealthCard } from "@common/elements/HealthCard";
 import { ChartForFunctionRate } from "@common/features/health/components/ChartForFunctionRate";
 import { DeploymentSummary } from "@common/features/health/components/DeploymentSummary";
+import { SubscriptionInvalidations } from "@common/features/health/components/SubscriptionInvalidations";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
+import { Sheet } from "@ui/Sheet";
+import { PermissionsContext } from "@common/lib/deploymentContext";
+import { NoPermissionMessage } from "@common/elements/NoPermissionMessage";
 
 export function HealthView({
   header,
@@ -35,12 +39,15 @@ export function HealthView({
   teamMembers?: Array<{ id: number; name?: string | null; email: string }>;
   regions?: Array<{ name: string; displayName: string }>;
 }) {
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewMetrics = useIsOperationAllowed("ViewMetrics");
+
   const {
     closedDescription: concurrencyClosedDescription,
     lag,
     running,
     queued,
-  } = useConcurrencyStatus();
+  } = useConcurrencyStatus(canViewMetrics, 4);
 
   return (
     <PageContent>
@@ -73,11 +80,20 @@ export function HealthView({
                   </span>
                 }
               >
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  <FunctionCalls />
-                  <FailureRate />
-                  <CacheHitRate />
-                </div>
+                {canViewMetrics ? (
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <FunctionCalls />
+                    <FailureRate />
+                    <CacheHitRate />
+                  </div>
+                ) : (
+                  <Sheet className="max-w-3xl py-12">
+                    <NoPermissionMessage
+                      message="You do not have permission to view metrics."
+                      missingPermission="deployment:metrics:view"
+                    />
+                  </Sheet>
+                )}
               </DisclosureSection>
 
               <DisclosureSection
@@ -86,27 +102,37 @@ export function HealthView({
                 defaultOpen={false}
                 closedDescription={concurrencyClosedDescription}
               >
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  <SchedulerStatus lag={lag} />
-                  <HealthCard
-                    title="Running Functions"
-                    tip="The maximum number of concurrently running functions in a given minute. This includes system functions used to power the Convex Dashboard."
-                  >
-                    <ChartForFunctionRate
-                      chartData={running}
-                      kind="functionConcurrency"
+                {canViewMetrics ? (
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <SchedulerStatus lag={lag} />
+                    <HealthCard
+                      title="Running Functions"
+                      tip="The maximum number of concurrently running functions in a given minute. This includes system functions used to power the Convex Dashboard."
+                    >
+                      <ChartForFunctionRate
+                        chartData={running}
+                        kind="functionConcurrency"
+                      />
+                    </HealthCard>
+                    <HealthCard
+                      title="Queued Functions"
+                      tip="The maximum number of functions waiting to be ran in a given minute. Functions are queued when the concurrency limit has been reached. If a function is queued for too long, it will discarded."
+                    >
+                      <ChartForFunctionRate
+                        chartData={queued}
+                        kind="functionConcurrency"
+                      />
+                    </HealthCard>
+                    <SubscriptionInvalidations />
+                  </div>
+                ) : (
+                  <Sheet className="max-w-3xl py-12">
+                    <NoPermissionMessage
+                      message="You do not have permission to view metrics."
+                      missingPermission="deployment:metrics:view"
                     />
-                  </HealthCard>
-                  <HealthCard
-                    title="Queued Functions"
-                    tip="The maximum number of functions waiting to be ran in a given minute. Functions are queued when the concurrency limit has been reached. If a function is queued for too long, it will discarded."
-                  >
-                    <ChartForFunctionRate
-                      chartData={queued}
-                      kind="functionConcurrency"
-                    />
-                  </HealthCard>
-                </div>
+                  </Sheet>
+                )}
               </DisclosureSection>
             </div>
           </PageWrapper>

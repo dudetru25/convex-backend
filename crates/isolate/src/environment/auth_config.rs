@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::anyhow;
@@ -98,6 +99,20 @@ impl<RT: Runtime> IsolateEnvironment<RT> for AuthConfigEnvironment {
         anyhow::bail!(ErrorMetadata::bad_request(
             "NoDateDuringAuthConfig",
             "Date unsupported when evaluating auth config file"
+        ))
+    }
+
+    fn performance_now(&mut self) -> anyhow::Result<Duration> {
+        anyhow::bail!(ErrorMetadata::bad_request(
+            "NoPerformanceDuringAuthConfig",
+            "The Performance API is not supported when evaluating auth config file"
+        ))
+    }
+
+    fn performance_time_origin(&mut self) -> anyhow::Result<UnixTimestamp> {
+        anyhow::bail!(ErrorMetadata::bad_request(
+            "NoPerformanceDuringAuthConfig",
+            "The Performance API is not supported when evaluating auth config file"
         ))
     }
 
@@ -359,52 +374,4 @@ pub fn config_not_matching_schema_error(error: String) -> ErrorMetadata {
         "AuthConfigNotMatchingSchemaError",
         format!("auth config file must include a list of provider credentials: {error}"),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_traditional_oidc() -> anyhow::Result<()> {
-        // not "legacy" because we'll support it forever, the only legacy aspect is not
-        // having a "type" field.
-        let valid_config = r#"{"providers": [{"domain": "a", "applicationID": "b"}]}"#;
-        check_for_common_confusions(valid_config)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_newer_oidc() -> anyhow::Result<()> {
-        let valid_config =
-            r#"{"providers": [{"type": "oidc", "domain": "example.com", "applicationID": "c"}]}"#;
-        check_for_common_confusions(valid_config)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_misspell_application_id() -> anyhow::Result<()> {
-        let invalid_config = r#"{"providers": [{"domain": "example.com", "applicationId": "b"}]}"#;
-        let result = check_for_common_confusions(invalid_config);
-        assert!(result.is_err());
-        let error_message = result.unwrap_err().to_string();
-        assert!(error_message.contains("applicationID"));
-        assert!(error_message.contains("spelled lowercase 'application', capital I, capital D."));
-        Ok(())
-    }
-
-    #[test]
-    fn test_valid_custom_jwt() -> anyhow::Result<()> {
-        let valid_config = r#"{ "providers": [ { "type": "customJwt", "applicationID": "your-application-id", "issuer": "https://your.issuer.url.com", "jwks": "https://your.issuer.url.com/.well-known/jwks.json", "algorithm": "RS256" }]}"#;
-
-        check_for_common_confusions(valid_config)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_valid_custom_jwt_without_application() -> anyhow::Result<()> {
-        let valid_config = r#"{ "providers": [ { "type": "customJwt", "issuer": "https://your.issuer.url.com", "jwks": "https://your.issuer.url.com/.well-known/jwks.json", "algorithm": "RS256" }]}"#;
-        check_for_common_confusions(valid_config)?;
-        Ok(())
-    }
 }

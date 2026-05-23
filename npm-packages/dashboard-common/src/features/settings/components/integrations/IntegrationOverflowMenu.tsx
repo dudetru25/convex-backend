@@ -2,9 +2,12 @@ import { DotsVerticalIcon, PlusIcon } from "@radix-ui/react-icons";
 import { Button } from "@ui/Button";
 import { Menu, MenuItem } from "@ui/Menu";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
-import { useDeleteLogStream } from "@common/lib/integrationsApi";
+import {
+  useDeleteLogStream,
+  useUpdateLogStream,
+} from "@common/lib/integrationsApi";
 import { toast } from "@common/lib/utils";
-import { useState } from "react";
+import { ReactNode, useState } from "react";
 import {
   LogIntegration,
   ExceptionReportingIntegration,
@@ -15,14 +18,23 @@ import {
 export function IntegrationOverflowMenu({
   integration,
   onConfigure,
+  disabled = false,
+  disabledTip,
 }: {
   integration: LogIntegration | ExceptionReportingIntegration;
   onConfigure: () => void;
+  disabled?: boolean;
+  disabledTip?: ReactNode;
 }) {
   const deleteLogStream = useDeleteLogStream();
+  const updateLogStream = useUpdateLogStream();
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const logStreamId = integration.existing?._id;
   const existingIntegration = integration.existing;
+  const webhookConfig =
+    integration.kind === "webhook"
+      ? (integration.existing?.config ?? null)
+      : null;
 
   return existingIntegration && logStreamId ? (
     <>
@@ -53,15 +65,42 @@ export function IntegrationOverflowMenu({
           variant: "neutral",
         }}
       >
-        <MenuItem action={onConfigure}>Configure</MenuItem>
+        <MenuItem
+          action={onConfigure}
+          disabled={disabled}
+          tip={disabled ? disabledTip : undefined}
+          tipSide="left"
+        >
+          Configure
+        </MenuItem>
         <MenuItem href={configToUrl(existingIntegration.config)}>
           Go to {integrationName(existingIntegration.config.type)}
         </MenuItem>
+        {webhookConfig && (
+          <MenuItem
+            action={async () => {
+              await updateLogStream(logStreamId, {
+                logStreamType: "webhook",
+                url: webhookConfig.url,
+                format: webhookConfig.format,
+              });
+              toast("success", "Refreshed webhook connection");
+            }}
+            disabled={disabled}
+            tip={disabled ? disabledTip : undefined}
+            tipSide="left"
+          >
+            Refresh connection
+          </MenuItem>
+        )}
         <MenuItem
           action={() => {
             setShowDeleteConfirmation(true);
           }}
           variant="danger"
+          disabled={disabled}
+          tip={disabled ? disabledTip : undefined}
+          tipSide="left"
         >
           Delete
         </MenuItem>
@@ -72,9 +111,11 @@ export function IntegrationOverflowMenu({
       size="xs"
       icon={<PlusIcon />}
       variant="neutral"
-      tip="Configure Integration"
+      tip={disabled ? disabledTip : "Configure Integration"}
       tipSide="right"
       onClick={onConfigure}
+      disabled={disabled}
+      data-testid="configure-integration"
     />
   );
 }

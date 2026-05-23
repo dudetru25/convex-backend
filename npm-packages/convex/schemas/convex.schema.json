@@ -123,7 +123,7 @@
         },
         "nodeVersion": {
           "type": "string",
-          "description": "The Node.js version to use for Node.js actions. The currently supported values are '18', '20', and '22'.\n\nDocumentation: https://docs.convex.dev/production/project-configuration#configuring-the-nodejs-version",
+          "description": "The Node.js version to use for Node.js actions. The currently supported values are '20', '22', and '24'.\n\nDocumentation: https://docs.convex.dev/production/project-configuration#configuring-the-nodejs-version",
           "default": "20"
         }
       }
@@ -208,6 +208,19 @@
           "description": "Deprecated. Use `enabled` instead.",
           "deprecated": true,
           "default": false
+        },
+        "skills": {
+          "type": "object",
+          "description": "Configuration for agent skills installed by Convex.",
+          "properties": {
+            "agents": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of agents to install skills for (e.g. 'claude-code', 'codex', 'cursor'). Defaults to ['claude-code', 'codex']. For a list of supported agents see: https://github.com/vercel-labs/skills?tab=readme-ov-file#supported-agents",
+              "default": ["claude-code", "codex"]
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

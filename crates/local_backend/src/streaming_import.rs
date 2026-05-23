@@ -49,10 +49,6 @@ use value::{
 };
 
 use crate::{
-    admin::{
-        must_be_admin,
-        must_be_admin_with_write_access,
-    },
     authentication::ExtractIdentity,
     LocalAppState,
 };
@@ -69,7 +65,7 @@ pub async fn import_airbyte_records(
     ExtractIdentity(identity): ExtractIdentity,
     Json(AirbyteImportArgs { tables, messages }): Json<AirbyteImportArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
 
     let usage = FunctionUsageTracker::new();
 
@@ -97,7 +93,7 @@ pub async fn apply_fivetran_operations(
     ExtractIdentity(identity): ExtractIdentity,
     Json(rows): Json<Vec<BatchWriteRow>>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
 
     let usage = FunctionUsageTracker::new();
 
@@ -115,7 +111,7 @@ pub async fn get_schema(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
     let schema = st
         .application
         .get_schema(TableNamespace::root_component(), &identity)
@@ -131,7 +127,7 @@ pub async fn fivetran_create_table(
     ExtractIdentity(identity): ExtractIdentity,
     Json(CreateTableArgs { table_definition }): Json<CreateTableArgs>,
 ) -> Result<StatusCode, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
     let table_definition = table_definition.try_into()?;
     st.application
         .fivetran_create_table(&identity, table_definition)
@@ -151,7 +147,7 @@ pub async fn clear_tables(
     ExtractIdentity(identity): ExtractIdentity,
     Json(ClearTableArgs { table_names }): Json<ClearTableArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
 
     let usage = FunctionUsageTracker::new();
 
@@ -203,7 +199,7 @@ pub async fn fivetran_truncate_table(
         delete_type,
     }): Json<TruncateTableArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
 
     let usage = FunctionUsageTracker::new();
 
@@ -275,7 +271,7 @@ pub async fn add_primary_key_indexes(
     ExtractIdentity(identity): ExtractIdentity,
     Json(AddIndexesArgs { indexes }): Json<AddIndexesArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
     let indexes: BTreeMap<TableName, PrimaryKey> = indexes
         .into_iter()
         .map(|(stream, primary_key)| {
@@ -312,7 +308,7 @@ pub async fn primary_key_indexes_ready(
     ExtractIdentity(identity): ExtractIdentity,
     Json(IndexesReadyArgs { tables }): Json<IndexesReadyArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
     let table_names = tables
         .into_iter()
         .map(|t| Ok(t.parse::<ValidIdentifier<TableName>>()?.0))

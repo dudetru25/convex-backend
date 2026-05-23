@@ -1,5 +1,6 @@
 import { LogIntegration } from "@common/lib/integrationHelpers";
 import { Button } from "@ui/Button";
+import { Link } from "@ui/Link";
 import { TextInput } from "@ui/TextInput";
 import { useFormik } from "formik";
 import {
@@ -10,7 +11,7 @@ import { toast } from "@common/lib/utils";
 import * as Yup from "yup";
 
 const validationSchema = Yup.object().shape({
-  apiKey: Yup.string().required("PostHog project API key is required"),
+  apiKey: Yup.string().required("PostHog project token is required"),
   host: Yup.string().url("Must be a valid URL").nullable(),
   serviceName: Yup.string().nullable(),
 });
@@ -41,23 +42,30 @@ export function PostHogLogsConfigurationForm({
       host: existingConfig?.host ?? "",
       serviceName: existingConfig?.serviceName ?? "",
     },
-    onSubmit: async (values) => {
-      const args = {
-        logStreamType: "postHogLogs" as const,
-        apiKey: values.apiKey,
-        host: values.host || null,
-        serviceName: values.serviceName || null,
-      };
+    onSubmit: async (values, helpers) => {
+      helpers.setStatus(undefined);
+      try {
+        const args = {
+          logStreamType: "postHogLogs" as const,
+          apiKey: values.apiKey,
+          host: values.host || null,
+          serviceName: values.serviceName || null,
+        };
 
-      if (isNewIntegration) {
-        await createLogStream(args);
-        onAddedIntegration?.();
-        toast("success", "Created PostHog Logs integration");
-      } else {
-        await updateLogStream(logStreamId, args);
-        toast("success", "Updated PostHog Logs integration");
+        if (isNewIntegration) {
+          await createLogStream(args);
+          onAddedIntegration?.();
+          toast("success", "Created PostHog Logs integration");
+        } else {
+          await updateLogStream(logStreamId, args);
+          toast("success", "Updated PostHog Logs integration");
+        }
+        onClose();
+      } catch (e) {
+        helpers.setStatus({
+          error: e instanceof Error ? e.message : "Failed to save integration.",
+        });
       }
-      onClose();
     },
     validationSchema,
   });
@@ -67,11 +75,23 @@ export function PostHogLogsConfigurationForm({
       <TextInput
         value={formState.values.apiKey}
         onChange={formState.handleChange}
-        label="Project API Key"
+        label="Project Token"
         placeholder="phc_..."
         id="apiKey"
         error={formState.errors.apiKey}
-        description="Your PostHog project API key. Found in PostHog under Settings > Project > Project API Key."
+        description={
+          <>
+            Your PostHog project token. Found in PostHog under{" "}
+            <Link
+              href="https://app.posthog.com/settings/project-details#variables"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Settings &gt; Project &gt; General
+            </Link>
+            .
+          </>
+        }
       />
       <TextInput
         value={formState.values.host}
@@ -91,12 +111,18 @@ export function PostHogLogsConfigurationForm({
         error={formState.errors.serviceName}
         description="OTLP service name for log attribution. Defaults to your deployment name."
       />
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-3">
+        {formState.status?.error && (
+          <p className="text-sm text-content-errorSecondary" role="alert">
+            {formState.status.error}
+          </p>
+        )}
         <Button
           variant="primary"
           type="submit"
           aria-label="save"
-          disabled={!formState.dirty}
+          disabled={!formState.dirty || formState.isSubmitting}
+          loading={formState.isSubmitting}
         >
           Save
         </Button>

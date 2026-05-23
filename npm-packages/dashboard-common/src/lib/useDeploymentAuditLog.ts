@@ -2,7 +2,10 @@ import { usePaginatedQuery } from "convex/react";
 import udfs from "@common/udfs";
 import { Doc } from "system-udfs/convex/_generated/dataModel";
 import { useEffect, useContext, useRef } from "react";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
 
 export type DeploymentAuditLogEvent = Doc<"_deployment_audit_log"> & {
   memberName: string;
@@ -46,9 +49,29 @@ function processDeploymentAuditLogEvent(
     case "push_config":
     case "push_config_with_components":
     case "change_deployment_state":
+    case "pause_deployment":
+    case "unpause_deployment":
+    case "change_system_stop_state":
     case "build_indexes":
     case "clear_tables":
     case "snapshot_import":
+    case "delete_scheduled_jobs_table":
+    case "delete_tables":
+    case "delete_component":
+    case "cancel_all_scheduled_functions":
+    case "cancel_scheduled_function":
+    case "request_export":
+    case "cancel_export":
+    case "set_export_expiration":
+    case "create_integration":
+    case "update_integration":
+    case "delete_integration":
+    case "add_documents":
+    case "delete_documents":
+    case "update_documents":
+    case "create_table":
+    case "delete_files":
+    case "generate_upload_url":
       break;
     default:
       return null;
@@ -155,9 +178,11 @@ export function usePaginatedDeploymentEvents(
   }[],
   initialNumItems = 10,
 ) {
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewAuditLog = useIsOperationAllowed("ViewAuditLog");
   const { results, ...rest } = usePaginatedQuery(
     udfs.paginatedDeploymentEvents.default,
-    filters ? { filters } : "skip",
+    filters && canViewAuditLog ? { filters } : "skip",
     {
       initialNumItems,
     },

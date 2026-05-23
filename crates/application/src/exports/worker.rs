@@ -21,6 +21,7 @@ use common::{
 use database::{
     Database,
     SystemMetadataModel,
+    Token,
 };
 use exports::{
     interface::ExportProvider,
@@ -67,7 +68,7 @@ pub struct ExportWorker<RT: Runtime> {
     pub(super) export_provider: Arc<dyn ExportProvider<RT>>,
     pub(super) backoff: Backoff,
     pub(super) usage_tracking: UsageCounter,
-    pub(super) instance_name: String,
+    pub(super) deployment_name: String,
 }
 
 impl<RT: Runtime> ExportWorker<RT> {
@@ -79,7 +80,7 @@ impl<RT: Runtime> ExportWorker<RT> {
         file_storage: Arc<dyn Storage>,
         export_provider: Arc<dyn ExportProvider<RT>>,
         usage_tracking: UsageCounter,
-        instance_name: String,
+        deployment_name: String,
     ) -> impl Future<Output = ()> + Send {
         let mut worker = Self {
             runtime,
@@ -89,11 +90,21 @@ impl<RT: Runtime> ExportWorker<RT> {
             export_provider,
             backoff: Backoff::new(INITIAL_BACKOFF, MAX_BACKOFF),
             usage_tracking,
-            instance_name,
+            deployment_name,
         };
         async move {
             loop {
-                if let Err(e) = worker.run().await {
+                let result: anyhow::Result<()> = async {
+                    if let Some(token) = Box::pin(worker.run()).await? {
+                        worker
+                            .database
+                            .subscribe_and_wait_for_invalidation(token)
+                            .await?;
+                    }
+                    Ok(())
+                }
+                .await;
+                if let Err(e) = result {
                     report_error(&mut e.context("ExportWorker died")).await;
                     let delay = worker.backoff.fail(&mut worker.runtime.rng());
                     worker.runtime.wait(delay).await;
@@ -107,7 +118,7 @@ impl<RT: Runtime> ExportWorker<RT> {
     // Subscribe to the export table. If there is a requested export, start
     // an export and mark as in_progress. If there's an export job that didn't
     // finish (it's in_progress), restart that export.
-    pub async fn run(&mut self) -> anyhow::Result<()> {
+    pub async fn run(&mut self) -> anyhow::Result<Option<Token>> {
         let mut tx = self.database.begin(Identity::system()).await?;
         let mut exports_model = ExportsModel::new(&mut tx);
         let export_requested = exports_model.latest_requested().await?;
@@ -132,23 +143,19 @@ impl<RT: Runtime> ExportWorker<RT> {
                     .commit_with_write_source(tx, "export_worker_export_requested")
                     .await?;
                 self.export(in_progress_export_doc).await?;
-                return Ok(());
+                return Ok(None);
             },
             (None, Some(export)) => {
                 tracing::info!("In progress export restarting...");
                 let _status = log_worker_starting("ExportWorker");
                 self.export(export).await?;
-                return Ok(());
+                return Ok(None);
             },
             (None, None) => {
                 tracing::info!("No exports requested or in progress.");
             },
         }
-        let token = tx.into_token()?;
-        self.database
-            .subscribe_and_wait_for_invalidation(token)
-            .await?;
-        Ok(())
+        Ok(Some(tx.into_token()?))
     }
 
     async fn export(&mut self, export: ParsedDocument<Export>) -> anyhow::Result<()> {
@@ -197,7 +204,7 @@ impl<RT: Runtime> ExportWorker<RT> {
             database: database_snapshot,
             exports_storage: self.exports_storage.clone(),
             file_storage: self.file_storage.clone(),
-            instance_name: self.instance_name.clone(),
+            deployment_name: self.deployment_name.clone(),
         };
         async fn modify_export<RT: Runtime>(
             database: &Database<RT>,
@@ -263,7 +270,7 @@ impl<RT: Runtime> ExportWorker<RT> {
                     tracing::info!(?token, "Export {id} resuming...");
                     match self
                         .export_provider
-                        .resume_export(self.instance_name.clone(), token, id, &update_progress)
+                        .resume_export(self.deployment_name.clone(), token, id, &update_progress)
                         .await
                     {
                         Ok(Some(result)) => return Ok(result),

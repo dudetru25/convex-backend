@@ -102,9 +102,8 @@ functions and publish your site changes.
 
 <Admonition type="info" title="Using a Custom Domain?">
   If you're using a custom domain to serve your Convex functions, you'll need
-  additional configuration. See [Custom
-  Domains](/production/hosting/custom.mdx#hosting-with-a-custom-domain) for more
-  information.
+  additional configuration. See [Custom Domains](/production/custom-domains.mdx)
+  for more information.
 </Admonition>
 
 ### How it works
@@ -144,7 +143,7 @@ Auth0 or other) to accept your production URL. Note that Clerk does not support
 Vercel Preview Deployments allow you to preview changes to your app before
 they're merged in. In order to preview both changes to frontend code and Convex
 functions, you can set up
-[Convex preview deployments](/production/hosting/preview-deployments.mdx).
+[Convex preview deployments](/production/multiple-deployments.mdx#preview).
 
 This will create a fresh Convex backend for each preview and leave your
 production and development deployments unaffected.
@@ -170,9 +169,10 @@ This assumes you have already followed the steps in
   <Step title="(optional) Set up default environment variables">
     If your app depends on certain Convex environment variables, you can set up [default
     environment variables](/production/environment-variables.mdx#project-environment-variable-defaults) for preview and development deployments in your project.
-    <div className="screenshot-border">
-      ![Project Default Environment Variables](/screenshots/project_default_environment_variables.png)
-    </div>
+    <Screenshot
+      story="docs/components/ProjectDefaultEnvironmentVariables"
+      alt="Project default environment variables"
+    />
   </Step>
 
 <Step title="(optional) Run a function to set up initial data">

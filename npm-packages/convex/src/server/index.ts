@@ -103,6 +103,16 @@ export {
   internalMutationGeneric,
   internalQueryGeneric,
 } from "./impl/registration_impl.js";
+export type {
+  TransactionMetric,
+  TransactionMetrics,
+  FunctionMetadata,
+  DeploymentMetadata,
+  RequestMetadata,
+  QueryMeta,
+  MutationMeta,
+  ActionMeta,
+} from "./meta.js";
 export type { IndexRange, IndexRangeBuilder } from "./index_range_builder.js";
 export * from "./pagination.js";
 export type { OrderedQuery, Query, QueryInitializer } from "./query.js";
@@ -169,6 +179,7 @@ export type {
   PartialApi,
   ArgsAndOptions,
   FunctionReturnType,
+  ValidatorTypeToReturnType,
 } from "./api.js";
 export {
   defineApp,
@@ -176,6 +187,10 @@ export {
   componentsGeneric,
   createFunctionHandle,
   type AnyChildComponents,
+  type EnvDefinition,
+  type EnvFromDefinition,
+  type EnvFromAppDefinition,
+  type AppDefinition,
 } from "./components/index.js";
 /**
  * @internal
@@ -192,6 +207,9 @@ export type {
  * @internal
  */
 export type { Index, SearchIndex, VectorIndex } from "./schema.js";
+
+export { log } from "./log.js";
+export type { AuditLogBody, AuditLogValue } from "./audit_logging.js";
 
 export type {
   SearchIndexConfig,

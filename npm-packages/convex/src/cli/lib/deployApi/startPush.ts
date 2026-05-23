@@ -27,6 +27,8 @@ export const startPushRequest = looseObject({
   // Multi-project deployment fields (optional for backward compatibility)
   namespace: z.optional(z.string()),
   projectId: z.optional(z.string()),
+
+  forCodegen: z.optional(z.boolean()),
 });
 export type StartPushRequest = z.infer<typeof startPushRequest>;
 

@@ -19,13 +19,12 @@ import { useProvisionDeployment } from "api/deployments";
 import { Fieldset, Legend, RadioGroup } from "@headlessui/react";
 import { cn } from "@ui/cn";
 import { Sheet } from "@ui/Sheet";
-import { useTheme } from "next-themes";
+import { useCurrentTheme } from "@common/lib/useCurrentTheme";
 import createGlobe from "cobe";
 import { SignalIcon } from "@heroicons/react/24/outline";
 import { GlobeIcon } from "@radix-ui/react-icons";
-import { useIsomorphicLayoutEffect } from "react-use";
 import { Region, sortRegions } from "elements/Region";
-import { ProvisioningLoading } from "./ProvisioningLoading";
+import { EUPricingWarning } from "elements/EUPricingWarning";
 
 const REGION_COORDINATES: Record<RegionName, [number, number]> = {
   "aws-us-east-1": [38.9072, -77.0369], // Washington DC area (US East)
@@ -46,7 +45,6 @@ export function ProvisionDeploymentForm({
   const provisionDeployment = useProvisionDeployment(projectId);
   const updateTeam = useUpdateTeam(team?.id ?? 0, /* toast */ false);
   const isAdmin = useIsCurrentMemberTeamAdmin();
-  const defaultRegion = team?.defaultRegion;
 
   const { data: regionsData } = useManagementApiQuery({
     path: "/teams/{team_id}/list_deployment_regions",
@@ -69,42 +67,6 @@ export function ProvisionDeploymentForm({
     },
     [updateTeam, provisionDeployment, deploymentType, router, projectURI],
   );
-
-  // Auto-provision with default region if set.
-  const wasCalled = useRef(false);
-  // Using useIsomorphicLayoutEffect instead of useEffect
-  // to avoid a weird bug where the effect would run twice
-  // when the page is accessed from a Next.js <Link />
-  useIsomorphicLayoutEffect(() => {
-    if (defaultRegion === undefined) {
-      return;
-    }
-
-    // Avoid running the effect twice in React strict mode
-    if (wasCalled.current) {
-      return;
-    }
-    wasCalled.current = true;
-
-    if (defaultRegion === null) {
-      // We show the form in this case
-      return;
-    }
-
-    void handleCreate(defaultRegion, /* setAsDefault */ false);
-  }, [
-    defaultRegion,
-    deploymentType,
-    projectURI,
-    provisionDeployment,
-    router,
-    handleCreate,
-  ]);
-
-  // If there's a default region, show loading UI instead of the form.
-  if (defaultRegion) {
-    return <ProvisioningLoading deploymentType={deploymentType} />;
-  }
 
   return (
     <ProvisionDeploymentFormInner
@@ -222,12 +184,7 @@ export function ProvisionDeploymentFormInner({
                       ))}
                 </div>
               </RadioGroup>
-              {selectedRegion && selectedRegion !== "aws-us-east-1" && (
-                <p className="mt-2 text-xs text-content-warning">
-                  No included limits — all usage billed on-demand + 30% regional
-                  surcharge
-                </p>
-              )}
+              <EUPricingWarning show={selectedRegion === "aws-eu-west-1"} />
             </Fieldset>
 
             <Tooltip
@@ -269,12 +226,6 @@ export function ProvisionDeploymentFormInner({
                 Create deployment
               </Button>
             </div>
-
-            <p className="text-xs text-content-secondary">
-              Usage on EU-hosted deployments is subject to a 30% pass-through
-              surcharge. On paid subscriptions, built-in resources are only
-              applicable to the US region.
-            </p>
           </form>
         </Sheet>
       </div>
@@ -285,8 +236,8 @@ export function ProvisionDeploymentFormInner({
 function Globe({ selectedRegion }: { selectedRegion: RegionName | null }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const focusRef = useRef<[number, number]>([0, 0]);
-  const { forcedTheme, resolvedTheme } = useTheme();
-  const isDark = (forcedTheme ?? resolvedTheme) === "dark";
+  const currentTheme = useCurrentTheme();
+  const isDark = currentTheme === "dark";
 
   // Update focus when region changes
   useEffect(() => {

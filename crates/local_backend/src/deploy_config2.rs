@@ -52,6 +52,7 @@ use model::{
         type_checking::SerializedCheckedComponent,
         types::SerializedEvaluatedComponentDefinition,
     },
+    deployment_audit_log::types::PushMessage,
     external_packages::types::ExternalDepsPackageId,
     modules::module_versions::SerializedAnalyzedModule,
     source_packages::types::SourcePackage,
@@ -68,10 +69,7 @@ use value::{
 };
 
 use crate::{
-    admin::{
-        must_be_admin_from_key,
-        must_be_admin_from_key_with_write_access,
-    },
+    admin::must_be_admin_from_key,
     LocalAppState,
 };
 
@@ -207,12 +205,13 @@ pub async fn start_push(
     State(st): State<LocalAppState>,
     Json(req): Json<StartPushRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let _identity = must_be_admin_from_key_with_write_access(
+    let _identity = must_be_admin_from_key(
         st.application.app_auth(),
         st.instance_name.clone(),
         req.admin_key.clone(),
     )
     .await?;
+    _identity.require_operation(keybroker::DeploymentOp::Deploy)?;
 
     // Register namespace ownership when multi-project fields are present.
     // Same project_id on an existing namespace succeeds (multi-dev friendly).
@@ -253,12 +252,13 @@ pub async fn evaluate_push(
     MtState(st): MtState<LocalAppState>,
     Json(req): Json<StartPushRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let _identity = must_be_admin_from_key_with_write_access(
+    let _identity = must_be_admin_from_key(
         st.application.app_auth(),
         st.instance_name.clone(),
         req.admin_key.clone(),
     )
     .await?;
+    _identity.require_operation(keybroker::DeploymentOp::Deploy)?;
     let config = req.into_project_config().map_err(|e| {
         anyhow::Error::new(ErrorMetadata::bad_request("InvalidConfig", e.to_string()))
     })?;
@@ -290,6 +290,7 @@ pub async fn wait_for_schema(
         req.admin_key,
     )
     .await?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
     let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(DEFAULT_SCHEMA_TIMEOUT_MS) as u64);
     let schema_change = req.schema_change.try_into()?;
 
@@ -308,6 +309,7 @@ pub struct FinishPushRequest {
     pub admin_key: String,
     start_push: SerializedStartPushResponse,
     pub dry_run: bool,
+    pub message: Option<String>,
 }
 
 /// Internal version that returns the commit timestamp for use by conductor
@@ -315,14 +317,16 @@ pub async fn finish_push_internal(
     st: &LocalAppState,
     req: FinishPushRequest,
 ) -> anyhow::Result<(SerializedFinishPushDiff, Option<common::types::Timestamp>)> {
-    let identity = must_be_admin_from_key_with_write_access(
+    let identity = must_be_admin_from_key(
         st.application.app_auth(),
         st.instance_name.clone(),
         req.admin_key.clone(),
     )
     .await?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
 
     let start_push = StartPushResponse::try_from(req.start_push)?;
+    let message = req.message.map(PushMessage::try_from).transpose()?;
 
     // We can't actually run `finish_push` in a dry run, since we rolled back all of
     // our changes during start push.
@@ -334,7 +338,7 @@ pub async fn finish_push_internal(
 
     let (resp, ts) = st
         .application
-        .finish_push(identity, start_push)
+        .finish_push(identity, start_push, message)
         .await
         .map_err(|e| e.wrap_error_message(|msg| format!("Hit an error while pushing:\n{msg}")))?;
     Ok((SerializedFinishPushDiff::try_from(resp)?, Some(ts)))
@@ -359,12 +363,13 @@ pub async fn report_push_completed(
     st: LocalAppState,
     req: ReportPushCompletedRequest,
 ) -> anyhow::Result<Vec<SpanRecord>> {
-    let _identity = must_be_admin_from_key_with_write_access(
+    let identity = must_be_admin_from_key(
         st.application.app_auth(),
         st.instance_name.clone(),
         req.admin_key.clone(),
     )
     .await?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
     let spans = req
         .spans
         .into_iter()
@@ -464,6 +469,7 @@ impl TryFrom<SerializedCompletedSpan> for SpanRecord {
             name: value.name.into(),
             properties,
             events,
+            links: vec![],
         })
     }
 }

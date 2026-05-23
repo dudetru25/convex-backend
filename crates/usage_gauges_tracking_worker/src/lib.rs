@@ -180,8 +180,10 @@ impl<RT: Runtime> UsageGaugesTrackingWorkerInner<RT> {
                 total_document_size_bytes: totals.total_document_size,
                 total_index_size_bytes: totals.total_index_size,
                 total_vector_storage_bytes: totals.total_vector_storage,
+                total_text_storage_bytes: totals.total_text_storage,
                 total_file_storage_bytes: totals.total_file_storage,
                 total_backup_storage_bytes: totals.total_backup_storage,
+                total_system_table_document_size_bytes: totals.system_table_document_sizes,
             },
         };
         log_sender.send_logs(vec![log_event]);
@@ -269,7 +271,7 @@ impl GaugeMetrics {
             user_tables,
             system_tables: _,
             orphaned_tables: _,
-            virtual_tables: _,
+            virtual_tables,
         } = &self.document_and_index_storage;
         // Aggregate user tables tables for document and index storage
         let (total_document_size, total_index_size) = user_tables.values().fold(
@@ -282,6 +284,9 @@ impl GaugeMetrics {
         // Aggregate all vector storage (no vector data in system tables)
         let total_vector_storage = self.vector_index_storage.values().sum();
 
+        // Aggregate all text index storage
+        let total_text_storage = self.text_index_storage.values().sum();
+
         // Only count user table documents
         let total_document_count = self
             .document_counts
@@ -290,25 +295,49 @@ impl GaugeMetrics {
             .map(|(_, _, count)| count)
             .sum();
 
+        // Sum document sizes per virtual table across all namespaces
+        let virtual_table_document_size = |name: &str| -> u64 {
+            let table_name: TableName = name.parse().unwrap();
+            virtual_tables
+                .iter()
+                .filter(|((_, n), _)| *n == table_name)
+                .map(|(_, (usage, _))| usage.document_size)
+                .sum()
+        };
+        let system_table_document_sizes = BTreeMap::from([
+            (
+                "_storage".to_string(),
+                virtual_table_document_size("_storage"),
+            ),
+            (
+                "_scheduled_functions".to_string(),
+                virtual_table_document_size("_scheduled_functions"),
+            ),
+        ]);
+
         AggregatedStorageUsage {
             total_document_size,
             total_index_size,
             total_vector_storage,
+            total_text_storage,
             total_file_storage: self.storage_total_size,
             total_backup_storage: self.cloud_snapshot_total_size,
             total_document_count,
+            system_table_document_sizes,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AggregatedStorageUsage {
     pub total_document_size: u64,
     pub total_index_size: u64,
     pub total_vector_storage: u64,
+    pub total_text_storage: u64,
     pub total_file_storage: u64,
     pub total_backup_storage: u64,
     pub total_document_count: u64,
+    pub system_table_document_sizes: BTreeMap<String, u64>,
 }
 
 #[fastrace::trace]

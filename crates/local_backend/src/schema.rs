@@ -61,10 +61,7 @@ use value::{
 };
 
 use crate::{
-    admin::{
-        must_be_admin,
-        must_be_admin_from_key_with_write_access,
-    },
+    admin::must_be_admin_from_key,
     authentication::ExtractIdentity,
     LocalAppState,
 };
@@ -251,12 +248,13 @@ pub async fn prepare_schema_handler(
     req: PrepareSchemaArgs,
 ) -> Result<(Json<PrepareSchemaResponse>, bool), HttpResponseError> {
     let bundle = req.bundle.try_into()?;
-    let identity = must_be_admin_from_key_with_write_access(
+    let identity = must_be_admin_from_key(
         st.application.app_auth(),
         st.instance_name.clone(),
         req.admin_key,
     )
     .await?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
     let schema = match st.application.evaluate_schema(bundle).await {
         Ok(m) => m,
         Err(e) => return Err(e.into()),
@@ -354,7 +352,7 @@ pub async fn schema_state(
     Path(schema_id): Path<String>,
     ExtractIdentity(identity): ExtractIdentity,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
     let mut tx = st.application.begin(identity.clone()).await?;
     // This endpoint is only used in non-components push.
     let table_namespace = TableNamespace::root_component();

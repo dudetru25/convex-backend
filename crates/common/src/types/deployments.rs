@@ -7,6 +7,8 @@ use serde::{
 };
 use utoipa::ToSchema;
 
+use crate::types::RegionName;
+
 #[derive(
     Copy,
     Clone,
@@ -38,6 +40,13 @@ impl DeploymentClass {
             DeploymentClass::S16 | DeploymentClass::S256 => false,
         }
     }
+
+    pub fn is_dedicated(&self) -> bool {
+        match self {
+            DeploymentClass::D1024 => true,
+            DeploymentClass::S16 | DeploymentClass::S256 => false,
+        }
+    }
 }
 
 #[derive(
@@ -55,7 +64,6 @@ impl DeploymentClass {
     strum::Display,
     ToSchema,
 )]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[serde(rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum DeploymentType {
@@ -79,17 +87,12 @@ impl DeploymentType {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::DeploymentType;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeploymentMetadata {
+    pub name: String,
+    pub region: Option<RegionName>,
+    pub class: DeploymentClass,
+}
 
-    #[test]
-    fn test_deployment_type_roundtrips() -> anyhow::Result<()> {
-        for d in DeploymentType::all_types() {
-            assert_eq!(d.to_string().parse::<DeploymentType>()?, d);
-        }
-        assert_eq!(DeploymentType::Dev.to_string(), "dev");
-        assert_eq!(DeploymentType::Dev.as_sentry_tag(), "dev");
-        Ok(())
-    }
+impl DeploymentMetadata {
 }

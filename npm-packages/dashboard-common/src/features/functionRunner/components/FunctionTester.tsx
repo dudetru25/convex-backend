@@ -53,7 +53,11 @@ import {
   useIsImpersonating,
 } from "@common/features/functionRunner/components/RunHistory";
 import { useGlobalReactClient } from "@common/features/functionRunner/lib/client";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
+import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
 
 const CUSTOM_TEST_QUERY_PLACEHOLDER =
   "__CONVEX_PLACEHOLDER_custom_test_query_1255035852";
@@ -565,10 +569,13 @@ export function useFunctionTester({
     };
   }, [client, moduleFunction, parameters]);
 
+  const isInComponent = !!moduleFunction?.componentPath;
   const { button, result: functionResult } = useFunctionResult({
     onSubmit,
     disabled,
     udfType: moduleFunction?.udfType,
+    visibility: moduleFunction?.visibility,
+    isInComponent,
     functionIdentifier: moduleFunction?.identifier,
     componentId: moduleFunction?.componentId || null,
     args: parameters,
@@ -576,9 +583,27 @@ export function useFunctionTester({
     onCopiedQueryResult,
   });
 
+  const { useLogDeploymentEvent, useHasCustomRole } = useContext(
+    DeploymentInfoContext,
+  );
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canRunInternalQueries = useIsOperationAllowed("RunInternalQueries");
+  const canViewData = useIsOperationAllowed("ViewData");
+  const canActAsUser = useIsOperationAllowed("ActAsUser");
+  const hasCustomRole = useHasCustomRole();
+
+  const canRunQuery = (() => {
+    if (!moduleFunction || moduleFunction.udfType !== "Query") return true;
+    if (moduleFunction.visibility?.kind === "internal")
+      return canRunInternalQueries;
+    if (moduleFunction.componentPath) return canViewData;
+    return true;
+  })();
+
   const queryResult = moduleFunction &&
     reactClient &&
-    moduleFunction.udfType === "Query" && (
+    moduleFunction.udfType === "Query" &&
+    canRunQuery && (
       <QueryResult
         paused={disabled}
         module={moduleFunction}
@@ -588,7 +613,32 @@ export function useFunctionTester({
       />
     );
 
-  const { useLogDeploymentEvent } = useContext(DeploymentInfoContext);
+  // Which custom-role action unblocks this query — surfaced inline so
+  // members see exactly which grant is missing.
+  const missingQueryAction = moduleFunction
+    ? moduleFunction.visibility?.kind === "internal"
+      ? ("deployment:functions:runInternalQueries" as const)
+      : moduleFunction.componentPath
+        ? ("deployment:data:view" as const)
+        : null
+    : null;
+  const queryPermissionDenied = moduleFunction &&
+    moduleFunction.udfType === "Query" &&
+    !canRunQuery && (
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+        <p className="text-sm text-content-secondary">
+          You do not have permission to run this function in this deployment.
+        </p>
+        {missingQueryAction && hasCustomRole && (
+          <p className="text-xs text-content-tertiary">
+            Missing permission:{" "}
+            <code className="rounded bg-background-tertiary px-1 py-0.5 font-mono">
+              {missingQueryAction}
+            </code>
+          </p>
+        )}
+      </div>
+    );
   const log = useLogDeploymentEvent();
 
   const args = (
@@ -631,50 +681,69 @@ export function useFunctionTester({
       </div>
       {impersonation && (
         <div className="flex items-start gap-4 px-4">
-          <label
-            htmlFor="actAsUser"
-            className="flex h-9 items-center gap-2 pt-0.5 text-xs whitespace-nowrap accent-util-accent"
+          <Tooltip
+            tip={
+              !canActAsUser ? (
+                <PermissionDeniedTip
+                  message="You do not have permission to act as a user in this deployment."
+                  action="deployment:functions:actAsUser"
+                />
+              ) : undefined
+            }
           >
-            <input
-              data-testid="actAsUser"
-              id="actAsUser"
-              type="checkbox"
-              checked={isImpersonating}
-              className="hover:cursor-pointer"
-              onChange={() => {
-                setIsImpersonating(!isImpersonating);
-                setRunHistoryItem?.(undefined);
-                log("toggle act as user", {
-                  actAsUser: isImpersonating,
-                  function: moduleFunction && {
-                    udfType: moduleFunction.udfType,
-                    visibility: moduleFunction.visibility,
-                    identifier: moduleFunction.identifier,
-                  },
-                });
-              }}
-            />
-            <span className="flex gap-1 select-none">
-              Act as a user{" "}
-              <Tooltip
-                tip={
-                  <>
-                    Run authenticated functions by acting as a user.{" "}
-                    <Link
-                      href="https://docs.convex.dev/dashboard/deployments/functions#assuming-a-user-identity"
-                      passHref
-                      target="_blank"
-                    >
-                      Learn more
-                    </Link>
-                    .
-                  </>
-                }
-              >
-                <QuestionMarkCircledIcon />
-              </Tooltip>
-            </span>
-          </label>
+            <label
+              htmlFor="actAsUser"
+              className={classNames(
+                "flex h-9 items-center gap-2 pt-0.5 text-xs whitespace-nowrap accent-util-accent",
+                !canActAsUser && "opacity-50 cursor-not-allowed",
+              )}
+            >
+              <input
+                data-testid="actAsUser"
+                id="actAsUser"
+                type="checkbox"
+                checked={isImpersonating && canActAsUser}
+                disabled={!canActAsUser}
+                className={classNames(
+                  "hover:cursor-pointer",
+                  !canActAsUser && "cursor-not-allowed",
+                )}
+                onChange={() => {
+                  if (!canActAsUser) return;
+                  setIsImpersonating(!isImpersonating);
+                  setRunHistoryItem?.(undefined);
+                  log("toggle act as user", {
+                    actAsUser: isImpersonating,
+                    function: moduleFunction && {
+                      udfType: moduleFunction.udfType,
+                      visibility: moduleFunction.visibility,
+                      identifier: moduleFunction.identifier,
+                    },
+                  });
+                }}
+              />
+              <span className="flex gap-1 select-none">
+                Act as a user{" "}
+                <Tooltip
+                  tip={
+                    <>
+                      Run authenticated functions by acting as a user.{" "}
+                      <Link
+                        href="https://docs.convex.dev/dashboard/deployments/functions#assuming-a-user-identity"
+                        passHref
+                        target="_blank"
+                      >
+                        Learn more
+                      </Link>
+                      .
+                    </>
+                  }
+                >
+                  <QuestionMarkCircledIcon />
+                </Tooltip>
+              </span>
+            </label>
+          </Tooltip>
           <div className="flex max-h-[8rem] w-full flex-col gap-1">
             {isImpersonating && (
               <ObjectEditor
@@ -708,7 +777,7 @@ export function useFunctionTester({
 
   return {
     args,
-    result: functionResult || queryResult,
+    result: functionResult || queryResult || queryPermissionDenied,
     button,
   };
 }

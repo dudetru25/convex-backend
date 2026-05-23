@@ -39,7 +39,6 @@ rand = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sourcemap = { workspace = true }
 storage = { workspace = true }
 sync_types = { workspace = true }
 tempfile = { workspace = true }
@@ -53,7 +52,7 @@ anyhow = "1"
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 isolate = { workspace = true, features = ["testing"] }
 keybroker = { workspace = true, features = ["testing"] }

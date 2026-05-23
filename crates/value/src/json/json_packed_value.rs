@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
-use serde_json::Value as JsonValue;
+use serde_json::{
+    value::RawValue,
+    Value as JsonValue,
+};
 
 use crate::{
     heap_size::HeapSize,
@@ -11,7 +12,6 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq))]
 pub struct JsonPackedValue(Arc<str>);
 
 impl JsonPackedValue {
@@ -41,6 +41,10 @@ impl JsonPackedValue {
         // TODO: consider checking JSON validity here
         Ok(Self(json.into()))
     }
+
+    pub fn to_raw_value(&self) -> anyhow::Result<Box<RawValue>> {
+        Ok(serde_json::from_str(&self.0)?)
+    }
 }
 
 impl HeapSize for JsonPackedValue {
@@ -55,16 +59,5 @@ impl HeapSize for JsonPackedValue {
 impl From<JsonPackedValue> for JsonValue {
     fn from(value: JsonPackedValue) -> Self {
         value.json_value()
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for JsonPackedValue {
-    type Parameters = ();
-
-    type Strategy = impl Strategy<Value = JsonPackedValue>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        any::<ConvexValue>().prop_map(JsonPackedValue::pack)
     }
 }

@@ -1,7 +1,6 @@
 import { Command, Option } from "@commander-js/extra-typings";
 import { chalkStderr } from "chalk";
-import { oneoffContext } from "../bundler/context.js";
-import { logVerbose } from "../bundler/log.js";
+import { installSigintHandler, oneoffContext } from "../bundler/context.js";
 import { deploymentCredentialsOrConfigure } from "./configure.js";
 import { usageStateWarning } from "./lib/usage.js";
 import { normalizeDevOptions } from "./lib/command.js";
@@ -14,7 +13,7 @@ import {
   getDeploymentSelection,
   type DeploymentSelection,
 } from "./lib/deploymentSelection.js";
-import { checkVersion } from "./lib/updates.js";
+import { checkVersionAndAiFilesStaleness } from "./lib/updates.js";
 
 export const dev = new Command("dev")
   .summary("Develop against a dev deployment, watching for changes")
@@ -106,7 +105,7 @@ export const dev = new Command("dev")
       "Ignore existing configuration and configure new or existing project, interactively or set by --team <team_slug>, --project <project_slug>, and --dev-deployment local|cloud",
     )
       .choices(["new", "existing"] as const)
-      .conflicts(["--local", "--cloud", "--url", "--admin-key", "--env-file"]),
+      .conflicts(["--url", "--admin-key", "--env-file"]),
   )
   .addOption(
     new Option(
@@ -173,31 +172,12 @@ Same format as .env.local or .env files, and overrides them.`,
   )
   .addOption(new Option("--local-force-upgrade").default(false).hideHelp())
   .addOption(new Option("--deployment <deployment>").hideHelp())
-  .addOption(
-    new Option(
-      "--local",
-      "Use local deployment regardless of last used backend. DB data will not be downloaded from any cloud deployment.",
-    )
-      .default(false)
-      .conflicts(["--prod", "--url", "--admin-key", "--cloud"])
-      .hideHelp(),
-  )
-  .addOption(
-    new Option(
-      "--cloud",
-      "Use cloud deployment regardles of last used backend. DB data will not be uploaded from local.",
-    )
-      .default(false)
-      .conflicts(["--prod", "--url", "--admin-key", "--local"])
-      .hideHelp(),
-  )
+  .addOption(new Option("--local").default(false).hideHelp())
+  .addOption(new Option("--cloud").default(false).hideHelp())
   .showHelpAfterError()
   .action(async (cmdOptions) => {
     const ctx = await oneoffContext(cmdOptions);
-    process.on("SIGINT", async () => {
-      logVerbose("Received SIGINT, cleaning up...");
-      await ctx.flushAndExit(-2);
-    });
+    installSigintHandler(ctx);
 
     if (cmdOptions.deployment !== undefined) {
       return await ctx.crash({
@@ -209,6 +189,30 @@ Same format as .env.local or .env files, and overrides them.`,
           chalkStderr.bold(
             `      npx convex deployment select ${cmdOptions.deployment}\n`,
           ) +
+          "  Then, run `npx convex dev` again.",
+      });
+    }
+
+    if (cmdOptions.local) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage:
+          "`--local` is deprecated. \n\n" +
+          "  To select your local deployment, run: \n" +
+          chalkStderr.bold("      npx convex deployment select local\n") +
+          "  Then, run `npx convex dev` again.",
+      });
+    }
+
+    if (cmdOptions.cloud) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage:
+          "`--cloud` is deprecated. \n\n" +
+          "  To select your personal cloud dev deployment, run: \n" +
+          chalkStderr.bold("      npx convex deployment select dev\n") +
           "  Then, run `npx convex dev` again.",
       });
     }
@@ -226,42 +230,23 @@ Same format as .env.local or .env files, and overrides them.`,
     }
 
     const localOptions: {
-      ports?: { cloud: number; site: number };
-      backendVersion?: string | undefined;
+      ports: { cloud: number | undefined; site: number | undefined };
+      backendVersion: string | undefined;
       forceUpgrade: boolean;
-    } = { forceUpgrade: false };
-    if (!cmdOptions.local && cmdOptions.devDeployment !== "local") {
-      if (
-        cmdOptions.localCloudPort !== undefined ||
-        cmdOptions.localSitePort !== undefined ||
-        cmdOptions.localBackendVersion !== undefined ||
-        cmdOptions.localForceUpgrade === true
-      ) {
-        return await ctx.crash({
-          exitCode: 1,
-          errorType: "fatal",
-          printedMessage:
-            "`--local-*` options can only be used with `--configure --dev-deployment local` or `--local`.",
-        });
-      }
-    } else {
-      if (cmdOptions.localCloudPort !== undefined) {
-        if (cmdOptions.localSitePort === undefined) {
-          return await ctx.crash({
-            exitCode: 1,
-            errorType: "fatal",
-            printedMessage:
-              "`--local-cloud-port` requires `--local-site-port` to be set.",
-          });
-        }
-        localOptions["ports"] = {
-          cloud: parseInt(cmdOptions.localCloudPort),
-          site: parseInt(cmdOptions.localSitePort),
-        };
-      }
-      localOptions["backendVersion"] = cmdOptions.localBackendVersion;
-      localOptions["forceUpgrade"] = cmdOptions.localForceUpgrade;
-    }
+    } = {
+      ports: {
+        cloud:
+          cmdOptions.localCloudPort !== undefined
+            ? parseInt(cmdOptions.localCloudPort)
+            : undefined,
+        site:
+          cmdOptions.localSitePort !== undefined
+            ? parseInt(cmdOptions.localSitePort)
+            : undefined,
+      },
+      backendVersion: cmdOptions.localBackendVersion,
+      forceUpgrade: cmdOptions.localForceUpgrade,
+    };
 
     const configure =
       cmdOptions.configure === true ? "ask" : (cmdOptions.configure ?? null);
@@ -272,7 +257,7 @@ Same format as .env.local or .env files, and overrides them.`,
             kind: "chooseProject",
             selectionWithinProject: {
               // For backwards compatibility, allow `--configure --prod`
-              kind: cmdOptions.prod ? "prod" : "ownDev",
+              kind: cmdOptions.prod ? "prod" : "unspecified",
             },
           } satisfies DeploymentSelection)
         : await getDeploymentSelection(ctx, cmdOptions);
@@ -310,7 +295,7 @@ Same format as .env.local or .env files, and overrides them.`,
       ...(credentials.deploymentFields !== null
         ? [
             usageStateWarning(ctx, credentials.deploymentFields.deploymentName),
-            checkVersion(ctx),
+            checkVersionAndAiFilesStaleness(ctx),
           ]
         : []),
     ]);

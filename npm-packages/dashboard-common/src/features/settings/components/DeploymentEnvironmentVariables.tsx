@@ -10,27 +10,30 @@ import {
   BaseEnvironmentVariable,
 } from "@common/features/settings/components/EnvironmentVariables";
 import { useUpdateEnvVars } from "@common/features/settings/lib/api";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
 import { Button } from "@ui/Button";
 import { Sheet } from "@ui/Sheet";
 import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
+import {
+  NoPermissionMessage,
+  PermissionDeniedTip,
+} from "@common/elements/NoPermissionMessage";
 
 export function DeploymentEnvironmentVariables({
   onEnvironmentVariablesAdded,
 }: {
   onEnvironmentVariablesAdded?: (count: number) => void;
 }) {
-  const { useCurrentDeployment, useHasProjectAdminPermissions, projectsURI } =
-    useContext(DeploymentInfoContext);
-  const deployment = useCurrentDeployment();
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
-  const canManageEnvironmentVariables =
-    deployment?.deploymentType !== "prod" || hasAdminPermissions;
+  const { projectsURI } = useContext(DeploymentInfoContext);
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewEnvVars = useIsOperationAllowed("ViewEnvironmentVariables");
+  const canWriteEnvVars = useIsOperationAllowed("WriteEnvironmentVariables");
   const environmentVariables: undefined | Array<EnvironmentVariable> = useQuery(
     udfs.listEnvironmentVariables.default,
-    {},
+    canViewEnvVars ? {} : "skip",
   );
   const updateEnvironmentVariables = useUpdateEnvVars();
 
@@ -77,6 +80,18 @@ export function DeploymentEnvironmentVariables({
     );
   };
 
+  if (!canViewEnvVars) {
+    return (
+      <Sheet className="flex flex-col gap-4 text-sm">
+        <h3>Environment Variables</h3>
+        <NoPermissionMessage
+          message="You do not have permission to view environment variables in this deployment."
+          missingPermission="deployment:env:view"
+        />
+      </Sheet>
+    );
+  }
+
   return (
     <Sheet className="flex flex-col gap-4 text-sm">
       <h3>Environment Variables</h3>
@@ -84,7 +99,13 @@ export function DeploymentEnvironmentVariables({
         View and configure environment variables for your deployment.
       </p>
       <EnvironmentVariables
-        hasAdminPermissions={canManageEnvironmentVariables}
+        hasAdminPermissions={canWriteEnvVars}
+        disabledTip={
+          <PermissionDeniedTip
+            message="You do not have permission to modify environment variables on this deployment."
+            action="deployment:env:write"
+          />
+        }
         environmentVariables={environmentVariables}
         updateEnvironmentVariables={async (
           creations,
@@ -174,15 +195,17 @@ export const diffEnvironmentVariables = (
 };
 
 function useEnvironmentVariablesDiff(): EnvironmentVariableDiff {
-  const environmentVariables: undefined | Array<EnvironmentVariable> = useQuery(
-    udfs.listEnvironmentVariables.default,
-    {},
-  );
   const {
     useCurrentProject,
     useCurrentDeployment,
     useProjectEnvironmentVariables,
   } = useContext(DeploymentInfoContext);
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewEnvVars = useIsOperationAllowed("ViewEnvironmentVariables");
+  const environmentVariables: undefined | Array<EnvironmentVariable> = useQuery(
+    udfs.listEnvironmentVariables.default,
+    canViewEnvVars ? {} : "skip",
+  );
   const projectId = useCurrentProject()?.id;
   const deploymentType = useCurrentDeployment()?.deploymentType;
   const projectEnvironmentVariables = useProjectEnvironmentVariables(

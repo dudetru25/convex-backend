@@ -40,10 +40,8 @@ pub async fn stream_udf_execution(
     ExtractIdentity(identity): ExtractIdentity,
     Query(query_args): Query<StreamUdfExecutionQueryArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let entries_future = st
-        .application
-        .function_log(identity, "stream_udf_execution")?
-        .stream(query_args.cursor);
+    let function_log = st.application.function_log(&identity)?;
+    let entries_future = function_log.stream(query_args.cursor);
     let mut zombify_rx = st.zombify_rx.clone();
     futures::select_biased! {
         entries_result = entries_future.fuse() => {
@@ -84,10 +82,8 @@ pub async fn stream_function_logs(
     ExtractClientVersion(client_version): ExtractClientVersion,
     Query(query_args): Query<StreamFunctionLogs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let entries_future = st
-        .application
-        .function_log(identity, "stream_function_logs")?
-        .stream_parts(query_args.cursor);
+    let function_log = st.application.function_log(&identity)?;
+    let entries_future = function_log.stream_parts(query_args.cursor);
     let mut zombify_rx = st.zombify_rx.clone();
     let request_id = match (query_args.session_id, query_args.client_request_counter) {
         (Some(session_id), Some(client_request_counter)) => Some(RequestId::new_for_ws_session(
@@ -185,11 +181,18 @@ fn usage_stats_to_json(
     common::log_streaming::UsageStatsJson {
         database_read_bytes: stats.database_read_bytes,
         database_write_bytes: stats.database_write_bytes,
+        database_io_read_bytes: stats.database_io_read_bytes,
+        database_io_write_bytes: stats.database_io_write_bytes,
         database_read_documents: stats.database_read_documents,
         storage_read_bytes: stats.storage_read_bytes,
         storage_write_bytes: stats.storage_write_bytes,
         vector_index_read_bytes: stats.vector_index_read_bytes,
         vector_index_write_bytes: stats.vector_index_write_bytes,
+        text_index_query_bytes: stats.text_index_query_bytes,
+        text_index_write_query_bytes: stats.text_index_write_query_bytes,
+        vector_index_read_query_bytes: stats.vector_index_read_query_bytes,
+        vector_index_write_query_bytes: stats.vector_index_write_query_bytes,
+        network_egress_bytes: stats.network_egress_bytes,
         memory_used_mb,
     }
 }
@@ -201,13 +204,8 @@ fn execution_to_json(
     let usage_stats_json = usage_stats_to_json(&execution.usage_stats, execution.memory_used_mb);
     let occ_info_json = execution
         .occ_info
-        .as_ref()
-        .map(|occ| common::log_streaming::OccInfoJson {
-            table_name: occ.table_name.clone(),
-            document_id: occ.document_id.clone(),
-            write_source: occ.write_source.clone(),
-            retry_count: occ.retry_count,
-        });
+        .map(common::log_streaming::OccInfoJson::from);
+    let will_retry = execution.will_retry;
     let identity_type = execution.identity.tag().value.to_string();
     let environment = execution.environment.to_string();
     let execution_timestamp = execution.execution_timestamp.as_secs_f64();
@@ -239,6 +237,7 @@ fn execution_to_json(
                 usage_stats: usage_stats_json,
                 return_bytes: execution.return_bytes.map(|bytes| bytes as f64),
                 occ_info: occ_info_json,
+                will_retry,
                 execution_timestamp,
                 identity_type,
                 environment,
@@ -273,6 +272,7 @@ fn execution_to_json(
                 usage_stats: usage_stats_json,
                 return_bytes: None, // Not supported in HTTP actions
                 occ_info: occ_info_json,
+                will_retry,
                 execution_timestamp,
                 identity_type,
                 environment,

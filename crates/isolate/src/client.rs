@@ -6,6 +6,7 @@ use std::{
         VecDeque,
     },
     env,
+    pin::pin,
     sync::{
         Arc,
         Once,
@@ -20,10 +21,8 @@ use ::metrics::{
 use async_trait::async_trait;
 use common::{
     auth::AuthConfig,
-    bootstrap_model::components::{
-        definition::ComponentDefinitionMetadata,
-        handles::FunctionHandle,
-    },
+    backoff::Backoff,
+    bootstrap_model::components::definition::ComponentDefinitionMetadata,
     codel_queue::{
         new_codel_queue_async,
         CoDelQueueReceiver,
@@ -31,11 +30,8 @@ use common::{
         ExpiredInQueue,
     },
     components::{
-        CanonicalizedComponentFunctionPath,
         ComponentDefinitionPath,
-        ComponentId,
         ComponentName,
-        ComponentPath,
         Resource,
     },
     errors::{
@@ -52,6 +48,7 @@ use common::{
         RoutedHttpPath,
     },
     knobs::{
+        ANALYZE_CONCURRENCY,
         FUNRUN_ISOLATE_ACTIVE_THREADS,
         HEAP_WORKER_REPORT_INTERVAL_SECONDS,
         ISOLATE_IDLE_TIMEOUT,
@@ -72,6 +69,7 @@ use common::{
     schemas::DatabaseSchema,
     static_span,
     types::{
+        DeploymentMetadata,
         ModuleEnvironment,
         UdfType,
     },
@@ -98,10 +96,13 @@ use file_storage::TransactionalFileStorage;
 use futures::{
     select_biased,
     stream::{
+        self,
         FuturesUnordered,
         StreamExt,
     },
+    TryStreamExt as _,
 };
+use itertools::Either;
 use keybroker::{
     FunctionRunnerKeyBroker,
     Identity,
@@ -112,12 +113,9 @@ use model::{
         EnvVarName,
         EnvVarValue,
     },
-    file_storage::{
-        types::FileStorageEntry,
-        FileStorageId,
-    },
     modules::module_versions::{
         AnalyzedModule,
+        FullModuleSource,
         ModuleSource,
         SourceMap,
     },
@@ -125,11 +123,7 @@ use model::{
 };
 use parking_lot::Mutex;
 use prometheus::VMHistogram;
-use serde_json::Value as JsonValue;
-use sync_types::{
-    types::SerializedArgs,
-    CanonicalizedModulePath,
-};
+use sync_types::CanonicalizedModulePath;
 use tokio::sync::{
     mpsc,
     oneshot,
@@ -140,19 +134,15 @@ use udf::{
         ValidatedHttpPath,
         ValidatedPathAndArgs,
     },
+    ActionCallbacks,
     ActionOutcome,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
-    FunctionResult,
     HttpActionOutcome,
     HttpActionResponseStreamer,
+    NestedUdfOutcome,
 };
-use usage_tracking::FunctionUsageStats;
-use value::{
-    id_v6::DeveloperDocumentId,
-    identifier::Identifier,
-};
-use vector::PublicVectorSearchQueryResult;
+use value::identifier::Identifier;
 
 use crate::{
     concurrency_limiter::ConcurrencyLimiter,
@@ -202,130 +192,13 @@ impl IsolateConfig {
         }
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new_with_max_user_timeout(
-        name: &'static str,
-        max_user_timeout: Option<Duration>,
-        limiter: ConcurrencyLimiter,
-    ) -> Self {
-        Self {
-            name,
-            max_user_timeout,
-            limiter,
-        }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Default for IsolateConfig {
-    fn default() -> Self {
-        Self {
-            name: "test",
-            max_user_timeout: None,
-            limiter: ConcurrencyLimiter::unlimited(),
-        }
-    }
-}
-
-#[async_trait]
-pub trait ActionCallbacks: Send + Sync {
-    // Executing UDFs
-    async fn execute_query(
-        &self,
-        identity: Identity,
-        path: CanonicalizedComponentFunctionPath,
-        args: SerializedArgs,
-        context: ExecutionContext,
-    ) -> anyhow::Result<FunctionResult>;
-
-    async fn execute_mutation(
-        &self,
-        identity: Identity,
-        path: CanonicalizedComponentFunctionPath,
-        args: SerializedArgs,
-        context: ExecutionContext,
-    ) -> anyhow::Result<FunctionResult>;
-
-    async fn execute_action(
-        &self,
-        identity: Identity,
-        path: CanonicalizedComponentFunctionPath,
-        args: SerializedArgs,
-        context: ExecutionContext,
-    ) -> anyhow::Result<FunctionResult>;
-
-    // Storage
-    async fn storage_get_url(
-        &self,
-        identity: Identity,
-        component: ComponentId,
-        storage_id: FileStorageId,
-    ) -> anyhow::Result<Option<String>>;
-
-    async fn storage_delete(
-        &self,
-        identity: Identity,
-        component: ComponentId,
-        storage_id: FileStorageId,
-    ) -> anyhow::Result<()>;
-
-    // Used to get a file content from an action running in v8.
-    async fn storage_get_file_entry(
-        &self,
-        identity: Identity,
-        component: ComponentId,
-        storage_id: FileStorageId,
-    ) -> anyhow::Result<Option<(ComponentPath, FileStorageEntry)>>;
-
-    // Used to store an already uploaded file from an action running in v8.
-    async fn storage_store_file_entry(
-        &self,
-        identity: Identity,
-        component: ComponentId,
-        entry: FileStorageEntry,
-    ) -> anyhow::Result<(ComponentPath, DeveloperDocumentId)>;
-
-    // Scheduler
-    async fn schedule_job(
-        &self,
-        identity: Identity,
-        scheduling_component: ComponentId,
-        scheduled_path: CanonicalizedComponentFunctionPath,
-        udf_args: SerializedArgs,
-        scheduled_ts: UnixTimestamp,
-        context: ExecutionContext,
-    ) -> anyhow::Result<DeveloperDocumentId>;
-
-    async fn cancel_job(
-        &self,
-        identity: Identity,
-        virtual_id: DeveloperDocumentId,
-    ) -> anyhow::Result<()>;
-
-    // Vector Search
-    async fn vector_search(
-        &self,
-        identity: Identity,
-        query: JsonValue,
-    ) -> anyhow::Result<(Vec<PublicVectorSearchQueryResult>, FunctionUsageStats)>;
-
-    // Components
-    async fn lookup_function_handle(
-        &self,
-        identity: Identity,
-        handle: FunctionHandle,
-    ) -> anyhow::Result<CanonicalizedComponentFunctionPath>;
-    async fn create_function_handle(
-        &self,
-        identity: Identity,
-        path: CanonicalizedComponentFunctionPath,
-    ) -> anyhow::Result<FunctionHandle>;
 }
 
 pub struct UdfRequest<RT: Runtime> {
     pub path_and_args: ValidatedPathAndArgs,
     pub udf_type: UdfType,
     pub transaction: Transaction<RT>,
+    pub unix_timestamp: UnixTimestamp,
     pub journal: QueryJournal,
     pub context: ExecutionContext,
 }
@@ -347,7 +220,6 @@ pub struct ActionRequest<RT: Runtime> {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(Debug))]
 pub struct ActionRequestParams {
     pub path_and_args: ValidatedPathAndArgs,
 }
@@ -358,6 +230,7 @@ pub struct EnvironmentData<RT: Runtime> {
     pub default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
     pub file_storage: TransactionalFileStorage<RT>,
     pub module_loader: Arc<dyn ModuleCache<RT>>,
+    pub deployment: DeploymentMetadata,
 }
 
 pub struct Request<RT: Runtime> {
@@ -383,9 +256,8 @@ pub enum RequestType<RT: Runtime> {
         response: oneshot::Sender<anyhow::Result<(Transaction<RT>, FunctionOutcome)>>,
         queue_timer: Timer<VMHistogram>,
         rng_seed: [u8; 32],
-        unix_timestamp: UnixTimestamp,
         reactor_depth: usize,
-        udf_callback: Box<dyn UdfCallback<RT>>,
+        udf_callback: Option<IsolateClient<RT>>,
         function_started_sender: Option<oneshot::Sender<()>>,
     },
     Action {
@@ -411,11 +283,10 @@ pub enum RequestType<RT: Runtime> {
     },
     Analyze {
         udf_config: UdfConfig,
-        modules: BTreeMap<CanonicalizedModulePath, ModuleConfig>,
+        modules: Arc<BTreeMap<CanonicalizedModulePath, Arc<FullModuleSource>>>,
+        to_analyze: CanonicalizedModulePath,
         environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
-        response: oneshot::Sender<
-            anyhow::Result<Result<BTreeMap<CanonicalizedModulePath, AnalyzedModule>, JsError>>,
-        >,
+        response: oneshot::Sender<anyhow::Result<Result<AnalyzedModule, JsError>>>,
         max_user_heap_size: usize,
     },
     EvaluateSchema {
@@ -449,21 +320,57 @@ pub enum RequestType<RT: Runtime> {
     },
 }
 
-#[async_trait]
-pub trait UdfCallback<RT: Runtime>: Send + Sync {
-    async fn execute_udf(
-        &self,
+#[allow(async_fn_in_trait)]
+pub trait UdfCallback<RT: Runtime> {
+    /// Execute a subfunction in a new V8 context.
+    /// This can either be in the same isolate (RunUdf), or another one
+    /// (IsolateClient).
+    async fn execute_nested_udf(
+        self,
         client_id: String,
-        udf_type: UdfType,
-        path_and_args: ValidatedPathAndArgs,
+        udf_request: UdfRequest<RT>,
         environment_data: EnvironmentData<RT>,
-        transaction: Transaction<RT>,
-        journal: QueryJournal,
-        context: ExecutionContext,
         rng_seed: [u8; 32],
-        unix_timestamp: UnixTimestamp,
         reactor_depth: usize,
-    ) -> anyhow::Result<(Transaction<RT>, FunctionOutcome)>;
+    ) -> anyhow::Result<(Transaction<RT>, NestedUdfOutcome)>;
+}
+
+impl<RT: Runtime, T, U> UdfCallback<RT> for Either<T, U>
+where
+    T: UdfCallback<RT>,
+    U: UdfCallback<RT>,
+{
+    async fn execute_nested_udf(
+        self,
+        client_id: String,
+        udf_request: UdfRequest<RT>,
+        environment_data: EnvironmentData<RT>,
+        rng_seed: [u8; 32],
+        reactor_depth: usize,
+    ) -> anyhow::Result<(Transaction<RT>, NestedUdfOutcome)> {
+        match self {
+            Either::Left(l) => {
+                l.execute_nested_udf(
+                    client_id,
+                    udf_request,
+                    environment_data,
+                    rng_seed,
+                    reactor_depth,
+                )
+                .await
+            },
+            Either::Right(r) => {
+                r.execute_nested_udf(
+                    client_id,
+                    udf_request,
+                    environment_data,
+                    rng_seed,
+                    reactor_depth,
+                )
+                .await
+            },
+        }
+    }
 }
 
 impl<RT: Runtime> Request<RT> {
@@ -542,6 +449,7 @@ impl<RT: Runtime> Clone for IsolateClient<RT> {
             scheduler: self.scheduler.clone(),
             sender: self.sender.clone(),
             concurrency_logger: self.concurrency_logger.clone(),
+            concurrency_limiter: self.concurrency_limiter.clone(),
         }
     }
 }
@@ -553,7 +461,7 @@ pub fn initialize_v8() {
         let _s = static_span!("initialize_v8");
 
         // `deno_core_icudata` internally loads this with proper 16-byte alignment.
-        assert!(v8::icu::set_common_data_74(deno_core_icudata::ICU_DATA).is_ok());
+        assert!(v8::icu::set_common_data_77(deno_core_icudata::ICU_DATA).is_ok());
 
         // Calls into `v8::platform::v8__Platform__NewUnprotectedDefaultPlatform`
         // Can configure with...
@@ -584,7 +492,6 @@ pub fn initialize_v8() {
         // https://github.com/v8/v8/blob/master/src/flags/flag-definitions.h
         let mut argv = vec![
             "".to_owned(), // first arg is ignored
-            "--harmony-import-assertions".to_owned(),
             // See https://github.com/denoland/deno/issues/2544
             "--no-wasm-async-compilation".to_string(),
             // Disable `eval` or `new Function()`.
@@ -611,7 +518,7 @@ pub fn initialize_v8() {
         // Calls into `v8::V8::Initialize`
         V8::initialize();
 
-        crate::udf_runtime::initialize().expect("Failed to set up UDF runtime");
+        crate::udf_runtime::initialize();
     });
 }
 
@@ -626,6 +533,7 @@ pub struct IsolateClient<RT: Runtime> {
     scheduler: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
     sender: CoDelQueueSender<RT, Request<RT>>,
     concurrency_logger: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
+    concurrency_limiter: ConcurrencyLimiter,
 }
 
 impl<RT: Runtime> IsolateClient<RT> {
@@ -635,17 +543,17 @@ impl<RT: Runtime> IsolateClient<RT> {
         max_isolate_workers: usize,
         isolate_config: Option<IsolateConfig>,
     ) -> anyhow::Result<Self> {
-        let concurrency_limit = if *FUNRUN_ISOLATE_ACTIVE_THREADS > 0 {
+        let concurrency_limiter = if *FUNRUN_ISOLATE_ACTIVE_THREADS > 0 {
             ConcurrencyLimiter::new(*FUNRUN_ISOLATE_ACTIVE_THREADS)
         } else {
             ConcurrencyLimiter::unlimited()
         };
         let concurrency_logger = rt.spawn(
             "concurrency_logger",
-            concurrency_limit.go_log(rt.clone(), ACTIVE_CONCURRENCY_PERMITS_LOG_FREQUENCY),
+            concurrency_limiter.go_log(rt.clone(), ACTIVE_CONCURRENCY_PERMITS_LOG_FREQUENCY),
         );
         let isolate_config =
-            isolate_config.unwrap_or(IsolateConfig::new("funrun", concurrency_limit));
+            isolate_config.unwrap_or(IsolateConfig::new("funrun", concurrency_limiter.clone()));
 
         initialize_v8();
         // NB: We don't call V8::Dispose or V8::ShutdownPlatform since we just assume a
@@ -676,7 +584,12 @@ impl<RT: Runtime> IsolateClient<RT> {
             scheduler: Arc::new(Mutex::new(Some(scheduler))),
             concurrency_logger: Arc::new(Mutex::new(Some(concurrency_logger))),
             handles,
+            concurrency_limiter,
         })
+    }
+
+    pub fn concurrency_limiter(&self) -> &ConcurrencyLimiter {
+        &self.concurrency_limiter
     }
 
     pub fn aggregate_heap_stats(&self) -> IsolateHeapStats {
@@ -701,6 +614,7 @@ impl<RT: Runtime> IsolateClient<RT> {
         reactor_depth: usize,
         instance_name: String,
         function_started_sender: Option<oneshot::Sender<()>>,
+        subfunctions_in_same_isolate: bool,
     ) -> anyhow::Result<(Transaction<RT>, FunctionOutcome)> {
         let (tx, rx) = oneshot::channel();
         let request = RequestType::Udf {
@@ -708,6 +622,7 @@ impl<RT: Runtime> IsolateClient<RT> {
                 path_and_args,
                 udf_type,
                 transaction,
+                unix_timestamp,
                 journal,
                 context,
             },
@@ -715,10 +630,13 @@ impl<RT: Runtime> IsolateClient<RT> {
             response: tx,
             queue_timer: queue_timer(),
             rng_seed,
-            unix_timestamp,
             reactor_depth,
-            udf_callback: Box::new(self.clone()),
             function_started_sender,
+            udf_callback: if subfunctions_in_same_isolate {
+                None
+            } else {
+                Some(self.clone())
+            },
         };
         self.send_request(Request::new(
             instance_name,
@@ -836,23 +754,70 @@ impl<RT: Runtime> IsolateClient<RT> {
                 .all(|m| m.environment == ModuleEnvironment::Isolate),
             "Can only analyze Isolate modules"
         );
-        let (tx, rx) = oneshot::channel();
-        let request = RequestType::Analyze {
-            modules,
-            response: tx,
-            udf_config,
-            environment_variables,
-            max_user_heap_size,
-        };
-        self.send_request(Request::new(
-            instance_name,
-            request,
-            EncodedSpan::from_parent(),
-        ))?;
-        match IsolateClient::<RT>::receive_response(rx).await? {
-            Ok(outcome) => Ok(outcome),
-            Err(e) => Err(recapture_stacktrace(e).await),
+        let to_analyze: Vec<_> = modules
+            .keys()
+            .filter(|path| !path.is_deps())
+            .cloned()
+            .collect();
+        let modules: Arc<BTreeMap<_, _>> = Arc::new(
+            modules
+                .into_iter()
+                .map(|(path, module_config)| {
+                    (
+                        path,
+                        Arc::new(FullModuleSource {
+                            source: module_config.source,
+                            source_map: module_config.source_map,
+                        }),
+                    )
+                })
+                .collect(),
+        );
+        let mut stream = pin!(stream::iter(to_analyze)
+            .map(|to_analyze| async {
+                let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(2));
+                let mut attempt = 1;
+                const MAX_ATTEMPTS: u32 = 3;
+                loop {
+                    let (tx, rx) = oneshot::channel();
+                    let request = RequestType::Analyze {
+                        modules: modules.clone(),
+                        to_analyze: to_analyze.clone(),
+                        response: tx,
+                        udf_config: udf_config.clone(),
+                        environment_variables: environment_variables.clone(),
+                        max_user_heap_size,
+                    };
+                    self.send_request(Request::new(
+                        instance_name.clone(),
+                        request,
+                        EncodedSpan::from_parent(),
+                    ))?;
+                    match IsolateClient::<RT>::receive_response(rx).await? {
+                        Ok(outcome) => return Ok((to_analyze, outcome)),
+                        Err(e)
+                            if attempt < MAX_ATTEMPTS
+                                && (e.is_rejected_before_execution() || e.is_overloaded()) =>
+                        {
+                            tracing::warn!("Retrying analyze after system error: {e:?}");
+                            let wait = backoff.fail(&mut self.rt.rng());
+                            self.rt.wait(wait).await;
+                            attempt += 1;
+                            continue;
+                        },
+                        Err(e) => return Err(recapture_stacktrace(e).await),
+                    }
+                }
+            })
+            .buffer_unordered(*ANALYZE_CONCURRENCY));
+        let mut analyzed_modules = BTreeMap::new();
+        while let Some((path, r)) = stream.try_next().await? {
+            match r {
+                Ok(analyzed_module) => analyzed_modules.insert(path, analyzed_module),
+                Err(r) => return Ok(Err(r)),
+            };
         }
+        Ok(Ok(analyzed_modules))
     }
 
     #[fastrace::trace]
@@ -875,23 +840,38 @@ impl<RT: Runtime> IsolateClient<RT> {
                 .all(|m| m.environment == ModuleEnvironment::Isolate),
             "Can only evaluate Isolate modules"
         );
-        let (tx, rx) = oneshot::channel();
-        let request = RequestType::EvaluateAppDefinitions {
-            app_definition,
-            component_definitions,
-            dependency_graph,
-            user_environment_variables,
-            system_env_vars,
-            response: tx,
-        };
-        self.send_request(Request::new(
-            instance_name,
-            request,
-            EncodedSpan::from_parent(),
-        ))?;
-        match IsolateClient::<RT>::receive_response(rx).await? {
-            Ok(outcome) => Ok(outcome),
-            Err(e) => Err(recapture_stacktrace(e).await),
+        let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(2));
+        let mut attempt = 1;
+        const MAX_ATTEMPTS: u32 = 3;
+        loop {
+            let (tx, rx) = oneshot::channel();
+            let request = RequestType::EvaluateAppDefinitions {
+                app_definition: app_definition.clone(),
+                component_definitions: component_definitions.clone(),
+                dependency_graph: dependency_graph.clone(),
+                user_environment_variables: user_environment_variables.clone(),
+                system_env_vars: system_env_vars.clone(),
+                response: tx,
+            };
+            self.send_request(Request::new(
+                instance_name.clone(),
+                request,
+                EncodedSpan::from_parent(),
+            ))?;
+            match IsolateClient::<RT>::receive_response(rx).await? {
+                Ok(outcome) => return Ok(outcome),
+                Err(e)
+                    if attempt < MAX_ATTEMPTS
+                        && (e.is_rejected_before_execution() || e.is_overloaded()) =>
+                {
+                    tracing::warn!("Retrying evaluate_app_definitions after system error: {e:?}");
+                    let wait = backoff.fail(&mut self.rt.rng());
+                    self.rt.wait(wait).await;
+                    attempt += 1;
+                    continue;
+                },
+                Err(e) => return Err(recapture_stacktrace(e).await),
+            }
         }
     }
 
@@ -905,23 +885,40 @@ impl<RT: Runtime> IsolateClient<RT> {
         name: ComponentName,
         instance_name: String,
     ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
-        let (tx, rx) = oneshot::channel();
-        let request = RequestType::EvaluateComponentInitializer {
-            evaluated_definitions,
-            path,
-            definition,
-            args,
-            name,
-            response: tx,
-        };
-        self.send_request(Request::new(
-            instance_name,
-            request,
-            EncodedSpan::from_parent(),
-        ))?;
-        match IsolateClient::<RT>::receive_response(rx).await? {
-            Ok(outcome) => Ok(outcome),
-            Err(e) => Err(recapture_stacktrace(e).await),
+        let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(2));
+        let mut attempt = 1;
+        const MAX_ATTEMPTS: u32 = 3;
+        loop {
+            let (tx, rx) = oneshot::channel();
+            let request = RequestType::EvaluateComponentInitializer {
+                evaluated_definitions: evaluated_definitions.clone(),
+                path: path.clone(),
+                definition: definition.clone(),
+                args: args.clone(),
+                name: name.clone(),
+                response: tx,
+            };
+            self.send_request(Request::new(
+                instance_name.clone(),
+                request,
+                EncodedSpan::from_parent(),
+            ))?;
+            match IsolateClient::<RT>::receive_response(rx).await? {
+                Ok(outcome) => return Ok(outcome),
+                Err(e)
+                    if attempt < MAX_ATTEMPTS
+                        && (e.is_rejected_before_execution() || e.is_overloaded()) =>
+                {
+                    tracing::warn!(
+                        "Retrying evaluate_component_initializer after system error: {e:?}"
+                    );
+                    let wait = backoff.fail(&mut self.rt.rng());
+                    self.rt.wait(wait).await;
+                    attempt += 1;
+                    continue;
+                },
+                Err(e) => return Err(recapture_stacktrace(e).await),
+            }
         }
     }
 
@@ -934,22 +931,37 @@ impl<RT: Runtime> IsolateClient<RT> {
         unix_timestamp: UnixTimestamp,
         instance_name: String,
     ) -> anyhow::Result<DatabaseSchema> {
-        let (tx, rx) = oneshot::channel();
-        let request = RequestType::EvaluateSchema {
-            schema_bundle,
-            source_map,
-            rng_seed,
-            unix_timestamp,
-            response: tx,
-        };
-        self.send_request(Request::new(
-            instance_name,
-            request,
-            EncodedSpan::from_parent(),
-        ))?;
-        match IsolateClient::<RT>::receive_response(rx).await? {
-            Ok(outcome) => Ok(outcome),
-            Err(e) => Err(recapture_stacktrace(e).await),
+        let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(2));
+        let mut attempt = 1;
+        const MAX_ATTEMPTS: u32 = 3;
+        loop {
+            let (tx, rx) = oneshot::channel();
+            let request = RequestType::EvaluateSchema {
+                schema_bundle: schema_bundle.clone(),
+                source_map: source_map.clone(),
+                rng_seed,
+                unix_timestamp,
+                response: tx,
+            };
+            self.send_request(Request::new(
+                instance_name.clone(),
+                request,
+                EncodedSpan::from_parent(),
+            ))?;
+            match IsolateClient::<RT>::receive_response(rx).await? {
+                Ok(outcome) => return Ok(outcome),
+                Err(e)
+                    if attempt < MAX_ATTEMPTS
+                        && (e.is_rejected_before_execution() || e.is_overloaded()) =>
+                {
+                    tracing::warn!("Retrying evaluate_schema after system error: {e:?}");
+                    let wait = backoff.fail(&mut self.rt.rng());
+                    self.rt.wait(wait).await;
+                    attempt += 1;
+                    continue;
+                },
+                Err(e) => return Err(recapture_stacktrace(e).await),
+            }
         }
     }
 
@@ -962,45 +974,58 @@ impl<RT: Runtime> IsolateClient<RT> {
         explanation: &str,
         instance_name: String,
     ) -> anyhow::Result<AuthConfig> {
-        let (tx, rx) = oneshot::channel();
-        let request = RequestType::EvaluateAuthConfig {
-            auth_config_bundle,
-            source_map,
-            environment_variables,
-            response: tx,
+        let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(2));
+        let mut attempt = 1;
+        const MAX_ATTEMPTS: u32 = 3;
+        let result = loop {
+            let (tx, rx) = oneshot::channel();
+            let request = RequestType::EvaluateAuthConfig {
+                auth_config_bundle: auth_config_bundle.clone(),
+                source_map: source_map.clone(),
+                environment_variables: environment_variables.clone(),
+                response: tx,
+            };
+            self.send_request(Request::new(
+                instance_name.clone(),
+                request,
+                EncodedSpan::from_parent(),
+            ))?;
+            match IsolateClient::<RT>::receive_response(rx).await? {
+                Ok(outcome) => return Ok(outcome),
+                Err(e)
+                    if attempt < MAX_ATTEMPTS
+                        && (e.is_rejected_before_execution() || e.is_overloaded()) =>
+                {
+                    tracing::warn!("Retrying evaluate_auth_config after system error: {e:?}");
+                    let wait = backoff.fail(&mut self.rt.rng());
+                    self.rt.wait(wait).await;
+                    attempt += 1;
+                    continue;
+                },
+                Err(e) => break e,
+            }
         };
-        self.send_request(Request::new(
-            instance_name,
-            request,
-            EncodedSpan::from_parent(),
-        ))?;
-        let result = IsolateClient::<RT>::receive_response(rx).await?;
-        match result {
-            Ok(outcome) => Ok(outcome),
-            Err(e) => {
-                let is_env_var_error = e
-                    .to_string()
-                    .starts_with("Uncaught Error: Environment variable");
-                let err = recapture_stacktrace(e).await;
-                if err.is_rejected_before_execution() {
-                    return Err(err);
-                }
-                let error = err.to_string();
-                if is_env_var_error {
-                    // Reformatting the underlying message to be nicer
-                    // here. Since we lost the underlying ErrorMetadata into the JSError,
-                    // we do some string matching instead. CX-4531
-                    Err(anyhow::anyhow!(ErrorMetadata::bad_request(
-                        "AuthConfigMissingEnvironmentVariable",
-                        error.trim_start_matches("Uncaught Error: ").to_string(),
-                    )))
-                } else {
-                    Err(anyhow::anyhow!(ErrorMetadata::bad_request(
-                        "InvalidAuthConfig",
-                        format!("{explanation}: {error}"),
-                    )))
-                }
-            },
+        let is_env_var_error = result
+            .to_string()
+            .starts_with("Uncaught Error: Environment variable");
+        let err = recapture_stacktrace(result).await;
+        if err.is_rejected_before_execution() {
+            return Err(err);
+        }
+        let error = err.to_string();
+        if is_env_var_error {
+            // Reformatting the underlying message to be nicer
+            // here. Since we lost the underlying ErrorMetadata into the JSError,
+            // we do some string matching instead. CX-4531
+            Err(anyhow::anyhow!(ErrorMetadata::bad_request(
+                "AuthConfigMissingEnvironmentVariable",
+                error.trim_start_matches("Uncaught Error: ").to_string(),
+            )))
+        } else {
+            Err(anyhow::anyhow!(ErrorMetadata::bad_request(
+                "InvalidAuthConfig",
+                format!("{explanation}: {error}"),
+            )))
         }
     }
 
@@ -1041,35 +1066,52 @@ impl<RT: Runtime> IsolateClient<RT> {
     }
 }
 
-#[async_trait]
-impl<RT: Runtime> UdfCallback<RT> for IsolateClient<RT> {
-    async fn execute_udf(
-        &self,
+impl<RT: Runtime> UdfCallback<RT> for &IsolateClient<RT> {
+    async fn execute_nested_udf(
+        self,
         client_id: String,
-        udf_type: UdfType,
-        path_and_args: ValidatedPathAndArgs,
+        udf_request: UdfRequest<RT>,
         environment_data: EnvironmentData<RT>,
-        transaction: Transaction<RT>,
-        journal: QueryJournal,
-        context: ExecutionContext,
         rng_seed: [u8; 32],
-        unix_timestamp: UnixTimestamp,
         reactor_depth: usize,
-    ) -> anyhow::Result<(Transaction<RT>, FunctionOutcome)> {
-        self.execute_udf(
-            udf_type,
-            path_and_args,
-            transaction,
-            journal,
-            context,
-            environment_data,
-            rng_seed,
-            unix_timestamp,
-            reactor_depth,
-            client_id,
-            None, /* function_started_sender */
-        )
-        .await
+    ) -> anyhow::Result<(Transaction<RT>, NestedUdfOutcome)> {
+        let (tx, outcome) = self
+            .execute_udf(
+                udf_request.udf_type,
+                udf_request.path_and_args,
+                udf_request.transaction,
+                udf_request.journal,
+                udf_request.context,
+                environment_data,
+                rng_seed,
+                udf_request.unix_timestamp,
+                reactor_depth,
+                client_id,
+                None,  /* function_started_sender */
+                false, /* subfunctions_in_same_isolate */
+            )
+            .await?;
+        let outcome = match outcome {
+            FunctionOutcome::Query(outcome) | FunctionOutcome::Mutation(outcome) => {
+                NestedUdfOutcome {
+                    observed_identity: outcome.observed_identity,
+                    observed_rng: outcome.observed_rng,
+                    observed_time: outcome.observed_time,
+                    log_lines: outcome.log_lines,
+                    audit_log_lines: outcome.audit_log_lines,
+                    journal: outcome.journal,
+                    result: match outcome.result {
+                        Ok(t) => Ok(t.unpack()?),
+                        Err(e) => Err(e),
+                    },
+                    syscall_trace: outcome.syscall_trace,
+                }
+            },
+            FunctionOutcome::Action(_) | FunctionOutcome::HttpAction(_) => {
+                anyhow::bail!("nested udf must be query or mutation")
+            },
+        };
+        Ok((tx, outcome))
     }
 }
 
@@ -1535,117 +1577,4 @@ pub(crate) fn should_recreate_isolate<RT: Runtime>(
     }
 
     false
-}
-
-#[cfg(test)]
-mod tests {
-
-    use cmd_util::env::env_config;
-    use common::pause::PauseController;
-    use database::test_helpers::DbFixtures;
-    use errors::ErrorMetadataAnyhowExt;
-    use model::test_helpers::DbFixturesWithModel;
-    use pb::common::FunctionResult as FunctionResultProto;
-    use proptest::prelude::*;
-    use runtime::testing::TestRuntime;
-    use sync_types::testing::assert_roundtrips;
-    use tokio::sync::oneshot;
-
-    use super::FunctionResult;
-    use crate::{
-        client::{
-            initialize_v8,
-            NO_AVAILABLE_WORKERS,
-            PAUSE_REQUEST,
-        },
-        test_helpers::bogus_udf_request,
-        IsolateClient,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_function_result_proto_roundtrips(left in any::<FunctionResult>()) {
-            assert_roundtrips::<FunctionResult, FunctionResultProto>(left);
-        }
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_scheduler_workers_limit_requests(
-        rt: TestRuntime,
-        pause1: PauseController,
-    ) -> anyhow::Result<()> {
-        initialize_v8();
-        let function_runner_core = IsolateClient::new(rt.clone(), 100, 1, None)?;
-        let DbFixtures { db, .. } = DbFixtures::new(&rt).await?;
-        let client1 = "client1";
-        let hold_guard = pause1.hold(PAUSE_REQUEST);
-        let (sender, _rx1) = oneshot::channel();
-        let request = bogus_udf_request(&db, client1, sender).await?;
-        function_runner_core.send_request(request)?;
-        // Pausing a request while being executed should make the next request be
-        // rejected because there are no available workers.
-        let _guard = hold_guard.wait_for_blocked().await.unwrap();
-        let (sender, rx2) = oneshot::channel();
-        let request2 = bogus_udf_request(&db, client1, sender).await?;
-        function_runner_core.send_request(request2)?;
-        let response = IsolateClient::<TestRuntime>::receive_response(rx2).await?;
-        let err = response.unwrap_err();
-        assert!(err.is_rejected_before_execution(), "{err:?}");
-        assert!(err.to_string().contains(NO_AVAILABLE_WORKERS));
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_scheduler_does_not_throttle_different_clients(
-        rt: TestRuntime,
-        pause1: PauseController,
-    ) -> anyhow::Result<()> {
-        initialize_v8();
-        let function_runner_core = IsolateClient::new(rt.clone(), 50, 2, None)?;
-        let DbFixtures { db, .. } = DbFixtures::new_with_model(&rt).await?;
-        let client1 = "client1";
-        let hold_guard = pause1.hold(PAUSE_REQUEST);
-        let (sender, _rx1) = oneshot::channel();
-        let request = bogus_udf_request(&db, client1, sender).await?;
-        function_runner_core.send_request(request)?;
-        // Pausing a request should not affect the next one because we have 2 workers
-        // and 2 requests from different clients.
-        let _guard = hold_guard.wait_for_blocked().await.unwrap();
-        let (sender, rx2) = oneshot::channel();
-        let client2 = "client2";
-        let request2 = bogus_udf_request(&db, client2, sender).await?;
-        function_runner_core.send_request(request2)?;
-        IsolateClient::<TestRuntime>::receive_response(rx2).await??;
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_scheduler_throttles_same_client(
-        rt: TestRuntime,
-        pause1: PauseController,
-    ) -> anyhow::Result<()> {
-        initialize_v8();
-        let function_runner_core = IsolateClient::new(rt.clone(), 50, 2, None)?;
-        let DbFixtures { db, .. } = DbFixtures::new_with_model(&rt).await?;
-        let client = "client";
-        let hold_guard = pause1.hold(PAUSE_REQUEST);
-        let (sender, _rx1) = oneshot::channel();
-        let request = bogus_udf_request(&db, client, sender).await?;
-        function_runner_core.send_request(request)?;
-        // Pausing the first request and sending a second should make the second fail
-        // because there's only one worker left and it is reserved for other clients.
-        let _guard = hold_guard.wait_for_blocked().await.unwrap();
-        let (sender, rx2) = oneshot::channel();
-        let request2 = bogus_udf_request(&db, client, sender).await?;
-        function_runner_core.send_request(request2)?;
-        let response = IsolateClient::<TestRuntime>::receive_response(rx2).await?;
-        let err = response.unwrap_err();
-        assert!(err.is_rejected_before_execution());
-        assert!(err.to_string().contains(NO_AVAILABLE_WORKERS));
-        Ok(())
-    }
 }

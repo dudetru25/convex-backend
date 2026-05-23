@@ -13,6 +13,7 @@ import { ToastContainer } from "@common/elements/ToastContainer";
 import { ThemeConsumer } from "@common/elements/ThemeConsumer";
 import { Favicon } from "@common/elements/Favicon";
 import { ToggleTheme } from "@common/elements/ToggleTheme";
+import { SelfHostedDisconnectOverlay } from "@common/features/disconnectOverlay/SelfHostedDisconnectOverlay";
 import { Menu, MenuItem } from "@ui/Menu";
 import { ThemeProvider } from "next-themes";
 import React, {
@@ -30,7 +31,6 @@ import {
   WaitForDeploymentApi,
   DeploymentInfo,
   DeploymentInfoContext,
-  SelfHostedDisconnectOverlay,
 } from "@common/lib/deploymentContext";
 import { Tooltip } from "@ui/Tooltip";
 import { DeploymentCredentialsForm } from "components/DeploymentCredentialsForm";
@@ -242,6 +242,8 @@ const deploymentInfo: Omit<DeploymentInfo, "deploymentUrl" | "adminKey"> = {
   },
   useIsProtectedDeployment: () => false,
   useHasProjectAdminPermissions: () => true,
+  useHasCustomRole: () => false,
+  useIsOperationAllowed: () => true,
   useIsDeploymentPaused: () => {
     const deploymentState = useQuery(udfs.deploymentState.deploymentState);
     return deploymentState?.state === "paused";
@@ -250,7 +252,10 @@ const deploymentInfo: Omit<DeploymentInfo, "deploymentUrl" | "adminKey"> = {
   // no-op. don't send analytics in the self-hosted dashboard.
   useLogDeploymentEvent: () => () => {},
   workOSOperations: {
-    useDeploymentWorkOSEnvironment: () => undefined,
+    useDeploymentWorkOSEnvironment: () => ({
+      data: undefined,
+      error: undefined,
+    }),
     useTeamWorkOSIntegration: () => undefined,
     useWorkOSTeamHealth: () => undefined,
     useWorkOSEnvironmentHealth: () => ({ data: undefined, error: undefined }),
@@ -295,6 +300,7 @@ const deploymentInfo: Omit<DeploymentInfo, "deploymentUrl" | "adminKey"> = {
       </div>
     </Tooltip>
   ),
+  Link,
   ErrorBoundary: ({ children }: { children: React.ReactNode }) => (
     <ErrorBoundary>{children}</ErrorBoundary>
   ),
@@ -340,6 +346,7 @@ function DeploymentInfoProvider({
   const [visiblePages, setVisiblePages] = useState<string[] | undefined>(
     undefined,
   );
+  const [allowedOps, setAllowedOps] = useState<string[]>([]);
 
   // Memoize this so it can safely be passed into the context
   const settingsContextValue = useMemo(
@@ -359,18 +366,16 @@ function DeploymentInfoProvider({
       submittedDeploymentName: string;
       submittedVisiblePages?: string[];
     }) => {
-      const isValid = await checkDeploymentInfo(
+      const result = await checkDeploymentInfo(
         submittedAdminKey,
         submittedDeploymentUrl,
       );
-      if (isValid === false) {
+      if (result === null) {
         setIsValidDeploymentInfo(false);
         return;
       }
-      // For deployments that don't have the `/check_admin_key` endpoint,
-      // we set isValidDeploymentInfo to true so we can move on. The dashboard
-      // will just hit a less graceful error later if the credentials are invalid.
       setIsValidDeploymentInfo(true);
+      setAllowedOps(result.allowedOps);
       setStoredAdminKey(submittedAdminKey);
       setStoredDeploymentUrl(submittedDeploymentUrl);
       setStoredDeploymentName(submittedDeploymentName);
@@ -388,8 +393,13 @@ function DeploymentInfoProvider({
         ok: true,
         adminKey: storedAdminKey,
         deploymentUrl: storedDeploymentUrl,
+        useIsOperationAllowed: (operation: string) => {
+          // Empty allowedOps means all operations are allowed (full admin key).
+          if (allowedOps.length === 0) return true;
+          return allowedOps.includes(operation);
+        },
       }) as DeploymentInfo,
-    [storedAdminKey, storedDeploymentUrl],
+    [storedAdminKey, storedDeploymentUrl, allowedOps],
   );
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);

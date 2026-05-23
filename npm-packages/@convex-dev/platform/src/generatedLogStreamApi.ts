@@ -24,6 +24,11 @@ export interface components {
             /** Format: int64 */
             timestamp: number;
         };
+        CustomAuditEvent: {
+            body: components["schemas"]["Value"];
+            /** Format: int64 */
+            timestamp: number;
+        };
         DeploymentAuditLogEvent: {
             audit_log_action: string;
             audit_log_metadata: string;
@@ -44,9 +49,10 @@ export interface components {
                 type: string;
             };
             occ_info?: null | {
+                component_path?: string | null;
                 document_id?: string | null;
                 /** Format: int64 */
-                retry_count: number;
+                retry_count?: number | null;
                 table_name?: string | null;
                 write_source?: string | null;
             };
@@ -60,6 +66,10 @@ export interface components {
                 /** Format: int64 */
                 action_memory_used_mb?: number | null;
                 /** Format: int64 */
+                database_io_read_bytes: number;
+                /** Format: int64 */
+                database_io_write_bytes: number;
+                /** Format: int64 */
                 database_read_bytes: number;
                 /** Format: int64 */
                 database_read_documents: number;
@@ -71,6 +81,14 @@ export interface components {
                 file_storage_write_bytes: number;
                 /** Format: int64 */
                 network_egress_bytes: number;
+                /** Format: int64 */
+                text_search_query_bytes: number;
+                /** Format: int64 */
+                text_search_write_query_bytes: number;
+                /** Format: int64 */
+                vector_search_query_bytes: number;
+                /** Format: int64 */
+                vector_search_write_query_bytes: number;
                 /** Format: int64 */
                 vector_storage_read_bytes: number;
                 /** Format: int64 */
@@ -103,6 +121,9 @@ export interface components {
         }) | (components["schemas"]["StorageApiBandwidthEvent"] & {
             /** @enum {string} */
             topic: "storage_api_bandwidth";
+        }) | (components["schemas"]["CustomAuditEvent"] & {
+            /** @enum {string} */
+            topic: "custom_audit";
         });
         ScheduledJobLagEvent: {
             /** Format: int64 */
@@ -136,9 +157,15 @@ export interface components {
             total_file_storage_bytes: number;
             /** Format: int64 */
             total_index_size_bytes: number;
+            total_system_table_document_size_bytes: {
+                [key: string]: number;
+            };
+            /** Format: int64 */
+            total_text_storage_bytes: number;
             /** Format: int64 */
             total_vector_storage_bytes: number;
         };
+        Value: unknown;
         VerificationEvent: {
             message: string;
             /** Format: int64 */
@@ -152,6 +179,7 @@ export interface components {
     pathItems: never;
 }
 export type ConsoleLogEvent = components['schemas']['ConsoleLogEvent'];
+export type CustomAuditEvent = components['schemas']['CustomAuditEvent'];
 export type DeploymentAuditLogEvent = components['schemas']['DeploymentAuditLogEvent'];
 export type FunctionExecutionEvent = components['schemas']['FunctionExecutionEvent'];
 export type LogStreamEvent = components['schemas']['LogStreamEvent'];
@@ -159,6 +187,7 @@ export type ScheduledJobLagEvent = components['schemas']['ScheduledJobLagEvent']
 export type SchedulerStatsEvent = components['schemas']['SchedulerStatsEvent'];
 export type StorageApiBandwidthEvent = components['schemas']['StorageApiBandwidthEvent'];
 export type StorageUsageEvent = components['schemas']['StorageUsageEvent'];
+export type Value = components['schemas']['Value'];
 export type VerificationEvent = components['schemas']['VerificationEvent'];
 export type $defs = Record<string, never>;
 export type operations = Record<string, never>;

@@ -1,6 +1,6 @@
 import { Command, Option } from "@commander-js/extra-typings";
 import { Context, oneoffContext } from "../bundler/context.js";
-import { logFailure, logFinishedStep, logMessage } from "../bundler/log.js";
+import { logFinishedStep, logMessage } from "../bundler/log.js";
 import { checkAuthorization, performLogin } from "./lib/login.js";
 import {
   loadProjectLocalConfig,
@@ -16,7 +16,7 @@ import {
   teamDashboardUrl,
 } from "./lib/dashboard.js";
 import { promptSearch, promptYesNo } from "./lib/utils/prompts.js";
-import { bigBrainAPI, validateOrSelectTeam } from "./lib/utils/utils.js";
+import { validateOrSelectTeam } from "./lib/utils/utils.js";
 import {
   selectProject,
   updateEnvAndConfigForDeploymentSelection,
@@ -254,14 +254,6 @@ async function handleLinkingDeployments(
       undefined,
       "Choose a team for your deployments:",
     );
-    const projectsRemaining = await getProjectsRemaining(ctx, teamSlug);
-    if (legacyDeployments.length > projectsRemaining) {
-      logFailure(
-        `You have ${legacyDeployments.length} deployments to link, but only have ${projectsRemaining} projects remaining. If you'd like to choose which ones to link, run this command with the --link-deployments flag.`,
-      );
-      return;
-    }
-
     let dashboardUrl = teamDashboardUrl(teamSlug);
     for (const deployment of legacyDeployments) {
       const result = await linkSingleDeployment(
@@ -325,21 +317,17 @@ async function linkSingleDeployment(
     projectSlug?: string | null;
   },
 ): Promise<{ dashboardUrl: string }> {
-  const teamSlug =
-    options?.teamSlug ??
-    (
-      await validateOrSelectTeam(
-        ctx,
-        undefined,
-        "Choose a team for your deployment:",
-      )
-    ).team.slug;
+  const { team } = await validateOrSelectTeam(
+    ctx,
+    options?.teamSlug,
+    "Choose a team for your deployment:",
+  );
 
   const projectSlug =
     options?.projectSlug ??
     (
       await selectProject(ctx, "ask", {
-        team: teamSlug,
+        team: team.slug,
         devDeployment: "local",
         defaultProjectName: removeAnonymousPrefix(deploymentName),
       })
@@ -347,7 +335,8 @@ async function linkSingleDeployment(
 
   const linkedDeployment = await handleLinkToProject(ctx, {
     deploymentName,
-    teamSlug,
+    teamSlug: team.slug,
+    teamId: team.id,
     projectSlug,
   });
 
@@ -357,7 +346,7 @@ async function linkSingleDeployment(
       {
         url: linkedDeployment.deploymentUrl,
         deploymentName: linkedDeployment.deploymentName,
-        teamSlug,
+        teamSlug: team.slug,
         projectSlug: linkedDeployment.projectSlug,
         deploymentType: "local",
       },
@@ -371,16 +360,6 @@ async function linkSingleDeployment(
       "",
     ),
   };
-}
-
-async function getProjectsRemaining(ctx: Context, teamSlug: string) {
-  const response = await bigBrainAPI<{ projectsRemaining: number }>({
-    ctx,
-    method: "GET",
-    path: `teams/${teamSlug}/projects_remaining`,
-  });
-
-  return response.projectsRemaining;
 }
 
 function getDeploymentListMessage(anonymousDeploymentNames: string[]) {

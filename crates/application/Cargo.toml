@@ -14,7 +14,9 @@ testing = [
     "database/testing",
     "errors/testing",
     "events/testing",
+    "fivetran_destination/testing",
     "function_runner/testing",
+    "indexing/testing",
     "isolate/testing",
     "keybroker/testing",
     "log_streaming/testing",
@@ -33,6 +35,7 @@ testing = [
     "vector/testing",
     "exports/testing",
     "storage_zip_reader/testing",
+    "convex_macro/testing",
 ]
 
 [dependencies]
@@ -42,11 +45,14 @@ async-recursion = { workspace = true }
 async-trait = { workspace = true }
 async_lru = { workspace = true }
 authentication = { workspace = true }
+aws-sdk-firehose = { workspace = true }
 aws_s3 = { workspace = true }
+aws_utils = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 cmd_util = { workspace = true }
 common = { workspace = true }
+const_format = { workspace = true }
 convex_macro = { workspace = true }
 csv-async = { workspace = true }
 database = { workspace = true }
@@ -57,7 +63,6 @@ exports = { workspace = true }
 fastrace = { workspace = true }
 file_storage = { workspace = true }
 fivetran_destination = { workspace = true }
-float_next_after = { workspace = true }
 function_runner = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
@@ -67,6 +72,7 @@ hex = { workspace = true }
 http = { workspace = true }
 http_client = { workspace = true }
 humansize = { workspace = true }
+indexing = { workspace = true }
 isolate = { workspace = true }
 itertools = { workspace = true }
 keybroker = { workspace = true }
@@ -74,10 +80,8 @@ log_streaming = { workspace = true }
 lru = { workspace = true }
 maplit = { workspace = true }
 metrics = { workspace = true }
-mime2ext = { workspace = true }
 model = { workspace = true }
 node_executor = { workspace = true }
-num_cpus = { workspace = true }
 parking_lot = { workspace = true }
 pb = { workspace = true }
 proptest = { workspace = true, optional = true }
@@ -93,7 +97,6 @@ shape_inference = { workspace = true }
 short_future = { workspace = true }
 slugify = { workspace = true }
 smallvec = { workspace = true }
-sourcemap = { workspace = true }
 storage = { workspace = true }
 storage_zip_reader = { workspace = true }
 strum = { workspace = true }
@@ -120,11 +123,14 @@ libc = { workspace = true }
 async_zip = { workspace = true }
 authentication = { workspace = true, features = ["testing"] }
 common = { workspace = true, features = ["testing"] }
+convex_macro = { workspace = true, features = ["testing"] }
 database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 events = { workspace = true, features = ["testing"] }
 exports = { workspace = true, features = ["testing"] }
+fivetran_destination = { workspace = true, features = ["testing"] }
 function_runner = { workspace = true, features = ["testing"] }
+indexing = { workspace = true, features = ["testing"] }
 isolate = { workspace = true, features = ["testing"] }
 keybroker = { workspace = true, features = ["testing"] }
 log_streaming = { workspace = true, features = ["testing"] }

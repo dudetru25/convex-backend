@@ -33,13 +33,11 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 async_lru = { workspace = true }
 common = { workspace = true }
-convex_macro = { workspace = true }
 database = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
 file_storage = { workspace = true }
 futures = { workspace = true }
-imbl = { workspace = true }
 indexing = { workspace = true }
 isolate = { workspace = true }
 keybroker = { workspace = true }

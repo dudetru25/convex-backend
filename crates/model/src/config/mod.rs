@@ -1,14 +1,3 @@
-#[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-mod index_diff_tests;
-#[cfg(test)]
-mod index_limits_tests;
-#[cfg(test)]
-pub mod index_test_utils;
-#[cfg(test)]
-mod index_tests;
 pub mod module_loader;
 pub mod types;
 

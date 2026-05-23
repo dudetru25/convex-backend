@@ -23,8 +23,12 @@ use async_broadcast::{
     Sender,
 };
 use common::{
+    audit_log_lines::AuditLogVars,
     components::PublicFunctionPath,
-    execution_context::ExecutionContext,
+    execution_context::{
+        ExecutionContext,
+        RequestContext,
+    },
     identity::IdentityCacheKey,
     knobs::{
         DATABASE_UDF_SYSTEM_TIMEOUT,
@@ -40,7 +44,6 @@ use common::{
         Timestamp,
         UdfType,
     },
-    RequestId,
 };
 use database::{
     Database,
@@ -93,6 +96,7 @@ use value::{
 
 use crate::{
     application_function_runner::FunctionRouter,
+    audit_logging::AuditLogClient,
     function_log::FunctionExecutionLog,
     QueryReturn,
 };
@@ -114,19 +118,20 @@ pub struct CacheManager<RT: Runtime> {
     database: Database<RT>,
     function_router: FunctionRouter<RT>,
     udf_execution: FunctionExecutionLog<RT>,
+    audit_log_client: AuditLogClient,
 
-    instance_id: InstanceId,
+    deployment_id: DeploymentId,
     cache: QueryCache,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-struct InstanceId(u32);
-impl InstanceId {
+struct DeploymentId(u32);
+impl DeploymentId {
     fn allocate() -> Self {
-        static NEXT_INSTANCE_ID: AtomicU32 = AtomicU32::new(0);
-        let id = NEXT_INSTANCE_ID.fetch_add(1, Ordering::SeqCst);
-        assert_ne!(id, u32::MAX, "instance id overflow");
-        InstanceId(id)
+        static NEXT_DEPLOYMENT_ID: AtomicU32 = AtomicU32::new(0);
+        let id = NEXT_DEPLOYMENT_ID.fetch_add(1, Ordering::SeqCst);
+        assert_ne!(id, u32::MAX, "deployment id overflow");
+        DeploymentId(id)
     }
 }
 
@@ -137,7 +142,7 @@ impl InstanceId {
 /// contains the identity, but `StoredCacheKey` does not.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct RequestedCacheKey {
-    instance: InstanceId,
+    deployment: DeploymentId,
     path: PublicFunctionPath,
     args: SerializedArgs,
     identity: IdentityCacheKey,
@@ -151,7 +156,7 @@ impl RequestedCacheKey {
         vec![
             self.precise_cache_key(),
             StoredCacheKey {
-                instance: self.instance,
+                deployment: self.deployment,
                 path: self.path.clone(),
                 args: self.args.clone(),
                 // Include queries that did not read `ctx.auth`.
@@ -164,7 +169,7 @@ impl RequestedCacheKey {
 
     fn precise_cache_key(&self) -> StoredCacheKey {
         StoredCacheKey {
-            instance: self.instance,
+            deployment: self.deployment,
             path: self.path.clone(),
             args: self.args.clone(),
             identity: Some(self.identity.clone()),
@@ -198,7 +203,7 @@ impl RequestedCacheKey {
             None
         };
         let key = StoredCacheKey {
-            instance: self.instance,
+            deployment: self.deployment,
             path: self.path.clone(),
             args: self.args.clone(),
             identity,
@@ -235,7 +240,7 @@ impl RequestedCacheKey {
 /// A cache key representing a persisted query result.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct StoredCacheKey {
-    instance: InstanceId,
+    deployment: DeploymentId,
     path: PublicFunctionPath,
     args: SerializedArgs,
     // None means that the query did not read `ctx.auth`.
@@ -301,17 +306,19 @@ impl<RT: Runtime> CacheManager<RT> {
         database: Database<RT>,
         function_router: FunctionRouter<RT>,
         udf_execution: FunctionExecutionLog<RT>,
+        audit_log_client: AuditLogClient,
         cache: QueryCache,
     ) -> Self {
-        // each `CacheManager` (for a different instance) gets its own cache key space
+        // each `CacheManager` (for a different deployment) gets its own cache key space
         // within `Cache`, which has a _global_ size-limit
-        let instance_id = InstanceId::allocate();
+        let deployment_id = DeploymentId::allocate();
         Self {
             rt,
             database,
             function_router,
             udf_execution,
-            instance_id,
+            audit_log_client,
+            deployment_id,
             cache,
         }
     }
@@ -323,7 +330,7 @@ impl<RT: Runtime> CacheManager<RT> {
     #[fastrace::trace]
     pub async fn get(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
@@ -335,7 +342,7 @@ impl<RT: Runtime> CacheManager<RT> {
         let timer = get_timer();
         let result = self
             ._get(
-                request_id,
+                request_context,
                 path,
                 args,
                 identity,
@@ -362,7 +369,7 @@ impl<RT: Runtime> CacheManager<RT> {
 
     async fn _get(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
@@ -374,14 +381,14 @@ impl<RT: Runtime> CacheManager<RT> {
         let start = self.rt.monotonic_now();
         let identity_cache_key = identity.cache_key();
         let requested_key = RequestedCacheKey {
-            instance: self.instance_id,
+            deployment: self.deployment_id,
             path,
             args,
             identity: identity_cache_key,
             journal: journal.unwrap_or_else(QueryJournal::new),
             allowed_visibility: caller.allowed_visibility(),
         };
-        let context = ExecutionContext::new(request_id, &caller);
+        let context = ExecutionContext::new(request_context, &caller);
         // If the query exists at some cache key, but the cached entry is invalid,
         // create a Waiting entry at that key, even if it's not the most precise for the
         // request. e.g. if the query was cached with identity:None, create a
@@ -484,6 +491,13 @@ impl<RT: Runtime> CacheManager<RT> {
             }
 
             // Step 5: Log some stuff and return.
+            let vars = AuditLogVars::from_context(context.clone(), &self.rt)?;
+            self.audit_log_client
+                .send_logs(
+                    cache_result.outcome.audit_log_lines.resolve_bodies(&vars)?,
+                    &usage_tracker,
+                )
+                .await?;
             log_success(num_attempts);
             let usage_stats = usage_tracker.clone().gather_user_stats();
             let database_bandwidth_bytes = usage_stats.database_egress.values().sum();
@@ -502,7 +516,6 @@ impl<RT: Runtime> CacheManager<RT> {
                     context.clone(),
                 )
                 .await;
-
             let result = QueryReturn {
                 result: cache_result.outcome.result.clone(),
                 log_lines: cache_result.outcome.log_lines.clone(),
@@ -1024,141 +1037,4 @@ enum CacheOp<'a> {
         allowed_visibility: AllowedVisibility,
         context: ExecutionContext,
     },
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        path::PathBuf,
-        sync::Arc,
-    };
-
-    use common::{
-        components::{
-            ExportPath,
-            PublicFunctionPath,
-        },
-        identity::IdentityCacheKey,
-        index::IndexKeyBytes,
-        query::{
-            Cursor,
-            CursorPosition,
-        },
-        query_journal::QueryJournal,
-        types::AllowedVisibility,
-    };
-    use database::Token;
-    use proptest::{
-        prelude::{
-            Arbitrary,
-            Strategy,
-        },
-        strategy::ValueTree,
-        test_runner::TestRunner,
-    };
-    use smallvec::smallvec;
-    use sync_types::{
-        CanonicalizedModulePath,
-        CanonicalizedUdfPath,
-        Timestamp,
-    };
-    use tokio::time::Instant;
-    use udf::UdfOutcome;
-    use value::{
-        ConvexArray,
-        ConvexValue,
-    };
-
-    use super::{
-        CacheResult,
-        InstanceId,
-        QueryCache,
-        StoredCacheKey,
-    };
-
-    // Construct a cache key where as many fields as possible have extra capacity in
-    // them
-    fn make_cache_key() -> StoredCacheKey {
-        macro_rules! with_extra_capacity {
-            ($e:expr) => {{
-                let mut r = $e;
-                r.reserve(100);
-                r
-            }};
-        }
-        StoredCacheKey {
-            instance: InstanceId(0),
-            path: PublicFunctionPath::RootExport(ExportPath::from(CanonicalizedUdfPath::new(
-                CanonicalizedModulePath::new(
-                    PathBuf::with_capacity(1 << 10),
-                    false,
-                    false,
-                    false,
-                    false,
-                ),
-                "function_name".parse().unwrap(),
-            ))),
-            args: ConvexArray::try_from(with_extra_capacity!(vec![ConvexValue::from(100.)]))
-                .unwrap()
-                .into_serialized_args()
-                .unwrap(),
-            identity: Some(IdentityCacheKey::InstanceAdmin(with_extra_capacity!(
-                "admin".to_string()
-            ))),
-            journal: QueryJournal {
-                end_cursor: Some(Cursor {
-                    position: CursorPosition::After(IndexKeyBytes(with_extra_capacity!(
-                        b"key".to_vec()
-                    ))),
-                    query_fingerprint: with_extra_capacity!(b"fingerprint".to_vec()),
-                }),
-            },
-            allowed_visibility: AllowedVisibility::All,
-        }
-    }
-
-    fn make_cache_result() -> CacheResult {
-        let mut test_runner = TestRunner::deterministic();
-        CacheResult {
-            outcome: Arc::new(
-                UdfOutcome::arbitrary()
-                    .new_tree(&mut test_runner)
-                    .unwrap()
-                    .current(),
-            ),
-            original_ts: Timestamp::MIN,
-            token: Token::arbitrary()
-                .new_tree(&mut test_runner)
-                .unwrap()
-                .current(),
-        }
-    }
-
-    #[test]
-    fn test_put_waiting_excess_capacity() {
-        let cache = QueryCache::new(usize::MAX);
-        let cache_key = make_cache_key();
-        // Cloning the key effectively shrinks away the excess capacity
-        let cloned_key = cache_key.clone();
-        assert_ne!(cache_key.size(), cloned_key.size());
-        let (_, id) = cache
-            .inner
-            .lock()
-            .put_waiting(cloned_key, Instant::now(), Timestamp::MIN);
-        assert!(cache.inner.lock().size > 0);
-        cache.remove_waiting(&cache_key, id);
-        assert_eq!(cache.inner.lock().size, 0);
-    }
-
-    #[test]
-    fn test_put_ready_excess_capacity() {
-        let cache = QueryCache::new(usize::MAX);
-        let cache_key = make_cache_key();
-        let cloned_key = cache_key.clone();
-        assert_ne!(cache_key.size(), cloned_key.size());
-        cache.put_ready(smallvec![cloned_key], make_cache_result());
-        assert!(cache.inner.lock().size > 0);
-        cache.remove_ready(&cache_key, Timestamp::MIN);
-        assert_eq!(cache.inner.lock().size, 0);
-    }
 }

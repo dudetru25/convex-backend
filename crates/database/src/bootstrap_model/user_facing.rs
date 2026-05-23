@@ -73,27 +73,6 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
         Self { tx, namespace }
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new_root_for_test(tx: &'a mut Transaction<RT>) -> Self {
-        Self {
-            tx,
-            namespace: TableNamespace::test_user(),
-        }
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    #[convex_macro::instrument_future]
-    pub async fn get(
-        &mut self,
-        id: DeveloperDocumentId,
-        version: Option<Version>,
-    ) -> anyhow::Result<Option<DeveloperDocument>> {
-        Ok(self
-            .get_with_ts(id, version)
-            .await?
-            .map(|(document, _)| document))
-    }
-
     #[fastrace::trace]
     #[convex_macro::instrument_future]
     pub async fn get_with_ts(
@@ -174,7 +153,6 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
             ));
         }
 
-        self.tx.retention_validator.fail_if_falling_behind()?;
         let internal_id = self.tx.id_generator.generate_internal();
 
         let creation_time = self.tx.next_creation_time.increment()?;
@@ -235,7 +213,6 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
             anyhow::bail!(unauthorized_error("patch"))
         }
         self.require_active_component().await?;
-        self.tx.retention_validator.fail_if_falling_behind()?;
 
         let id_ = self.tx.resolve_developer_id(&id, self.namespace)?;
 
@@ -264,7 +241,6 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
             anyhow::bail!(unauthorized_error("replace"))
         }
         self.require_active_component().await?;
-        self.tx.retention_validator.fail_if_falling_behind()?;
         let id_ = self.tx.resolve_developer_id(&id, self.namespace)?;
 
         let new_document = self.tx.replace_inner(id_, value).await?;
@@ -286,7 +262,6 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
             anyhow::bail!(unauthorized_error("delete"))
         }
         self.require_active_component().await?;
-        self.tx.retention_validator.fail_if_falling_behind()?;
 
         let id_ = self.tx.resolve_developer_id(&id, self.namespace)?;
         let document = self.tx.delete_inner(id_).await?;
@@ -307,6 +282,7 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
             document.size(),
             &self.tx.usage_tracker,
             &self.tx.virtual_system_mapping,
+            &self.tx.limits,
         )
     }
 }

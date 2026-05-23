@@ -266,6 +266,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
         &mut self,
         app: &CheckedComponent,
         new_definitions: &BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
+        skip_index_diff: bool,
     ) -> anyhow::Result<SchemaChange> {
         let existing_components_by_parent = BootstrapComponentsModel::new(self.tx)
             .load_all_components()
@@ -309,9 +310,12 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                     .get(&new_node.definition_path)
                     .context("Missing definition for component")?;
                 let schema_id = if let Some(ref schema) = definition.schema {
-                    let index_diff = IndexModel::new(self.tx)
-                        .prepare_new_and_mutated_indexes(namespace, schema)
-                        .await?;
+                    if !skip_index_diff {
+                        let index_diff = IndexModel::new(self.tx)
+                            .prepare_new_and_mutated_indexes(namespace, schema)
+                            .await?;
+                        index_diffs.insert(path.clone(), index_diff.into());
+                    }
 
                     let (schema_id, schema_state) = SchemaModel::new(self.tx, namespace)
                         .submit_pending(schema.clone())
@@ -324,9 +328,16 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                             );
                         },
                     };
-                    index_diffs.insert(path.clone(), index_diff.into());
                     Some(schema_id.into())
                 } else {
+                    // Properly populate the index diff when there is no schema in the new push. We
+                    // treat this as no indexes being defined
+                    if !skip_index_diff {
+                        let index_diff = IndexModel::new(self.tx)
+                            .get_index_diff(namespace, &BTreeMap::new())
+                            .await?;
+                        index_diffs.insert(path.clone(), index_diff.into());
+                    }
                     None
                 };
                 schema_ids.insert(path.clone(), schema_id);
@@ -449,18 +460,21 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                     let component_type = match parent_and_name {
                         None => {
                             anyhow::ensure!(new_node.args.is_empty());
+                            anyhow::ensure!(new_node.env.is_empty());
                             ComponentType::App
                         },
                         Some((parent, name)) => ComponentType::ChildComponent {
                             parent,
                             name,
                             args: new_node.args.clone(),
+                            env: new_node.env.clone(),
                         },
                     };
                     Ok(ComponentMetadata {
                         definition_id,
                         component_type,
                         state: ComponentState::Active,
+                        http_prefix: new_node.http_prefix.clone(),
                     })
                 })
                 .transpose()?;
@@ -787,7 +801,9 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                             definition_type: ComponentDefinitionType::App,
                             child_components: Vec::new(),
                             http_mounts: BTreeMap::new(),
+                            http_prefix: None,
                             exports: BTreeMap::new(),
+                            env_vars: BTreeMap::new(),
                         },
                     )
                     .await?;
@@ -856,10 +872,6 @@ struct TreeDiffChild<'a> {
 }
 
 #[derive(Debug, Clone, AsRefStr)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub enum ComponentDiffType {
     Create,
     Modify,
@@ -868,10 +880,6 @@ pub enum ComponentDiffType {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct ComponentDiff {
     pub diff_type: ComponentDiffType,
     pub module_diff: ModuleDiff,

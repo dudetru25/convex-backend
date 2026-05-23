@@ -17,28 +17,15 @@ pub trait ModuleCache<RT: Runtime>: ModuleLoader<RT> {
 impl<RT: Runtime> dyn ModuleCache<RT> {
     pub fn code_cache_result(
         self: Arc<Self>,
-        module_metadata: ModuleMetadata,
+        module_metadata: &ModuleMetadata,
     ) -> ModuleCodeCacheResult {
-        if let Some(cached_data) = self.get_cached_code(&module_metadata) {
+        if let Some(cached_data) = self.get_cached_code(module_metadata) {
             ModuleCodeCacheResult::Cached(cached_data)
         } else {
+            let module_metadata = module_metadata.clone();
             ModuleCodeCacheResult::Uncached(Box::new(move |cached_data| {
                 self.put_cached_code(&module_metadata, cached_data);
             }))
-        }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-mod test_helpers {
-    use model::config::module_loader::test_module_loader::UncachedModuleLoader;
-
-    use super::*;
-    impl<RT: Runtime> ModuleCache<RT> for UncachedModuleLoader {
-        fn put_cached_code(&self, _module_metadata: &ModuleMetadata, _cached_data: Arc<[u8]>) {}
-
-        fn get_cached_code(&self, _module_metadata: &ModuleMetadata) -> Option<Arc<[u8]>> {
-            None
         }
     }
 }

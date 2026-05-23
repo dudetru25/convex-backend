@@ -32,7 +32,7 @@ use crate::record_module_sizes;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ModuleCacheKey {
-    instance_name: String,
+    deployment_name: String,
     module_path: CanonicalizedModulePath,
     source_package_id: SourcePackageId,
 }
@@ -67,14 +67,14 @@ impl CodeCache {
 pub(crate) struct FunctionRunnerModuleLoader<RT: Runtime> {
     pub cache: ModuleCache<RT>,
     pub code_cache: CodeCache,
-    pub instance_name: String,
+    pub deployment_name: String,
     pub modules_storage: Arc<dyn Storage>,
 }
 
 impl<RT: Runtime> FunctionRunnerModuleLoader<RT> {
     fn cache_key(&self, module_metadata: &ModuleMetadata) -> ModuleCacheKey {
         ModuleCacheKey {
-            instance_name: self.instance_name.clone(),
+            deployment_name: self.deployment_name.clone(),
             module_path: module_metadata.path.clone(),
             source_package_id: module_metadata.source_package_id,
         }
@@ -86,12 +86,14 @@ impl<RT: Runtime> ModuleLoader<RT> for FunctionRunnerModuleLoader<RT> {
     #[fastrace::trace]
     async fn get_module_with_metadata(
         &self,
-        module_metadata: ParsedDocument<ModuleMetadata>,
-        source_package: ParsedDocument<SourcePackage>,
+        module_metadata: &ParsedDocument<ModuleMetadata>,
+        source_package: &ParsedDocument<SourcePackage>,
     ) -> anyhow::Result<Arc<FullModuleSource>> {
-        let instance_name = self.instance_name.clone();
-        let key = self.cache_key(&module_metadata);
+        let deployment_name = self.deployment_name.clone();
+        let key = self.cache_key(module_metadata);
         let modules_storage = self.modules_storage.clone();
+        let module_metadata = module_metadata.clone();
+        let source_package = source_package.clone();
         let result = self
             .cache
             .0
@@ -99,14 +101,14 @@ impl<RT: Runtime> ModuleLoader<RT> for FunctionRunnerModuleLoader<RT> {
                 key.clone(),
                 async move {
                     let modules =
-                        get_module_and_prefetch(modules_storage, module_metadata, source_package)
+                        get_module_and_prefetch(modules_storage, &module_metadata, &source_package)
                             .await;
                     modules
                         .into_iter()
                         .map(move |((module_path, source_package_id), source)| {
                             (
                                 ModuleCacheKey {
-                                    instance_name: instance_name.clone(),
+                                    deployment_name: deployment_name.clone(),
                                     module_path,
                                     source_package_id,
                                 },

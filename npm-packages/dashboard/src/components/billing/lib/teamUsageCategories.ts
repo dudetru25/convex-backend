@@ -24,14 +24,12 @@ export const BANDWIDTH_CATEGORIES = {
   egress: {
     name: "Reads",
     color: "fill-chart-line-1",
-    backgroundColor: "bg-background-success",
+    backgroundColor: "bg-chart-line-1/30 dark:bg-chart-line-1",
   },
   ingress: {
     name: "Writes",
-    // eslint-disable-next-line no-restricted-syntax
     color: "fill-chart-line-2",
-    // eslint-disable-next-line no-restricted-syntax
-    backgroundColor: "bg-background-error",
+    backgroundColor: "bg-chart-line-2/30 dark:bg-chart-line-2",
   },
 };
 
@@ -102,6 +100,10 @@ export const DATA_EGRESS_CATEGORIES = {
     name: "Log Streams",
     color: "fill-chart-line-2",
   },
+  streamingExport: {
+    name: "Streaming Export",
+    color: "fill-chart-line-6",
+  },
   servingEgress: {
     name: "Serving Reads",
     color: "fill-chart-line-3",
@@ -151,6 +153,18 @@ export const DATABASE_IO_CATEGORIES = {
   ingress: {
     name: "Writes",
     // eslint-disable-next-line no-restricted-syntax
+    color: "fill-chart-line-2",
+  },
+};
+
+export const COMPUTE_CATEGORIES_SELF_SERVE = {
+  actionConvex: {
+    name: "Action",
+    // eslint-disable-next-line no-restricted-syntax
+    color: "fill-chart-line-1",
+  },
+  actionNode: {
+    name: "Action (Node)",
     color: "fill-chart-line-2",
   },
 };

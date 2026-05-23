@@ -21,6 +21,7 @@ use common::{
         FunctionCaller,
         RepeatableTimestamp,
     },
+    RequestContext,
     RequestId,
 };
 use database::{
@@ -71,10 +72,6 @@ use crate::{
     RedactedQueryReturn,
 };
 
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, Debug, Clone, PartialEq)
-)]
 pub enum ExecuteQueryTimestamp {
     // Execute the query at the latest timestamp.
     Latest,
@@ -91,7 +88,7 @@ pub trait ApplicationApi: Send + Sync {
     async fn authenticate(
         &self,
         host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         auth_token: AuthenticationToken,
     ) -> anyhow::Result<Identity>;
 
@@ -101,7 +98,7 @@ pub trait ApplicationApi: Send + Sync {
     async fn execute_public_query(
         &self,
         host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: ExportPath,
         args: SerializedArgs,
@@ -116,7 +113,7 @@ pub trait ApplicationApi: Send + Sync {
     async fn execute_admin_query(
         &self,
         host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: CanonicalizedComponentFunctionPath,
         args: SerializedArgs,
@@ -129,7 +126,7 @@ pub trait ApplicationApi: Send + Sync {
     async fn execute_public_mutation(
         &self,
         host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: ExportPath,
         args: SerializedArgs,
@@ -144,7 +141,7 @@ pub trait ApplicationApi: Send + Sync {
     async fn execute_admin_mutation(
         &self,
         host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: CanonicalizedComponentFunctionPath,
         args: SerializedArgs,
@@ -158,7 +155,7 @@ pub trait ApplicationApi: Send + Sync {
     async fn execute_public_action(
         &self,
         host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: ExportPath,
         args: SerializedArgs,
@@ -169,7 +166,7 @@ pub trait ApplicationApi: Send + Sync {
     async fn execute_admin_action(
         &self,
         host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: CanonicalizedComponentFunctionPath,
         args: SerializedArgs,
@@ -180,7 +177,7 @@ pub trait ApplicationApi: Send + Sync {
     async fn execute_http_action(
         &self,
         host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         http_request_metadata: HttpActionRequest,
         identity: Identity,
         caller: FunctionCaller,
@@ -193,7 +190,7 @@ pub trait ApplicationApi: Send + Sync {
     async fn execute_any_function(
         &self,
         host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: CanonicalizedComponentFunctionPath,
         args: SerializedArgs,
@@ -267,7 +264,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
     async fn authenticate(
         &self,
         _host: &ResolvedHostname,
-        _request_id: RequestId,
+        _request_context: RequestContext,
         auth_token: AuthenticationToken,
     ) -> anyhow::Result<Identity> {
         let validate_time = self.runtime().system_time();
@@ -277,7 +274,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
     async fn execute_public_query(
         &self,
         _host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: ExportPath,
         args: SerializedArgs,
@@ -294,7 +291,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
             ExecuteQueryTimestamp::At(ts) => ts,
         };
         self.read_only_udf_at_ts(
-            request_id,
+            request_context,
             PublicFunctionPath::RootExport(path),
             args,
             identity,
@@ -308,7 +305,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
     async fn execute_admin_query(
         &self,
         _host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: CanonicalizedComponentFunctionPath,
         args: SerializedArgs,
@@ -325,7 +322,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
             ExecuteQueryTimestamp::At(ts) => ts,
         };
         self.read_only_udf_at_ts(
-            request_id,
+            request_context,
             PublicFunctionPath::Component(path),
             args,
             identity,
@@ -339,7 +336,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
     async fn execute_public_mutation(
         &self,
         _host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: ExportPath,
         args: SerializedArgs,
@@ -353,7 +350,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
             "This method should not be used by internal callers."
         );
         self.mutation_udf(
-            request_id,
+            request_context,
             PublicFunctionPath::RootExport(path),
             args,
             identity,
@@ -367,7 +364,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
     async fn execute_admin_mutation(
         &self,
         _host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: CanonicalizedComponentFunctionPath,
         args: SerializedArgs,
@@ -380,7 +377,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
             "Only admin or system users can call functions on non-root components directly"
         );
         self.mutation_udf(
-            request_id,
+            request_context,
             PublicFunctionPath::Component(path),
             args,
             identity,
@@ -394,7 +391,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
     async fn execute_public_action(
         &self,
         _host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: ExportPath,
         args: SerializedArgs,
@@ -405,7 +402,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
             "This method should not be used by internal callers."
         );
         self.action_udf(
-            request_id,
+            request_context,
             PublicFunctionPath::RootExport(path),
             args,
             identity,
@@ -417,7 +414,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
     async fn execute_admin_action(
         &self,
         _host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: CanonicalizedComponentFunctionPath,
         args: SerializedArgs,
@@ -428,7 +425,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
             "Only admin or system users can call functions on non-root components directly"
         );
         self.action_udf(
-            request_id,
+            request_context,
             PublicFunctionPath::Component(path),
             args,
             identity,
@@ -440,7 +437,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
     async fn execute_any_function(
         &self,
         _host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         identity: Identity,
         path: CanonicalizedComponentFunctionPath,
         args: SerializedArgs,
@@ -450,7 +447,8 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
             path.component.is_root() || identity.is_admin() || identity.is_system(),
             "Only admin or system users can call functions on non-root components directly"
         );
-        self.any_udf(request_id, path, args, identity, caller).await
+        self.any_udf(request_context, path, args, identity, caller)
+            .await
     }
 
     async fn latest_timestamp(
@@ -464,14 +462,14 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
     async fn execute_http_action(
         &self,
         _host: &ResolvedHostname,
-        request_id: RequestId,
+        request_context: RequestContext,
         http_request_metadata: HttpActionRequest,
         identity: Identity,
         caller: FunctionCaller,
         response_streamer: HttpActionResponseStreamer,
     ) -> anyhow::Result<()> {
         self.http_action_udf(
-            request_id,
+            request_context,
             http_request_metadata,
             identity,
             caller,

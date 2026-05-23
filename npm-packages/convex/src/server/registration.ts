@@ -8,6 +8,7 @@ import {
   StorageReader,
   StorageWriter,
 } from "./index.js";
+import { ActionMeta, MutationMeta, QueryMeta } from "./meta.js";
 import {
   FunctionReference,
   FunctionReturnType,
@@ -132,6 +133,21 @@ export interface GenericMutationCtx<DataModel extends GenericDataModel> {
   ) => Promise<FunctionReturnType<Query>>;
 
   /**
+   * Experimental: call a query function in the same transaction that runs on a
+   * snapshot of the database without taking a read dependency.
+   *
+   * This is an unstable feature and its behavior may change in the future.
+   *
+   * @internal
+   */
+  runSnapshotQuery: <
+    Query extends FunctionReference<"query", "public" | "internal">,
+  >(
+    query: Query,
+    ...args: OptionalRestArgs<Query>
+  ) => Promise<FunctionReturnType<Query>>;
+
+  /**
    * Call a mutation function within the same transaction.
    *
    * The mutation runs in a sub-transaction, so if it throws an error, all of
@@ -147,6 +163,8 @@ export interface GenericMutationCtx<DataModel extends GenericDataModel> {
     mutation: Mutation,
     ...args: OptionalRestArgs<Mutation>
   ) => Promise<FunctionReturnType<Mutation>>;
+
+  meta: MutationMeta;
 }
 
 /**
@@ -238,6 +256,8 @@ export interface GenericQueryCtx<DataModel extends GenericDataModel> {
     query: Query,
     ...args: OptionalRestArgs<Query>
   ) => Promise<FunctionReturnType<Query>>;
+
+  meta: QueryMeta;
 }
 
 /**
@@ -398,6 +418,8 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
       VectorSearchQuery<NamedTableInfo<DataModel, TableName>, IndexName>
     >,
   ): Promise<Array<{ _id: Id<TableName>; _score: number }>>;
+
+  meta: ActionMeta;
 }
 
 /**
@@ -460,14 +482,16 @@ export type FunctionVisibility = "public" | "internal";
  * Given a {@link FunctionVisibility}, should this function have `isPublic: true`
  * or `isInternal: true`?
  */
-type VisibilityProperties<Visiblity extends FunctionVisibility> =
-  Visiblity extends "public"
-    ? {
-        isPublic: true;
-      }
-    : {
-        isInternal: true;
-      };
+type VisibilityProperties<Visiblity extends FunctionVisibility> = {
+  /** Phantom type marker; not present at runtime. */
+  _visibility: Visiblity;
+} & (Visiblity extends "public"
+  ? {
+      isPublic: true;
+    }
+  : {
+      isInternal: true;
+    });
 
 /**
  * A mutation function that is part of this app.

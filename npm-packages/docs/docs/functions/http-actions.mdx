@@ -84,7 +84,7 @@ You can now call this action via HTTP and interact with data stored in the
 Convex Database. HTTP actions are exposed on
 `https://<your deployment name>.convex.site`.
 
-```bash
+```sh
 export DEPLOYMENT_NAME=... # example: "happy-animal-123"
 curl -d '{ "author": "User 123", "body": "Hello world" }' \
     -H 'content-type: application/json' "https://$DEPLOYMENT_NAME.convex.site/postMessage"
@@ -94,6 +94,26 @@ Like other Convex functions, you can view your HTTP actions in the
 [Functions view](/dashboard/deployments/functions.md) of
 [your dashboard](https://dashboard.convex.dev/) and view logs produced by them
 in the [Logs view](/dashboard/deployments/logs.md).
+
+## Routing with `httpPrefix`
+
+By default, all routes defined in `convex/http.ts` are served at the root of
+your deployment's `.convex.site` domain. You can use the `httpPrefix` option in
+`convex/convex.config.ts` to namespace your app's routes under a path prefix:
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+
+const app = defineApp({ httpPrefix: "/app/" });
+export default app;
+```
+
+With this configuration, a route defined for `/hello` in `convex/http.ts` will
+be accessible at `/app/hello`.
+
+[Components](/components.mdx) can also define their own HTTP routes that are
+mounted under a prefix you choose. See
+[Using Components: HTTP Routes](/components/using.mdx#http-routes) for details.
 
 ## Limits
 
@@ -139,7 +159,7 @@ Make sure this is the URL that ends in **`.convex.site`**, and not
 Run a `curl` command to hit one of your defined endpoints, potentially defining
 a new endpoint specifically for testing
 
-```
+```sh
 curl -X GET https://<deployment name>.convex.site/myEndpoint
 ```
 

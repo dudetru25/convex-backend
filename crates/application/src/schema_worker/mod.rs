@@ -28,6 +28,7 @@ use database::{
     SchemaModel,
     SchemaValidationProgressModel,
     Snapshot,
+    Token,
     Transaction,
     SCHEMAS_TABLE,
 };
@@ -85,7 +86,16 @@ impl<RT: Runtime> SchemaWorker<RT> {
             tracing::info!("Starting SchemaWorker");
             let mut backoff = Backoff::new(INITIAL_BACKOFF, MAX_BACKOFF);
             loop {
-                if let Err(e) = worker.run().await {
+                let result: anyhow::Result<()> = async {
+                    let token = Box::pin(worker.run()).await?;
+                    worker
+                        .database
+                        .subscribe_and_wait_for_invalidation(token)
+                        .await?;
+                    Ok(())
+                }
+                .await;
+                if let Err(e) = result {
                     let delay = backoff.fail(&mut worker.runtime.rng());
                     report_error(&mut e.context("SchemaWorker died")).await;
                     tracing::error!("Schema worker failed, sleeping {delay:?}");
@@ -134,7 +144,7 @@ impl<RT: Runtime> SchemaWorker<RT> {
         Ok(pending_schema_work)
     }
 
-    pub async fn run(&self) -> anyhow::Result<()> {
+    pub async fn run(&self) -> anyhow::Result<Token> {
         let status = log_worker_starting("SchemaWorker");
         let mut tx: Transaction<RT> = self.database.begin(Identity::system()).await?;
         let snapshot = self.database.snapshot(tx.begin_timestamp())?;
@@ -161,10 +171,7 @@ impl<RT: Runtime> SchemaWorker<RT> {
 
         drop(status);
         tracing::debug!("SchemaWorker waiting...");
-        self.database
-            .subscribe_and_wait_for_invalidation(token)
-            .await?;
-        Ok(())
+        Ok(token)
     }
 
     async fn validate_tables(
@@ -411,226 +418,6 @@ impl<RT: Runtime> SchemaValidationProgressTracker<RT> {
         self.database
             .commit_with_write_source(tx, "schema_validation_progress_finished")
             .await?;
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use common::{
-        assert_obj,
-        bootstrap_model::schema::{
-            SchemaMetadata,
-            SchemaState,
-        },
-        db_schema,
-        object_validator,
-        schemas::{
-            validator::{
-                FieldValidator,
-                Validator,
-            },
-            DocumentSchema,
-        },
-    };
-    use database::{
-        test_helpers::new_test_database,
-        SchemaModel,
-        SchemaValidationProgressModel,
-        UserFacingModel,
-    };
-    use keybroker::Identity;
-    use maplit::btreeset;
-    use runtime::testing::TestRuntime;
-    use value::{
-        TableName,
-        TableNamespace,
-    };
-
-    use super::SchemaWorker;
-
-    #[convex_macro::test_runtime]
-    async fn test_schema_validation(rt: TestRuntime) -> anyhow::Result<()> {
-        let db = new_test_database(rt.clone()).await;
-        let schema_worker = SchemaWorker {
-            runtime: rt.clone(),
-            database: db.clone(),
-        };
-        let mut tx = db.begin_system().await?;
-        let table_name = "table".parse::<TableName>()?;
-        let db_schema = db_schema!(table_name => DocumentSchema::Any);
-        let (id, _) = SchemaModel::new_root_for_test(&mut tx)
-            .submit_pending(db_schema)
-            .await?;
-        // Insert a document that matches the schema
-        UserFacingModel::new_root_for_test(&mut tx)
-            .insert(table_name.clone(), assert_obj!())
-            .await?;
-        db.commit(tx).await?;
-
-        // Check that the schema passes and is validated
-        schema_worker.run().await?;
-        let mut tx = db.begin(Identity::system()).await?;
-        let doc = tx.get(id).await?.unwrap();
-        let schema: SchemaMetadata = doc.into_value().into_value().try_into()?;
-        assert_eq!(schema.state, SchemaState::Validated);
-        // Check that schema validation progress is written
-        let mut model = SchemaValidationProgressModel::new(&mut tx, TableNamespace::test_user());
-        let progress = model
-            .existing_schema_validation_progress(id)
-            .await?
-            .unwrap();
-        assert_eq!(progress.num_docs_validated, 0);
-        // Doesn't need to validate any documents because the schema matches all
-        // documents
-        assert_eq!(progress.total_docs, Some(0));
-
-        // Insert a new schema that doesn't match the documents. It should fail!
-        let db_schema = db_schema!(table_name =>
-            DocumentSchema::Union(vec![object_validator!("field" => FieldValidator::required_field_type(Validator::Int64))]),
-        );
-
-        let (bad_schema_id, state) = SchemaModel::new_root_for_test(&mut tx)
-            .submit_pending(db_schema)
-            .await?;
-        assert_eq!(state, SchemaState::Pending);
-        db.commit(tx).await?;
-        schema_worker.run().await?;
-
-        let mut tx = db.begin(Identity::system()).await?;
-        let doc = tx.get(id).await?.unwrap();
-        let schema: SchemaMetadata = doc.into_value().into_value().try_into()?;
-        assert_eq!(schema.state, SchemaState::Overwritten);
-        let doc = tx.get(bad_schema_id).await?.unwrap();
-        let schema: SchemaMetadata = doc.into_value().into_value().try_into()?;
-        assert!(matches!(schema.state, SchemaState::Failed { .. }));
-        // Progress should be deleted when schema is marked as failed.
-        let mut model = SchemaValidationProgressModel::new(&mut tx, TableNamespace::test_user());
-        let progress = model.existing_schema_validation_progress(id).await?;
-        assert!(progress.is_none());
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_schema_validation_progress_deleted_when_schema_marked_failed(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let db = new_test_database(rt.clone()).await;
-        let schema_worker = SchemaWorker {
-            runtime: rt.clone(),
-            database: db.clone(),
-        };
-        let mut tx = db.begin_system().await?;
-        let table_name = "table".parse::<TableName>()?;
-        let db_schema = db_schema!(table_name => DocumentSchema::Union(vec![]));
-        let (id, _) = SchemaModel::new_root_for_test(&mut tx)
-            .submit_pending(db_schema)
-            .await?;
-        db.commit(tx).await?;
-        schema_worker.run().await?;
-        // Check that schema validation progress is written
-        let mut tx = db.begin_system().await?;
-        let mut model = SchemaValidationProgressModel::new(&mut tx, TableNamespace::test_user());
-        let progress = model
-            .existing_schema_validation_progress(id)
-            .await?
-            .unwrap();
-        assert_eq!(progress.num_docs_validated, 0);
-        // Doesn't need to validate any documents because the schema matches all
-        // documents
-        assert_eq!(progress.total_docs, Some(0));
-
-        // Insert a document that does not match the schema
-        UserFacingModel::new_root_for_test(&mut tx)
-            .insert(table_name.clone(), assert_obj!())
-            .await?;
-        let mut model = SchemaValidationProgressModel::new(&mut tx, TableNamespace::test_user());
-        let progress = model.existing_schema_validation_progress(id).await?;
-        assert!(progress.is_none());
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_schema_validation_progress_deleted_when_schema_marked_active(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let db = new_test_database(rt.clone()).await;
-        let schema_worker = SchemaWorker {
-            runtime: rt.clone(),
-            database: db.clone(),
-        };
-        let mut tx = db.begin_system().await?;
-        let table_name = "table".parse::<TableName>()?;
-        let db_schema = db_schema!(table_name => DocumentSchema::Any);
-        let (id, _) = SchemaModel::new_root_for_test(&mut tx)
-            .submit_pending(db_schema)
-            .await?;
-        db.commit(tx).await?;
-        schema_worker.run().await?;
-        // Check that schema validation progress is written
-        let mut tx = db.begin_system().await?;
-        let mut model = SchemaValidationProgressModel::new(&mut tx, TableNamespace::test_user());
-        let progress = model
-            .existing_schema_validation_progress(id)
-            .await?
-            .unwrap();
-        assert_eq!(progress.num_docs_validated, 0);
-        // Doesn't need to validate any documents because the schema matches all
-        // documents
-        assert_eq!(progress.total_docs, Some(0));
-
-        // Marking a schema as active deletes the schema validation progress
-        let mut model = SchemaModel::new_root_for_test(&mut tx);
-        model.mark_active(id).await?;
-        let mut model = SchemaValidationProgressModel::new(&mut tx, TableNamespace::test_user());
-        let progress = model.existing_schema_validation_progress(id).await?;
-        assert!(progress.is_none());
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_schema_validation_progress_count(rt: TestRuntime) -> anyhow::Result<()> {
-        let db = new_test_database(rt.clone()).await;
-        let schema_worker = SchemaWorker {
-            runtime: rt.clone(),
-            database: db.clone(),
-        };
-        let mut tx = db.begin_system().await?;
-        let table_name = "table".parse::<TableName>()?;
-        let db_schema = db_schema!(table_name => DocumentSchema::Any);
-        let (id, _) = SchemaModel::new_root_for_test(&mut tx)
-            .submit_pending(db_schema)
-            .await?;
-        let mut model = UserFacingModel::new_root_for_test(&mut tx);
-        // Insert 21 documents to activate the update_threshold (so updates are not
-        // written with each new document, but every 2 documents)
-        let total_docs = 21;
-        for _ in 0..total_docs {
-            model.insert(table_name.clone(), assert_obj!()).await?;
-        }
-        db.commit(tx).await?;
-
-        let mut tx = db.begin_system().await?;
-        let pending_validation = SchemaWorker::pending_schema_validations(&mut tx)
-            .await?
-            .pop()
-            .unwrap();
-
-        schema_worker
-            .validate_tables(btreeset! { &table_name}, pending_validation)
-            .await?;
-
-        // Make sure the number of documents validated matches the total number of
-        // documents
-        let mut tx = db.begin_system().await?;
-        let mut model = SchemaValidationProgressModel::new(&mut tx, TableNamespace::test_user());
-        let progress = model
-            .existing_schema_validation_progress(id)
-            .await?
-            .unwrap();
-        assert_eq!(progress.num_docs_validated, total_docs);
-        assert_eq!(progress.total_docs, Some(total_docs));
         Ok(())
     }
 }

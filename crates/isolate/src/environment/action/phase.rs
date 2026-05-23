@@ -1,10 +1,14 @@
 use std::{
     collections::BTreeMap,
     mem,
+    str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 
+use anyhow::Context;
 use common::{
+    bootstrap_model::components::EnvBinding,
     components::{
         ComponentId,
         Reference,
@@ -53,7 +57,10 @@ use sync_types::{
     CanonicalizedModulePath,
     ModulePath,
 };
-use udf::environment::parse_system_env_var_overrides;
+use udf::environment::{
+    parse_system_env_var_overrides,
+    CONVEX_SITE,
+};
 use value::{
     identifier::Identifier,
     ConvexValue,
@@ -62,7 +69,10 @@ use value::{
 use crate::{
     environment::{
         action::task::TaskRequestEnum,
-        helpers::Phase,
+        helpers::{
+            PerformanceTimeOrigin,
+            Phase,
+        },
         ModuleCodeCacheResult,
     },
     module_cache::ModuleCache,
@@ -86,6 +96,14 @@ pub struct ActionPhase<RT: Runtime> {
     preloaded: ActionPreloaded<RT>,
 }
 
+/// Populated for non-root components, pairing the component's env bindings
+/// with a snapshot of the root-app env vars (only fetched when any binding is
+/// `EnvVar`, since actions don't need reactive read deps).
+struct ComponentEnvCtx {
+    env: BTreeMap<Identifier, EnvBinding>,
+    parent_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
+}
+
 enum ActionPreloaded<RT: Runtime> {
     Created {
         tx: Transaction<RT>,
@@ -100,8 +118,10 @@ enum ActionPreloaded<RT: Runtime> {
         modules: BTreeMap<CanonicalizedModulePath, (ModuleMetadata, Arc<FullModuleSource>)>,
         env_vars: BTreeMap<EnvVarName, EnvVarValue>,
         component_arguments: Option<BTreeMap<Identifier, ConvexValue>>,
+        component_env: Option<ComponentEnvCtx>,
         rng: Option<ChaCha12Rng>,
         import_time_unix_timestamp: Option<UnixTimestamp>,
+        performance_time_origin: Option<PerformanceTimeOrigin>,
     },
 }
 
@@ -195,10 +215,7 @@ impl<RT: Runtime> ActionPhase<RT> {
                         },
                     };
                     let module = module_loader
-                        .get_module_with_metadata(
-                            metadata.clone(),
-                            source_package.clone(),
-                        )
+                        .get_module_with_metadata(&metadata, source_package)
                         .await?;
                     modules.insert(path, (metadata.into_value(), module));
                 }
@@ -215,10 +232,13 @@ impl<RT: Runtime> ActionPhase<RT> {
         if let Some(cloud_url) = canonical_urls.get(&RequestDestination::ConvexCloud) {
             *convex_origin_override.lock() = Some(ConvexOrigin::from(&cloud_url.url));
         }
-        // Environment variables are not accessible in component functions.
+        // Environment variables are not accessible in component functions,
+        // except CONVEX_SITE_URL which is prefixed with the component's HTTP
+        // prefix (if one is configured).
+        let system_env_var_overrides = parse_system_env_var_overrides(canonical_urls)?;
         let env_vars = if self.component.is_root() {
             let mut env_vars = default_system_env_vars;
-            env_vars.extend(parse_system_env_var_overrides(canonical_urls)?);
+            env_vars.extend(system_env_var_overrides);
             let user_env_vars = timeout
                 .with_release_permit(
                     PauseReason::LoadEnvironmentVariables,
@@ -228,7 +248,63 @@ impl<RT: Runtime> ActionPhase<RT> {
             env_vars.extend(user_env_vars);
             env_vars
         } else {
-            BTreeMap::new()
+            // Non-root components get a prefixed CONVEX_SITE_URL if the component
+            // has an http_prefix configured.
+            let component_metadata = timeout
+                .with_release_permit(
+                    PauseReason::LoadComponentArgs,
+                    BootstrapComponentsModel::new(&mut tx).load_component(self.component),
+                )
+                .await?;
+            let http_prefix = component_metadata
+                .as_ref()
+                .and_then(|m| m.http_prefix.as_deref());
+            if let Some(http_prefix) = http_prefix {
+                // Compute the base CONVEX_SITE_URL (system override takes precedence
+                // over default).
+                let base_site_url = system_env_var_overrides
+                    .get(&*CONVEX_SITE)
+                    .or_else(|| default_system_env_vars.get(&*CONVEX_SITE));
+                if let Some(base_url) = base_site_url {
+                    let prefixed_url = format!(
+                        "{}{}",
+                        base_url.as_ref().trim_end_matches('/'),
+                        http_prefix.trim_end_matches('/')
+                    );
+                    let mut env_vars = BTreeMap::new();
+                    env_vars.insert(CONVEX_SITE.clone(), prefixed_url.parse()?);
+                    env_vars
+                } else {
+                    BTreeMap::new()
+                }
+            } else {
+                BTreeMap::new()
+            }
+        };
+
+        let component_env = if self.component.is_root() {
+            None
+        } else {
+            let env = timeout
+                .with_release_permit(
+                    PauseReason::LoadComponentArgs,
+                    BootstrapComponentsModel::new(&mut tx).load_component_env(component_id),
+                )
+                .await?;
+            let parent_env_vars = if env.values().any(|b| matches!(b, EnvBinding::EnvVar(_))) {
+                timeout
+                    .with_release_permit(
+                        PauseReason::LoadEnvironmentVariables,
+                        EnvironmentVariablesModel::new(&mut tx).get_all(),
+                    )
+                    .await?
+            } else {
+                BTreeMap::new()
+            };
+            Some(ComponentEnvCtx {
+                env,
+                parent_env_vars,
+            })
         };
 
         let component_arguments = if self.component.is_root() {
@@ -249,8 +325,10 @@ impl<RT: Runtime> ActionPhase<RT> {
             modules,
             env_vars,
             component_arguments,
+            component_env,
             rng,
             import_time_unix_timestamp,
+            performance_time_origin: None,
         };
 
         Ok(())
@@ -286,7 +364,7 @@ impl<RT: Runtime> ActionPhase<RT> {
             module.environment
         );
 
-        let code_cache_result = module_loader.clone().code_cache_result(module.clone());
+        let code_cache_result = module_loader.clone().code_cache_result(module);
         Ok(Some((source.clone(), code_cache_result)))
     }
 
@@ -294,12 +372,18 @@ impl<RT: Runtime> ActionPhase<RT> {
         if self.phase != Phase::Importing {
             anyhow::bail!("Phase was already {:?}", self.phase)
         }
-        let ActionPreloaded::Ready { ref mut rng, .. } = self.preloaded else {
+        let ActionPreloaded::Ready {
+            ref mut rng,
+            ref mut performance_time_origin,
+            ..
+        } = self.preloaded
+        else {
             anyhow::bail!("Phase not initialized");
         };
         self.phase = Phase::Executing;
         let rng_seed = self.rt.rng().random();
         *rng = Some(ChaCha12Rng::from_seed(rng_seed));
+        *performance_time_origin = Some(PerformanceTimeOrigin::new(&self.rt));
         Ok(())
     }
 
@@ -307,9 +391,27 @@ impl<RT: Runtime> ActionPhase<RT> {
         &mut self,
         name: EnvVarName,
     ) -> anyhow::Result<Option<EnvVarValue>> {
-        let ActionPreloaded::Ready { ref env_vars, .. } = self.preloaded else {
+        let ActionPreloaded::Ready {
+            ref env_vars,
+            ref component_env,
+            ..
+        } = self.preloaded
+        else {
             anyhow::bail!("Phase not initialized");
         };
+        if let Some(component_env) = component_env
+            && let Ok(identifier) = Identifier::from_str(name.as_ref())
+            && let Some(binding) = component_env.env.get(&identifier)
+        {
+            match binding {
+                EnvBinding::Value(s) => {
+                    return Ok(Some(s.parse()?));
+                },
+                EnvBinding::EnvVar(parent_name) => {
+                    return Ok(component_env.parent_env_vars.get(parent_name).cloned());
+                },
+            }
+        }
         Ok(env_vars.get(&name).cloned())
     }
 
@@ -371,6 +473,46 @@ impl<RT: Runtime> ActionPhase<RT> {
             self.rt.unix_timestamp()
         };
         Ok(timestamp)
+    }
+
+    pub fn performance_now(&mut self) -> anyhow::Result<Duration> {
+        let ActionPreloaded::Ready {
+            performance_time_origin,
+            ..
+        } = &self.preloaded
+        else {
+            anyhow::bail!("Phase not initialized");
+        };
+
+        let now = performance_time_origin
+            .as_ref()
+            .context(ErrorMetadata::bad_request(
+                "NoPerformanceDuringImport",
+                "Performance unsupported at import time",
+            ))?
+            .now(&self.rt);
+
+        Ok(now)
+    }
+
+    pub fn performance_time_origin(&mut self) -> anyhow::Result<UnixTimestamp> {
+        let ActionPreloaded::Ready {
+            performance_time_origin,
+            ..
+        } = &self.preloaded
+        else {
+            anyhow::bail!("Phase not initialized");
+        };
+
+        let time_origin = performance_time_origin
+            .as_ref()
+            .context(ErrorMetadata::bad_request(
+                "NoPerformanceDuringImport",
+                "Performance unsupported at import time",
+            ))?
+            .as_unix_timestamp();
+
+        Ok(time_origin)
     }
 
     pub fn require_executing(&self, request: &TaskRequestEnum) -> anyhow::Result<()> {

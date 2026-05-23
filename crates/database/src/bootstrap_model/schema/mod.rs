@@ -1,5 +1,3 @@
-#[cfg(test)]
-mod tests;
 pub mod types;
 
 use std::{
@@ -47,8 +45,7 @@ use crate::{
     Transaction,
 };
 
-pub static SCHEMAS_TABLE: LazyLock<TableName> =
-    LazyLock::new(|| "_schemas".parse().expect("Invalid built-in schemas table"));
+pub static SCHEMAS_TABLE: TableName = TableName::const_new("_schemas");
 
 pub static SCHEMAS_STATE_INDEX: LazyLock<SystemIndex<SchemasTable>> =
     LazyLock::new(|| SystemIndex::new("by_state", [&SCHEMA_STATE_FIELD]).unwrap());
@@ -79,11 +76,6 @@ pub struct SchemaModel<'a, RT: Runtime> {
 impl<'a, RT: Runtime> SchemaModel<'a, RT> {
     pub fn new(tx: &'a mut Transaction<RT>, namespace: TableNamespace) -> Self {
         Self { tx, namespace }
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new_root_for_test(tx: &'a mut Transaction<RT>) -> Self {
-        Self::new(tx, TableNamespace::test_user())
     }
 
     #[fastrace::trace]

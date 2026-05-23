@@ -16,7 +16,9 @@ import BetaAdmonition from "@site/docs/_betaAdmonition.mdx";
 import BetaContactUsAdmonition from "@site/docs/_betaContactUsAdmonition.mdx";
 import ProFeatureUpsell from "@site/docs/_proFeatureUpsell.mdx";
 import { CodeWithCopyButton } from "../CodeWithCopyButton";
+import { AgentLaunchCommand } from "../AgentLaunchCommand";
 import { ErrorExample } from "../ErrorExample";
+import { Screenshot } from "../components/Screenshot";
 
 export default {
   // Re-use the default set of tags/components
@@ -27,6 +29,7 @@ export default {
   BetaAdmonition,
   BetaContactUsAdmonition,
   CodeWithCopyButton,
+  AgentLaunchCommand,
   DocCardList,
   ErrorExample,
   CardLink,
@@ -35,6 +38,7 @@ export default {
   StepByStep,
   Step,
   Snippet,
+  Screenshot,
   TourGuide,
   TourStep,
 };

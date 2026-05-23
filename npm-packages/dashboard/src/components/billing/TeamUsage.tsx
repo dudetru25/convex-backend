@@ -5,6 +5,7 @@ import {
 import { Sheet } from "@ui/Sheet";
 import { Spinner } from "@ui/Spinner";
 import { Button } from "@ui/Button";
+import { Callout } from "@ui/Callout";
 import { SegmentedControl } from "@ui/SegmentedControl";
 import {
   useUsageTeamActionComputeDailyByProject,
@@ -32,7 +33,10 @@ import { TeamResponse } from "generatedApi";
 import { useEffect, useMemo, useState } from "react";
 import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
 import { useDeployments } from "api/deployments";
+import { useHasCustomRolePermission } from "api/roles";
 import { useTeamEntitlements } from "api/teams";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
+import { TEAM_RESOURCE } from "lib/permissions";
 import { useProjectById, useProjectBySlug } from "api/projects";
 import { useTeamOrbSubscription } from "api/billing";
 import groupBy from "lodash/groupBy";
@@ -56,6 +60,7 @@ import {
   FILE_STORAGE_CATEGORIES,
   DATA_EGRESS_CATEGORIES,
   DATA_EGRESS_CATEGORY_RENAMES,
+  COMPUTE_CATEGORIES_SELF_SERVE,
   SEARCH_STORAGE_CATEGORIES,
   SEARCH_QUERIES_CATEGORIES,
   DATABASE_IO_CATEGORIES,
@@ -97,7 +102,6 @@ import {
   BUSINESS_GROUP_BY_OPTIONS,
   BUSINESS_DATABASE_GROUP_BY_OPTIONS,
 } from "./GroupBySelector";
-import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { ProjectLink } from "./ProjectLink";
 import {
   useUsageTeamSummaryV2,
@@ -113,6 +117,7 @@ import {
   useDataEgressPerDayByProjectV2,
   useSearchQueriesPerDayByProjectV2,
   useDeploymentsByClassAndRegionV2,
+  useComputePerDayByProjectSelfServeV2,
   DailyPerTagMetricsByProjectAndClass,
 } from "hooks/usageMetricsV2";
 
@@ -150,6 +155,29 @@ export type UsageSectionId =
   | "dataEgress";
 
 export function TeamUsage({ team }: { team: TeamResponse }) {
+  const canViewUsage = useHasCustomRolePermission(
+    team.id,
+    "team:usage:view",
+    TEAM_RESOURCE,
+    true,
+  );
+
+  if (canViewUsage === false) {
+    return (
+      <>
+        <h2>Usage</h2>
+        <NoPermissionMessage
+          message="You do not have permission to view team usage."
+          missingPermission="team:usage:view"
+        />
+      </>
+    );
+  }
+
+  return <TeamUsageContents team={team} />;
+}
+
+function TeamUsageContents({ team }: { team: TeamResponse }) {
   const router = useRouter();
   const { query } = router;
   const project = useProjectBySlug(team.id, query.projectSlug as string);
@@ -202,11 +230,10 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
 
   const { subscription } = useTeamOrbSubscription(team?.id);
 
-  const { usageDashboardV2 } = useLaunchDarkly();
-
-  // Business plans don't have included usage, so treat them like there's no subscription
   const isBusinessPlanType = subscription?.plan.planType === "CONVEX_BUSINESS";
-  const isBusinessPlan = isBusinessPlanType && usageDashboardV2;
+  const hasNewBilling = subscription?.hasNewBilling ?? false;
+  const [previewNewBilling, setPreviewNewBilling] = useState(false);
+  const useV2 = hasNewBilling || previewNewBilling;
 
   const billingPeriodRange = shownBillingPeriod
     ? { from: shownBillingPeriod.from, to: shownBillingPeriod.to }
@@ -306,6 +333,71 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
         )}
       </div>
 
+      {!hasNewBilling && !isBusinessPlanType && subscription && (
+        <Callout variant="hint">
+          <div className="flex w-full items-center justify-between gap-4">
+            <span>
+              Your Convex subscription pricing is changing{" "}
+              {subscription.newBillingStartDate
+                ? `on ${new Date(subscription.newBillingStartDate + "T00:00:00").toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}`
+                : "in May 2026"}
+              .
+              <div className="mt-1 flex gap-3">
+                <Link
+                  href="https://convex.dev/pricing"
+                  target="_blank"
+                  className="text-util-accent hover:underline dark:text-white"
+                >
+                  Go to pricing page
+                </Link>
+                <Link
+                  href="https://news.convex.dev/enterprise-launch/"
+                  target="_blank"
+                  className="text-util-accent hover:underline dark:text-white"
+                >
+                  View blog post
+                </Link>
+              </div>
+            </span>
+            {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- custom toggle switch */}
+            <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm">
+              <span>Preview new usage metrics</span>
+              {/* eslint-disable-next-line react/forbid-elements -- custom toggle switch, not a standard button */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={previewNewBilling}
+                aria-label="Preview new usage metrics"
+                onClick={() => {
+                  setPreviewNewBilling((prev) => !prev);
+                  if (section) {
+                    void router.push(summaryHref, undefined, {
+                      shallow: true,
+                    });
+                  }
+                }}
+                className={cn(
+                  "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
+                  "focus-visible:outline-2 focus-visible:outline-border-selected",
+                  previewNewBilling
+                    ? "bg-util-accent"
+                    : "bg-neutral-4 dark:bg-neutral-7",
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform",
+                    previewNewBilling
+                      ? "translate-x-[18px]"
+                      : "translate-x-[3px]",
+                  )}
+                />
+              </button>
+            </label>
+          </div>
+        </Callout>
+      )}
+
       {currentBillingPeriod !== undefined && shownBillingPeriod !== null && (
         <>
           <TeamUsageToolbar
@@ -335,7 +427,7 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                 // @ts-expect-error https://github.com/facebook/react/issues/17157
                 inert={section ? "inert" : undefined}
               >
-                {isBusinessPlan ? (
+                {useV2 ? (
                   <>
                     <BusinessPlanSummary
                       hasFilter={projectId !== null || !!componentPrefix}
@@ -343,8 +435,12 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                       deploymentCount={latestDeploymentCount}
                       chefTokenUsage={chefTokenUsage}
                       error={summaryV2Error}
+                      isBusinessPlan={isBusinessPlanType}
+                      entitlements={entitlements}
+                      hasSubscription={hasSubscription}
+                      showEntitlements={showEntitlements}
                     />
-                    <BusinessFunctionBreakdownSection
+                    <FunctionBreakdownSectionV2
                       team={team}
                       dateRange={dateRange}
                       projectId={projectId}
@@ -386,8 +482,8 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                 inert={!section ? "inert" : undefined}
               >
                 {section === "functionCalls" &&
-                  (isBusinessPlan ? (
-                    <BusinessFunctionCallsUsage
+                  (useV2 ? (
+                    <FunctionCallsUsageV2
                       team={team}
                       dateRange={dateRange}
                       projectId={projectId}
@@ -402,7 +498,8 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                     />
                   ))}
 
-                {section === "actionCompute" && (
+                {/* V1-only: self-serve action compute section */}
+                {section === "actionCompute" && !useV2 && (
                   <ActionComputeUsage
                     team={team}
                     dateRange={dateRange}
@@ -410,10 +507,20 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                     componentPrefix={componentPrefix}
                   />
                 )}
+                {/* V2: self-serve action compute uses the same section ID */}
+                {section === "actionCompute" && useV2 && (
+                  <ComputeUsageV2
+                    team={team}
+                    dateRange={dateRange}
+                    projectId={projectId}
+                    componentPrefix={componentPrefix}
+                    isBusinessPlan={false}
+                  />
+                )}
 
                 {section === "databaseStorage" &&
-                  (isBusinessPlan ? (
-                    <BusinessDatabaseStorageUsage
+                  (useV2 ? (
+                    <DatabaseStorageUsageV2
                       team={team}
                       dateRange={dateRange}
                       projectId={projectId}
@@ -428,6 +535,7 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                     />
                   ))}
 
+                {/* V1-only sections */}
                 {section === "databaseBandwidth" && (
                   <DatabaseBandwidthUsage
                     team={team}
@@ -447,8 +555,8 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                 )}
 
                 {section === "filesStorage" &&
-                  (isBusinessPlan ? (
-                    <BusinessFileStorageUsage
+                  (useV2 ? (
+                    <FileStorageUsageV2
                       team={team}
                       dateRange={dateRange}
                       projectId={projectId}
@@ -491,8 +599,8 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                 )}
 
                 {section === "deployments" &&
-                  (isBusinessPlan ? (
-                    <BusinessDeploymentCountUsage
+                  (useV2 ? (
+                    <DeploymentCountUsageV2
                       team={team}
                       dateRange={dateRange}
                       projectId={projectId}
@@ -507,18 +615,19 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                     />
                   ))}
 
-                {/* Business plan detail sections */}
+                {/* V2 detail sections */}
                 {section === "compute" && (
-                  <BusinessComputeUsage
+                  <ComputeUsageV2
                     team={team}
                     dateRange={dateRange}
                     projectId={projectId}
                     componentPrefix={componentPrefix}
+                    isBusinessPlan={true}
                   />
                 )}
 
                 {section === "databaseIO" && (
-                  <BusinessDatabaseIOUsage
+                  <DatabaseIOUsageV2
                     team={team}
                     dateRange={dateRange}
                     projectId={projectId}
@@ -527,7 +636,7 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                 )}
 
                 {section === "searchStorage" && (
-                  <BusinessSearchStorageUsage
+                  <SearchStorageUsageV2
                     team={team}
                     dateRange={dateRange}
                     projectId={projectId}
@@ -536,7 +645,7 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                 )}
 
                 {section === "searchQueries" && (
-                  <BusinessSearchQueriesUsage
+                  <SearchQueriesUsageV2
                     team={team}
                     dateRange={dateRange}
                     projectId={projectId}
@@ -545,7 +654,7 @@ export function TeamUsage({ team }: { team: TeamResponse }) {
                 )}
 
                 {section === "dataEgress" && (
-                  <BusinessDataEgressUsage
+                  <DataEgressUsageV2
                     team={team}
                     dateRange={dateRange}
                     projectId={projectId}
@@ -639,13 +748,15 @@ function FunctionBreakdownSection({
             />
           </div>
 
-          <div className="flex justify-end">
-            <PaginationControls
-              currentPage={currentPage}
-              totalPages={totalPages}
-              onPageChange={setCurrentPage}
-            />
-          </div>
+          {totalPages > 1 && (
+            <div className="flex justify-end">
+              <PaginationControls
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+              />
+            </div>
+          )}
         </div>
       }
     >
@@ -768,9 +879,9 @@ function FunctionUsageBreakdownByProject({
   projectTotal: number;
 }) {
   const { project, isLoading: isLoadingProject } = useProjectById(projectId);
-  const { deployments } = useDeployments(projectId);
+  const { deployments, isLoading: isLoadingDeployments } =
+    useDeployments(projectId);
   const member = useProfile();
-  const isLoadingDeployments = !deployments;
 
   return (
     <div className="mb-4">
@@ -1550,6 +1661,7 @@ function DeploymentCountUsage({
               categories={deploymentTypeCategories}
               selectedDate={selectedDate}
               setSelectedDate={setSelectedDate}
+              isGauge
             />
           )
         ) : // Show deployment count by project
@@ -1563,6 +1675,7 @@ function DeploymentCountUsage({
             team={team}
             selectedDate={selectedDate}
             setSelectedDate={setSelectedDate}
+            isGauge
           />
         )}
       </div>
@@ -1570,11 +1683,11 @@ function DeploymentCountUsage({
   );
 }
 
-function BusinessDeploymentCountUsage({
+function DeploymentCountUsageV2({
   team,
   dateRange,
   componentPrefix,
-}: BusinessDetailSectionProps) {
+}: DetailSectionPropsV2) {
   const [storedViewMode, setViewMode] = useGlobalLocalStorage<BusinessGroupBy>(
     "usageViewMode_businessDeploymentCount",
     "byType",
@@ -1669,6 +1782,7 @@ function BusinessDeploymentCountUsage({
               categories={deploymentTypeCategories}
               selectedDate={selectedDate}
               setSelectedDate={setSelectedDate}
+              isGauge
             />
           )
         ) : viewMode === "byProject" ? (
@@ -1682,6 +1796,7 @@ function BusinessDeploymentCountUsage({
               team={team}
               selectedDate={selectedDate}
               setSelectedDate={setSelectedDate}
+              isGauge
             />
           )
         ) : deploymentsByClassError ? (
@@ -1694,6 +1809,7 @@ function BusinessDeploymentCountUsage({
             categories={DEPLOYMENT_CLASS_CATEGORIES}
             selectedDate={selectedDate}
             setSelectedDate={setSelectedDate}
+            isGauge
           />
         )}
       </div>
@@ -1868,7 +1984,7 @@ function VectorBandwidthUsage({
 
 // --- Business plan sections ---
 
-function BusinessFunctionBreakdownSection({
+function FunctionBreakdownSectionV2({
   team,
   dateRange,
   projectId,
@@ -1942,13 +2058,15 @@ function BusinessFunctionBreakdownSection({
             />
           </div>
 
-          <div className="flex justify-end">
-            <PaginationControls
-              currentPage={currentPage}
-              totalPages={totalPages}
-              onPageChange={setCurrentPage}
-            />
-          </div>
+          {totalPages > 1 && (
+            <div className="flex justify-end">
+              <PaginationControls
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+              />
+            </div>
+          )}
         </div>
       }
     >
@@ -1970,11 +2088,12 @@ function BusinessFunctionBreakdownSection({
   );
 }
 
-type BusinessDetailSectionProps = {
+type DetailSectionPropsV2 = {
   team: TeamResponse;
   dateRange: DateRange | null;
   projectId: number | null;
   componentPrefix: string | null;
+  isBusinessPlan?: boolean;
 };
 
 // Helper to aggregate DailyPerTagMetricsByProjectAndClass to DailyPerTagMetrics
@@ -2060,12 +2179,12 @@ function aggregateTagByProjectToByClass(
   });
 }
 
-function BusinessFunctionCallsUsage({
+function FunctionCallsUsageV2({
   team,
   dateRange,
   projectId,
   componentPrefix,
-}: BusinessDetailSectionProps) {
+}: DetailSectionPropsV2) {
   const [storedViewMode, setViewMode] = useGlobalLocalStorage<BusinessGroupBy>(
     "usageViewMode_businessFunctionCalls",
     "byType",
@@ -2158,12 +2277,13 @@ function BusinessFunctionCallsUsage({
   );
 }
 
-function BusinessComputeUsage({
+function ComputeUsageV2({
   team,
   dateRange,
   projectId,
   componentPrefix,
-}: BusinessDetailSectionProps) {
+  isBusinessPlan = true,
+}: DetailSectionPropsV2) {
   const [storedViewMode, setViewMode] = useGlobalLocalStorage<GroupBy>(
     "usageViewMode_businessCompute",
     "byType",
@@ -2171,23 +2291,38 @@ function BusinessComputeUsage({
   const viewMode = storedViewMode;
 
   const [selectedDate, setSelectedDate] = useState<number | null>(null);
-  const { data: computeData, error } = useComputePerDayByProjectV2(
+  const businessResult = useComputePerDayByProjectV2(
     team.id,
     dateRange,
     projectId,
     componentPrefix,
   );
+  const selfServeResult = useComputePerDayByProjectSelfServeV2(
+    team.id,
+    dateRange,
+    projectId,
+    componentPrefix,
+  );
+  const { data: computeData, error } = isBusinessPlan
+    ? businessResult
+    : selfServeResult;
+
+  const categories = isBusinessPlan
+    ? COMPUTE_CATEGORIES
+    : COMPUTE_CATEGORIES_SELF_SERVE;
 
   const daily =
     viewMode === "byType"
       ? aggregateByProjectToByType(computeData, null)
       : null;
 
+  const title = isBusinessPlan ? "Compute" : "Action Compute";
+
   return (
     <TeamUsageSection
       header={
         <>
-          <h3 className="py-2">Compute</h3>
+          <h3 className="py-2">{title}</h3>
           <GroupBySelector
             value={viewMode}
             onChange={setViewMode}
@@ -2198,7 +2333,7 @@ function BusinessComputeUsage({
     >
       <div className="px-4">
         {error ? (
-          <UsageDataError entity="Compute" />
+          <UsageDataError entity={title} />
         ) : (
           <>
             {viewMode === "byType" ? (
@@ -2209,7 +2344,7 @@ function BusinessComputeUsage({
               ) : (
                 <UsageStackedBarChart
                   rows={daily}
-                  categories={COMPUTE_CATEGORIES}
+                  categories={categories}
                   quantityType="actionCompute"
                   selectedDate={selectedDate}
                   setSelectedDate={setSelectedDate}
@@ -2233,12 +2368,12 @@ function BusinessComputeUsage({
   );
 }
 
-function BusinessDatabaseStorageUsage({
+function DatabaseStorageUsageV2({
   team,
   dateRange,
   projectId,
   componentPrefix,
-}: BusinessDetailSectionProps) {
+}: DetailSectionPropsV2) {
   const [storedViewMode, setViewMode] =
     useGlobalLocalStorage<BusinessDatabaseGroupBy>(
       "usageViewMode_businessDatabaseStorage",
@@ -2434,12 +2569,12 @@ function BusinessDatabaseStorageUsage({
   );
 }
 
-function BusinessDatabaseIOUsage({
+function DatabaseIOUsageV2({
   team,
   dateRange,
   projectId,
   componentPrefix,
-}: BusinessDetailSectionProps) {
+}: DetailSectionPropsV2) {
   const [storedViewMode, setViewMode] = useGlobalLocalStorage<BusinessGroupBy>(
     "usageViewMode_businessDatabaseIO",
     "byType",
@@ -2534,12 +2669,12 @@ function BusinessDatabaseIOUsage({
   );
 }
 
-function BusinessSearchStorageUsage({
+function SearchStorageUsageV2({
   team,
   dateRange,
   projectId,
   componentPrefix,
-}: BusinessDetailSectionProps) {
+}: DetailSectionPropsV2) {
   const [storedViewMode, setViewMode] = useGlobalLocalStorage<GroupBy>(
     "usageViewMode_businessSearchStorage",
     "byType",
@@ -2609,12 +2744,12 @@ function BusinessSearchStorageUsage({
   );
 }
 
-function BusinessFileStorageUsage({
+function FileStorageUsageV2({
   team,
   dateRange,
   projectId,
   componentPrefix,
-}: BusinessDetailSectionProps) {
+}: DetailSectionPropsV2) {
   const [selectedDate, setSelectedDate] = useState<number | null>(null);
   const { data, error } = useFileStoragePerDayByProjectV2(
     team.id,
@@ -2645,12 +2780,12 @@ function BusinessFileStorageUsage({
   );
 }
 
-function BusinessDataEgressUsage({
+function DataEgressUsageV2({
   team,
   dateRange,
   projectId,
   componentPrefix,
-}: BusinessDetailSectionProps) {
+}: DetailSectionPropsV2) {
   const [storedViewMode, setViewMode] = useGlobalLocalStorage<GroupBy>(
     "usageViewMode_businessDataEgress",
     "byType",
@@ -2664,6 +2799,9 @@ function BusinessDataEgressUsage({
     projectId,
     componentPrefix,
   );
+
+  const categories = DATA_EGRESS_CATEGORIES;
+  const categoryRenames = DATA_EGRESS_CATEGORY_RENAMES;
 
   const daily =
     viewMode === "byType" ? aggregateByProjectToByType(data, null) : null;
@@ -2694,8 +2832,8 @@ function BusinessDataEgressUsage({
               ) : (
                 <UsageStackedBarChart
                   rows={daily}
-                  categories={DATA_EGRESS_CATEGORIES}
-                  categoryRenames={DATA_EGRESS_CATEGORY_RENAMES}
+                  categories={categories}
+                  categoryRenames={categoryRenames}
                   quantityType="storage"
                   selectedDate={selectedDate}
                   setSelectedDate={setSelectedDate}
@@ -2719,12 +2857,12 @@ function BusinessDataEgressUsage({
   );
 }
 
-function BusinessSearchQueriesUsage({
+function SearchQueriesUsageV2({
   team,
   dateRange,
   projectId,
   componentPrefix,
-}: BusinessDetailSectionProps) {
+}: DetailSectionPropsV2) {
   const [storedViewMode, setViewMode] = useGlobalLocalStorage<GroupBy>(
     "usageViewMode_businessSearchQueries",
     "byType",

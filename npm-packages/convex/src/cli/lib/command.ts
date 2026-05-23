@@ -8,6 +8,7 @@ import {
   parseInteger,
   parsePositiveInteger,
 } from "./utils/utils.js";
+import { INLINE_QUERY_DESCRIPTION } from "./runTestFunction.js";
 
 declare module "@commander-js/extra-typings" {
   interface Command<Args extends any[] = [], Opts extends OptionValues = {}> {
@@ -85,11 +86,12 @@ declare module "@commander-js/extra-typings" {
      * Adds options and arguments for the `run` command.
      */
     addRunOptions(): Command<
-      [...Args, string, string | undefined],
+      [...Args, string | undefined, string | undefined],
       Opts & {
         watch?: boolean;
         push?: boolean;
         identity?: string;
+        inlineQuery?: string;
         typecheck: "enable" | "try" | "disable";
         typecheckComponents: boolean;
         codegen: "enable" | "disable";
@@ -147,6 +149,7 @@ declare module "@commander-js/extra-typings" {
         history: number;
         success: boolean;
         jsonl: boolean;
+        tail?: number | boolean;
       }
     >;
 
@@ -217,10 +220,11 @@ Command.prototype.addDeploymentSelectionOptions = function (
         action +
           " a specific deployment. Accepts:\n" +
           "• a deployment name (e.g. joyful-capybara-123)\n" +
-          "• a deployment ref (e.g. dev/james)\n" +
-          "• 'dev' (for your personal dev deployment)\n" +
-          "• 'prod' (for your project’s default production deployment)." +
-          "\nYou can also select deployments in other projects with 'project-slug:ref' or 'team-slug:project-slug:ref'.",
+          "• a deployment reference (e.g. dev/james, staging)\n" +
+          "• `dev` (for your personal dev deployment)\n" +
+          "• `prod` (for your project’s default production deployment)\n" +
+          "• `local` (for your local dev deployment)." +
+          "\nYou can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.",
       ).conflicts(["--prod", "--preview-name", "--deployment-name", "--url"]),
     )
     .addOption(
@@ -431,7 +435,7 @@ Command.prototype.addSelfHostOptions = function () {
 Command.prototype.addRunOptions = function () {
   return (
     this.argument(
-      "functionName",
+      "[functionName]",
       "identifier of the function to run, like `listMessages` or `dir/file:myFunction`",
     )
       .argument(
@@ -441,6 +445,12 @@ Command.prototype.addRunOptions = function () {
       .option(
         "-w, --watch",
         "Watch a query, printing its result if the underlying data changes. Given function must be a query.",
+      )
+      .addOption(
+        new Option(
+          "--inline-query <query>",
+          INLINE_QUERY_DESCRIPTION,
+        ).conflicts("--watch"),
       )
       .option("--push", "Push code to deployment before running the function.")
       .addOption(
@@ -594,7 +604,15 @@ Command.prototype.addLogsOptions = function () {
       "Print a log line for every successful function execution",
       false,
     )
-    .option("--jsonl", "Output raw log events as JSONL", false);
+    .option("--jsonl", "Output raw log events as JSONL", false)
+    .addOption(
+      new Option(
+        "--tail [n]",
+        "Deprecated/unnecessary: `convex logs` already tails by default. Accepted as an alias for --history for compatibility with agents that pass it.",
+      )
+        .argParser(parseInteger)
+        .hideHelp(),
+    );
 };
 
 Command.prototype.addNetworkTestOptions = function () {

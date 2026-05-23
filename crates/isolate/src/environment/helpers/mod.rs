@@ -1,4 +1,5 @@
 pub mod module_loader;
+mod performance;
 mod promise;
 pub mod syscall_error;
 mod version;
@@ -18,6 +19,7 @@ use serde_json::Value as JsonValue;
 use value::TableName;
 
 pub use self::{
+    performance::PerformanceTimeOrigin,
     promise::{
         resolve_promise,
         resolve_promise_allow_all_errors,
@@ -99,30 +101,4 @@ pub fn check_table_name(
         .context(ArgName("id"));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_check_table_name_accepts_the_correct_name() {
-        let requested_table_name = Some("documents".to_string());
-        let actual_table_name: TableName = "documents".parse().unwrap();
-        assert!(check_table_name(&requested_table_name, &actual_table_name).is_ok());
-    }
-
-    #[test]
-    fn test_check_table_name_rejects_oher_names() {
-        let requested_table_name = Some("documents".to_string());
-        let actual_table_name: TableName = "users".parse().unwrap();
-        assert!(check_table_name(&requested_table_name, &actual_table_name).is_err());
-    }
-
-    #[test]
-    fn test_check_table_name_does_nothing_if_the_requested_table_name_is_none() {
-        let requested_table_name = None;
-        let actual_table_name: TableName = "documents".parse().unwrap();
-        assert!(check_table_name(&requested_table_name, &actual_table_name).is_ok());
-    }
 }

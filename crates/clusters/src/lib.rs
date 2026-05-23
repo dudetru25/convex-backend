@@ -12,6 +12,7 @@ pub enum PersistenceArgs {
         url: Url,
         db_name: String,
         multitenant: bool,
+        require_leader: bool,
     },
     Postgres {
         url: Url,
@@ -25,7 +26,7 @@ pub enum PersistenceArgs {
 /// url should contains credentials to connect to the database, and should not
 /// contain any path or query string.
 pub fn persistence_args_from_cluster_url(
-    instance_name: &str,
+    deployment_name: &str,
     mut cluster_url: Url,
     driver: DbDriverTag,
     require_ssl: bool,
@@ -51,7 +52,7 @@ pub fn persistence_args_from_cluster_url(
     match driver {
         DbDriverTag::Postgres(_) => {
             // selfhosted case
-            let db_name = instance_name.replace('-', "_");
+            let db_name = deployment_name.replace('-', "_");
             anyhow::ensure!(
                 cluster_url.path() == "" || cluster_url.path() == "/",
                 "cluster url already contains db name: {}",
@@ -96,11 +97,12 @@ pub fn persistence_args_from_cluster_url(
                     .append_pair("require_ssl", "true")
                     .append_pair("verify_ca", "true");
             }
-            let db_name = instance_name.replace('-', "_");
+            let db_name = deployment_name.replace('-', "_");
             Ok(PersistenceArgs::MySql {
                 url: cluster_url,
                 db_name,
                 multitenant: false,
+                require_leader,
             })
         },
         DbDriverTag::MySqlAwsIam(_) => {
@@ -111,11 +113,12 @@ pub fn persistence_args_from_cluster_url(
                 .query_pairs_mut()
                 .append_pair("require_ssl", "true")
                 .append_pair("verify_ca", "false");
-            let db_name = instance_name.replace('-', "_");
+            let db_name = deployment_name.replace('-', "_");
             Ok(PersistenceArgs::MySql {
                 url: cluster_url,
                 db_name,
                 multitenant: false,
+                require_leader,
             })
         },
         DbDriverTag::MySqlMultitenant(_) => {
@@ -135,13 +138,10 @@ pub fn persistence_args_from_cluster_url(
                 db_name: path,
                 url: cluster_url,
                 multitenant: true,
+                require_leader,
             })
         },
         DbDriverTag::Sqlite => anyhow::bail!("no url for sqlite"),
-        #[cfg(any(test, feature = "testing"))]
-        DbDriverTag::TestPersistence => {
-            anyhow::bail!("no url for test persistence")
-        },
     }
 }
 

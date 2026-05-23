@@ -31,6 +31,7 @@
               "requestId",
               "executionId",
               "usageStats",
+              "willRetry",
               "executionTimestamp",
               "identityType",
               "environment",
@@ -139,6 +140,9 @@
                   "null"
                 ],
                 "format": "double"
+              },
+              "willRetry": {
+                "type": "boolean"
               }
             }
           },
@@ -254,10 +258,13 @@
       },
       "OccInfoJson": {
         "type": "object",
-        "required": [
-          "retryCount"
-        ],
         "properties": {
+          "componentPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "documentId": {
             "type": [
               "string",
@@ -265,7 +272,10 @@
             ]
           },
           "retryCount": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
             "minimum": 0
           },
@@ -365,14 +375,31 @@
         "required": [
           "databaseReadBytes",
           "databaseWriteBytes",
+          "databaseIoReadBytes",
+          "databaseIoWriteBytes",
           "databaseReadDocuments",
           "storageReadBytes",
           "storageWriteBytes",
           "vectorIndexReadBytes",
           "vectorIndexWriteBytes",
+          "textIndexQueryBytes",
+          "textIndexWriteQueryBytes",
+          "vectorIndexReadQueryBytes",
+          "vectorIndexWriteQueryBytes",
+          "networkEgressBytes",
           "memoryUsedMb"
         ],
         "properties": {
+          "databaseIoReadBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "databaseIoWriteBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "databaseReadBytes": {
             "type": "integer",
             "format": "int64",
@@ -393,6 +420,11 @@
             "format": "int64",
             "minimum": 0
           },
+          "networkEgressBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "storageReadBytes": {
             "type": "integer",
             "format": "int64",
@@ -403,12 +435,32 @@
             "format": "int64",
             "minimum": 0
           },
+          "textIndexQueryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "textIndexWriteQueryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "vectorIndexReadBytes": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
           },
+          "vectorIndexReadQueryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "vectorIndexWriteBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "vectorIndexWriteQueryBytes": {
             "type": "integer",
             "format": "int64",
             "minimum": 0

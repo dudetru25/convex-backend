@@ -30,6 +30,7 @@ use common::{
     knobs::{
         ACTION_USER_TIMEOUT,
         DOCUMENT_RETENTION_RATE_LIMIT,
+        INDEX_CACHE_SIZE,
         UDF_CACHE_MAX_SIZE,
     },
     persistence::Persistence,
@@ -41,6 +42,8 @@ use common::{
     types::{
         ConvexOrigin,
         ConvexSite,
+        DeploymentClass,
+        DeploymentMetadata,
         TEST_REGION_NAME,
     },
 };
@@ -59,6 +62,7 @@ use function_runner::{
 };
 use governor::Quota;
 use http_client::CachedHttpClient;
+use indexing::index_cache::IndexCache;
 use model::{
     initialize_application_system_tables,
     virtual_system_mapping,
@@ -86,6 +90,7 @@ pub mod custom_headers;
 pub mod dashboard;
 pub mod deploy_config;
 pub mod deploy_config2;
+pub mod deployment_info;
 pub mod deployment_state;
 pub mod environment_variables;
 pub mod http_actions;
@@ -104,9 +109,6 @@ pub mod storage;
 pub mod streaming_export;
 pub mod streaming_import;
 pub mod subs;
-#[cfg(test)]
-mod test_helpers;
-
 pub const MAX_CONCURRENT_REQUESTS: usize = 128;
 
 #[derive(Clone)]
@@ -163,6 +165,7 @@ pub async fn make_app(
         searcher.clone(),
         preempt_tx.clone(),
         virtual_system_mapping().clone(),
+        IndexCache::new(*INDEX_CACHE_SIZE).new_handle(),
         Arc::new(new_rate_limiter(
             runtime.clone(),
             Quota::per_second(*DOCUMENT_RETENTION_RATE_LIMIT),
@@ -188,6 +191,11 @@ pub async fn make_app(
         database: database.clone(),
     };
 
+    let deployment = DeploymentMetadata {
+        name: config.name(),
+        region: None,
+        class: DeploymentClass::S16,
+    };
     let node_process_timeout = *ACTION_USER_TIMEOUT + Duration::from_secs(5);
     let node_executor = Arc::new(LocalNodeExecutor::new(node_process_timeout).await?);
     let actions = Actions::new(
@@ -195,6 +203,7 @@ pub async fn make_app(
         config.convex_origin_url()?,
         *ACTION_USER_TIMEOUT,
         runtime.clone(),
+        deployment.clone(),
     );
 
     #[cfg(not(debug_assertions))]
@@ -215,7 +224,7 @@ pub async fn make_app(
     );
     let function_runner: Arc<dyn FunctionRunner<ProdRuntime>> =
         Arc::new(InProcessFunctionRunner::new(
-            config.name().clone(),
+            deployment,
             key_broker.function_runner_keybroker(),
             config.convex_origin_url()?,
             runtime.clone(),
@@ -235,8 +244,11 @@ pub async fn make_app(
         application_storage,
         usage_event_logger,
         key_broker.clone(),
-        config.name(),
-        Some(TEST_REGION_NAME.clone()),
+        DeploymentMetadata {
+            name: config.name(),
+            region: Some(TEST_REGION_NAME.clone()),
+            class: DeploymentClass::S16,
+        },
         function_runner,
         config.convex_origin_url()?,
         config.convex_site_url()?,

@@ -18,8 +18,9 @@ import { NentSwitcher } from "@common/elements/NentSwitcher";
 import { Loading } from "@ui/Loading";
 import { Button } from "@ui/Button";
 import { useNents } from "@common/lib/useNents";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { PermissionsContext } from "@common/lib/deploymentContext";
 import { toast } from "@common/lib/utils";
+import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
 
 type TableGroup = {
   namespace: string;
@@ -228,16 +229,9 @@ export function CreateNewTable({
   );
   const { selectedNent } = useNents();
 
-  const { useCurrentDeployment, useHasProjectAdminPermissions } = useContext(
-    DeploymentInfoContext,
-  );
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
 
-  const deployment = useCurrentDeployment();
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
-  const canCreateTable =
-    deployment?.deploymentType !== "prod" || hasAdminPermissions;
+  const canCreateTable = useIsOperationAllowed("WriteData");
 
   return newTableName !== undefined ? (
     <form
@@ -321,8 +315,12 @@ export function CreateNewTable({
       tip={
         selectedNent && selectedNent.state !== "active"
           ? "Cannot create tables in an unmounted component."
-          : !canCreateTable &&
-            "You do not have permission to create tables in production."
+          : !canCreateTable && (
+              <PermissionDeniedTip
+                message="You do not have permission to create tables in this deployment."
+                action="deployment:data:write"
+              />
+            )
       }
     >
       <span className="truncate">Create Table</span>

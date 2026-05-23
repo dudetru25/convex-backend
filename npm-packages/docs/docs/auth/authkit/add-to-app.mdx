@@ -29,6 +29,14 @@ WorkOS environments for projects and deployments. If you have an existing WorkOS
 team and account that you want to use with your Convex application then you
 should follow the **Standard WorkOS team** instructions.
 
+<Admonition type="info">
+  Setting up the Managed WorkOS team and inviting members to it require **team
+  admin**. Per-deployment WorkOS environments use the deployment's own
+  management permission, so any team member can provision one for their
+  dev/preview deployment, while prod envs and shared project-level envs require
+  team admin or project admin.
+</Admonition>
+
 <Tabs groupId="workos-integration">
 <TabItem value="managed-workos" label="Managed WorkOS team" default>
   <StepByStep>
@@ -297,7 +305,7 @@ working React app with Convex. If not follow the
 
     <Step title="Show UI based on authentication state">
       You can control which UI is shown when the user is signed in or signed out using
-      Convex's `<Authenticated>`, `<Unauthenticated>` and `<AuthLoading>` helper components.
+      Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
 
       In the following example, the `<Content />` component is a child of `<Authenticated>`,
       so its content and any of its child components are guaranteed to have an authenticated
@@ -619,7 +627,7 @@ working Next.js app with Convex. If not follow the
 
     <Step title="Show UI based on authentication state">
       You can control which UI is shown when the user is signed in or signed out using
-      Convex's `<Authenticated>`, `<Unauthenticated>` and `<AuthLoading>` helper components.
+      Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
 
       In the following example, the `<Content />` component is a child of `<Authenticated>`,
       so its content and any of its child components are guaranteed to have an authenticated
@@ -832,7 +840,7 @@ working TanStack Start app with Convex. If not, follow the
 
     <Step title="Show UI based on authentication state">
       You can control which UI is shown when the user is signed in or signed out using
-      Convex's `<Authenticated>`, `<Unauthenticated>` and `<AuthLoading>` helper components.
+      Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
 
       In TanStack Start, you can use WorkOS's server-side `getAuth()` and
       `getSignInUrl()` in route loaders to get the user and sign-in URL before the

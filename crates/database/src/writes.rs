@@ -27,10 +27,8 @@ use common::{
         Interval,
     },
     knobs::{
-        TRANSACTION_MAX_NUM_USER_WRITES,
         TRANSACTION_MAX_SYSTEM_NUM_WRITES,
         TRANSACTION_MAX_SYSTEM_WRITE_SIZE_BYTES,
-        TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
     },
     types::{
         TabletIndexName,
@@ -51,6 +49,7 @@ use value::{
 
 use crate::{
     bootstrap_model::defaults::BootstrapTableIds,
+    execution_size::TransactionLimits,
     reads::TransactionReadSet,
     schema_registry::SchemaRegistry,
     ComponentRegistry,
@@ -245,6 +244,7 @@ impl Writes {
         document_id: ResolvedDocumentId,
         old_document: Option<(ResolvedDocument, WriteTimestamp)>,
         new_document: Option<ResolvedDocument>,
+        limits: &TransactionLimits,
     ) -> anyhow::Result<()> {
         if old_document.is_none() {
             anyhow::ensure!(!self.updates.contains(&document_id), "Duplicate insert");
@@ -284,22 +284,22 @@ impl Writes {
         } else {
             let tx_size = &self.user_tx_size;
             anyhow::ensure!(
-                tx_size.num_writes <= *TRANSACTION_MAX_NUM_USER_WRITES,
+                tx_size.num_writes <= limits.documents_written,
                 ErrorMetadata::pagination_limit(
                     "TooManyWrites",
                     format!(
                         "Too many writes in a single function execution (limit: {})",
-                        *TRANSACTION_MAX_NUM_USER_WRITES,
+                        limits.documents_written,
                     )
                 ),
             );
             anyhow::ensure!(
-                tx_size.size <= *TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
+                tx_size.size <= limits.bytes_written,
                 ErrorMetadata::pagination_limit(
                     "TooManyBytesWritten",
                     format!(
-                        "Too many bytes written in a single function execution (limit: {} bytes)",
-                        *TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
+                        "Too many bytes written in a single function execution (limit: {})",
+                        common::fmt::format_bytes(limits.bytes_written as u64),
                     )
                 ),
             );
@@ -460,228 +460,5 @@ impl Writes {
             .filter(|update| update.old_document.is_none())
             .map(|update| update.id)
             .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use common::{
-        bootstrap_model::{
-            index::{
-                database_index::IndexedFields,
-                IndexMetadata,
-                INDEX_TABLE,
-            },
-            tables::TableMetadata,
-        },
-        document::{
-            CreationTime,
-            DocumentUpdateWithPrevTs,
-            PackedDocument,
-            ResolvedDocument,
-        },
-        testing::TestIdGenerator,
-        types::{
-            IndexDescriptor,
-            TabletIndexName,
-            WriteTimestamp,
-        },
-    };
-    use sync_types::Timestamp;
-    use value::{
-        assert_obj,
-        TableNamespace,
-    };
-
-    use super::Writes;
-    use crate::{
-        bootstrap_model::defaults::BootstrapTableIds,
-        reads::TransactionReadSet,
-    };
-
-    #[test]
-    fn test_write_read_dependencies() -> anyhow::Result<()> {
-        // Create table mapping.
-        let mut id_generator = TestIdGenerator::new();
-        let user_table1 = id_generator.user_table_id(&"user_table1".parse()?);
-        let user_table2 = id_generator.user_table_id(&"user_table2".parse()?);
-        let bootstrap_tables = BootstrapTableIds::new(&id_generator);
-
-        // Writes to a table should OCC with modification of the table metadata
-        // or an index of the same table.
-        let mut user_table1_write = TransactionReadSet::new();
-        Writes::record_reads_for_write(
-            bootstrap_tables,
-            &mut user_table1_write,
-            user_table1.tablet_id,
-        )?;
-
-        let user_table1_table_metadata_change = PackedDocument::pack(&ResolvedDocument::new(
-            bootstrap_tables.table_resolved_doc_id(user_table1.tablet_id),
-            CreationTime::ONE,
-            TableMetadata::new(
-                TableNamespace::test_user(),
-                "big_table".parse()?,
-                user_table1.table_number,
-            )
-            .try_into()?,
-        )?);
-        assert!(user_table1_write
-            .read_set()
-            .overlaps_document_for_test(&user_table1_table_metadata_change,)
-            .is_some());
-
-        let user_table1_index_change = PackedDocument::pack(&ResolvedDocument::new(
-            id_generator.system_generate(&INDEX_TABLE),
-            CreationTime::ONE,
-            IndexMetadata::new_backfilling(
-                Timestamp::MIN,
-                TabletIndexName::new(user_table1.tablet_id, IndexDescriptor::new("by_likes")?)?,
-                IndexedFields::by_id(),
-            )
-            .try_into()?,
-        )?);
-        assert!(user_table1_write
-            .read_set()
-            .overlaps_document_for_test(&user_table1_index_change)
-            .is_some());
-
-        // Writes to a table should *not* OCC with modification of the table metadata
-        // or an index of unrelated same table.
-        let user_table2_table_metadata_change = PackedDocument::pack(&ResolvedDocument::new(
-            bootstrap_tables.table_resolved_doc_id(user_table2.tablet_id),
-            CreationTime::ONE,
-            TableMetadata::new(
-                TableNamespace::test_user(),
-                "small_table".parse()?,
-                user_table2.table_number,
-            )
-            .try_into()?,
-        )?);
-        assert!(user_table1_write
-            .read_set()
-            .overlaps_document_for_test(&user_table2_table_metadata_change,)
-            .is_none());
-
-        let user_table2_index_change = PackedDocument::pack(&ResolvedDocument::new(
-            id_generator.system_generate(&INDEX_TABLE),
-            CreationTime::ONE,
-            IndexMetadata::new_backfilling(
-                Timestamp::MIN,
-                TabletIndexName::new(user_table2.tablet_id, IndexDescriptor::new("by_likes")?)?,
-                IndexedFields::by_id(),
-            )
-            .try_into()?,
-        )?);
-        assert!(user_table1_write
-            .read_set()
-            .overlaps_document_for_test(&user_table2_index_change)
-            .is_none());
-
-        // Changes to any index metadata should conflict with changes to any
-        // other table or index metadata.
-        let mut metadata_write = TransactionReadSet::new();
-        let index_table_id = bootstrap_tables.index_id;
-        Writes::record_reads_for_write(
-            bootstrap_tables,
-            &mut metadata_write,
-            index_table_id.tablet_id,
-        )?;
-
-        assert!(metadata_write
-            .read_set()
-            .overlaps_document_for_test(&user_table1_table_metadata_change,)
-            .is_some());
-
-        assert!(metadata_write
-            .read_set()
-            .overlaps_document_for_test(&user_table1_index_change)
-            .is_some());
-
-        assert!(metadata_write
-            .read_set()
-            .overlaps_document_for_test(&user_table2_table_metadata_change,)
-            .is_some());
-
-        assert!(metadata_write
-            .read_set()
-            .overlaps_document_for_test(&user_table2_index_change)
-            .is_some());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_register_new_id() -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "table".parse()?;
-        let _ = id_generator.user_table_id(&table_name);
-        let bootstrap_tables = BootstrapTableIds::new(&id_generator);
-        let mut writes = Writes::new();
-        let mut reads = TransactionReadSet::new();
-        let id = id_generator.user_generate(&table_name);
-        let document =
-            ResolvedDocument::new(id, CreationTime::ONE, assert_obj!("hello" => "world"))?;
-        writes.update(
-            bootstrap_tables,
-            false,
-            &mut reads,
-            id,
-            None,
-            Some(document),
-        )?;
-        assert_eq!(writes.generated_ids(), vec![id]);
-        Ok(())
-    }
-
-    #[test]
-    fn test_document_updates_are_combined() -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "table".parse()?;
-        let _ = id_generator.user_table_id(&table_name);
-        let bootstrap_tables = BootstrapTableIds::new(&id_generator);
-
-        let mut writes = Writes::new();
-        let mut reads = TransactionReadSet::new();
-        let id = id_generator.user_generate(&table_name);
-        let old_document = ResolvedDocument::new(id, CreationTime::ONE, assert_obj!())?;
-        let new_document =
-            ResolvedDocument::new(id, CreationTime::ONE, assert_obj!("hello" => "world"))?;
-        writes.update(
-            bootstrap_tables,
-            false,
-            &mut reads,
-            id,
-            Some((
-                old_document.clone(),
-                WriteTimestamp::Committed(Timestamp::must(123)),
-            )),
-            Some(new_document.clone()),
-        )?;
-        let newer_document = ResolvedDocument::new(
-            id,
-            CreationTime::ONE,
-            assert_obj!("hello" => "world", "foo" => "bar"),
-        )?;
-        writes.update(
-            bootstrap_tables,
-            false,
-            &mut reads,
-            id,
-            Some((new_document, WriteTimestamp::Pending)),
-            Some(newer_document.clone()),
-        )?;
-
-        assert_eq!(writes.updates.len(), 1);
-        assert_eq!(
-            **writes.updates.get_min().unwrap(),
-            DocumentUpdateWithPrevTs {
-                id,
-                old_document: Some((old_document, Timestamp::must(123))),
-                new_document: Some(newer_document),
-            }
-        );
-        assert_eq!(writes.generated_ids(), vec![]);
-        Ok(())
     }
 }

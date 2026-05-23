@@ -1,9 +1,10 @@
 import { useQuery } from "convex/react";
 import { Value } from "convex/values";
 import { useRouter } from "next/router";
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 import { api } from "system-udfs/convex/_generated/api";
 import { Id } from "system-udfs/convex/_generated/dataModel";
+import { PermissionsContext } from "@common/lib/deploymentContext";
 
 export const NENT_APP_PLACEHOLDER = "_App";
 
@@ -22,7 +23,14 @@ export function useNents(): {
   setSelectedNent: (nent?: string) => Promise<void>;
 } {
   const { query, push } = useRouter();
-  const allComponents = useQuery(api._system.frontend.components.list, {});
+  // Get canViewDataCached from a special memoized context because useNents is called in a lot of components,
+  // which may have hundreds of instantiations.
+  const { canViewDataCached } = useContext(PermissionsContext);
+  const allComponentsOrSkipped = useQuery(
+    api._system.frontend.components.list,
+    canViewDataCached ? {} : "skip",
+  );
+  const allComponents = canViewDataCached ? allComponentsOrSkipped : [];
 
   // Ensure the selected component is in the list of all components
   if (allComponents !== undefined && typeof query.component === "string") {

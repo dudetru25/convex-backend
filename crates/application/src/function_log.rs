@@ -57,7 +57,6 @@ use common::{
         UdfType,
     },
 };
-use float_next_after::NextAfter;
 use http::{
     Method,
     StatusCode,
@@ -180,6 +179,10 @@ pub struct FunctionExecution {
 
     // If this execution resulted in an OCC error, this will be Some.
     pub occ_info: Option<OccInfo>,
+
+    /// Whether this function will be retried (e.g. a mutation that OCCs or hits
+    /// write throughput limits)
+    pub will_retry: bool,
 }
 
 impl HeapSize for FunctionExecution {
@@ -273,15 +276,8 @@ impl FunctionExecution {
                 error: self.params.err().cloned(),
                 execution_time,
                 user_execution_time: self.user_execution_time,
-                occ_info: match &self.occ_info {
-                    Some(occ_info) => Some(log_streaming::OccInfo {
-                        table_name: occ_info.table_name.clone(),
-                        document_id: occ_info.document_id.clone(),
-                        write_source: occ_info.write_source.clone(),
-                        retry_count: occ_info.retry_count,
-                    }),
-                    None => None,
-                },
+                occ_info: self.occ_info.clone(),
+                will_retry: self.will_retry,
                 scheduler_info: match self.caller {
                     FunctionCaller::Scheduler { job_id, .. } => Some(SchedulerInfo {
                         job_id: job_id.to_string(),
@@ -291,12 +287,17 @@ impl FunctionExecution {
                 usage_stats: log_streaming::AggregatedFunctionUsageStats {
                     database_read_bytes: self.usage_stats.database_read_bytes,
                     database_write_bytes: self.usage_stats.database_write_bytes,
+                    database_io_read_bytes: self.usage_stats.database_io_read_bytes,
+                    database_io_write_bytes: self.usage_stats.database_io_write_bytes,
                     database_read_documents: self.usage_stats.database_read_documents,
                     storage_read_bytes: self.usage_stats.storage_read_bytes,
                     storage_write_bytes: self.usage_stats.storage_write_bytes,
                     vector_index_read_bytes: self.usage_stats.vector_index_read_bytes,
                     vector_index_write_bytes: self.usage_stats.vector_index_write_bytes,
-                    text_index_write_bytes: self.usage_stats.text_index_write_bytes,
+                    text_index_write_query_bytes: self.usage_stats.text_index_write_query_bytes,
+                    text_index_query_bytes: self.usage_stats.text_index_query_bytes,
+                    vector_index_read_query_bytes: self.usage_stats.vector_index_read_query_bytes,
+                    vector_index_write_query_bytes: self.usage_stats.vector_index_write_query_bytes,
                     network_egress_bytes: self.usage_stats.network_egress_bytes,
                     memory_used_mb: self.memory_used_mb,
                     return_bytes: self.return_bytes,
@@ -387,7 +388,6 @@ impl HeapSize for FunctionExecutionPart {
 }
 
 #[derive(Clone)]
-#[cfg_attr(any(test, feature = "testing"), derive(Debug))]
 pub struct ActionCompletion {
     pub outcome: ValidatedActionOutcome,
     pub execution_time: Duration,
@@ -499,11 +499,13 @@ pub enum TrackUsage {
     SystemError,
 }
 
+#[derive(PartialEq)]
 pub enum UdfRate {
     Invocations,
     Errors,
     CacheHits,
     CacheMisses,
+    SubscriptionInvalidations,
 }
 
 impl FromStr for UdfRate {
@@ -515,6 +517,7 @@ impl FromStr for UdfRate {
             "errors" => UdfRate::Errors,
             "cacheHits" => UdfRate::CacheHits,
             "cacheMisses" => UdfRate::CacheMisses,
+            "subscriptionInvalidations" => UdfRate::SubscriptionInvalidations,
             _ => anyhow::bail!("Invalid UDF rate: {}", r),
         };
         Ok(udf_rate)
@@ -754,6 +757,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context,
             mutation_retry_count: None,
             occ_info: None,
+            will_retry: false,
         };
         self.log_execution(execution, true, true);
     }
@@ -779,6 +783,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             None,
             mutation_queue_length,
             mutation_retry_count,
+            false,
         )
         .await
     }
@@ -816,6 +821,44 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             None,
             mutation_queue_length,
             mutation_retry_count,
+            false,
+        )
+        .await;
+        Ok(())
+    }
+
+    pub async fn log_mutation_write_throughput_error(
+        &self,
+        e: &anyhow::Error,
+        path: CanonicalizedComponentFunctionPath,
+        arguments: SerializedArgs,
+        identity: InertIdentity,
+        start: tokio::time::Instant,
+        caller: FunctionCaller,
+        context: ExecutionContext,
+        mutation_queue_length: Option<usize>,
+        mutation_retry_count: usize,
+        will_retry: bool,
+    ) -> anyhow::Result<()> {
+        let outcome = ValidatedUdfOutcome::from_error(
+            JsError::from_error_ref(e),
+            path,
+            arguments,
+            identity,
+            self.rt.clone(),
+            None,
+        )?;
+        self._log_mutation(
+            outcome,
+            Default::default(),
+            start.elapsed(),
+            caller,
+            TrackUsage::SystemError,
+            context,
+            None,
+            mutation_queue_length,
+            mutation_retry_count,
+            will_retry,
         )
         .await;
         Ok(())
@@ -829,10 +872,12 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
         caller: FunctionCaller,
         usage: FunctionUsageTracker,
         context: ExecutionContext,
-        occ_info: OccInfo,
+        mut occ_info: OccInfo,
         mutation_queue_length: Option<usize>,
         mutation_retry_count: usize,
+        will_retry: bool,
     ) {
+        occ_info.retry_count = Some(mutation_retry_count as u64);
         self._log_mutation(
             outcome,
             tables_touched,
@@ -843,6 +888,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             Some(occ_info),
             mutation_queue_length,
             mutation_retry_count,
+            will_retry,
         )
         .await;
     }
@@ -858,6 +904,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
         occ_info: Option<OccInfo>,
         mutation_queue_length: Option<usize>,
         mutation_retry_count: usize,
+        will_retry: bool,
     ) {
         let aggregated = match usage {
             TrackUsage::Track(usage_tracker) => {
@@ -911,6 +958,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context,
             mutation_retry_count: Some(mutation_retry_count),
             occ_info,
+            will_retry,
         };
         self.log_execution(execution, true, true);
     }
@@ -1007,6 +1055,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context: completion.context,
             mutation_retry_count: None,
             occ_info: None,
+            will_retry: false,
         };
         self.log_execution(execution, /* send_console_events */ false, true)
     }
@@ -1167,6 +1216,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context,
             mutation_retry_count: None,
             occ_info: None,
+            will_retry: false,
         };
         self.log_execution(
             execution,
@@ -1245,6 +1295,23 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
         }
     }
 
+    pub fn record_subscription_invalidations(&self, events: Vec<database::InvalidationEvent>) {
+        let ts = self.rt.system_time();
+        let mut inner = self.inner.lock();
+        for event in &events {
+            if let Some(display_name) = event.write_source.as_ref().and_then(|ws| ws.display_name())
+            {
+                let name: MetricName = format!(
+                    "subscription_invalidations:{display_name}:{}",
+                    event.tablet_id
+                );
+                if let Err(e) = inner.metrics.add_counter(&name, ts, event.count as f32) {
+                    Inner::<RT>::log_metrics_error(e);
+                }
+            }
+        }
+    }
+
     pub fn udf_rate(
         &self,
         identifier: UdfIdentifier,
@@ -1260,6 +1327,19 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             UdfRate::Errors => udf_errors_metric(&identifier),
             UdfRate::CacheHits => udf_cache_hits_metric(&identifier),
             UdfRate::CacheMisses => udf_cache_misses_metric(&identifier),
+            UdfRate::SubscriptionInvalidations => {
+                // Aggregate across all tablets for this mutation.
+                let mutation_name = udf_metric_name(&identifier);
+                let by_table = Self::get_subscription_invalidation_counter(
+                    &window,
+                    &metrics,
+                    Some(&mutation_name),
+                )?;
+                if by_table.is_empty() {
+                    return window.resample_counters(&metrics, vec![], true);
+                }
+                return sum_timeseries(&window, by_table.values());
+            },
         };
         let buckets = metrics.query_counter(&name, window.start..window.end)?;
         window.resample_counters(&metrics, buckets, true)
@@ -1369,6 +1449,96 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
         }
 
         Ok(ret)
+    }
+
+    /// Returns the top-k subscription invalidation pairs.
+    /// If `identifier` is provided, filters to that mutation and returns
+    /// top-k by tablet. Otherwise returns top-k by (mutation, tablet) pairs.
+    pub fn subscription_invalidations_top_k(
+        &self,
+        window: MetricsWindow,
+        k: usize,
+        identifier: Option<&UdfIdentifier>,
+    ) -> anyhow::Result<Vec<(String, Timeseries)>> {
+        let metrics = {
+            let inner = self.inner.lock();
+            inner.metrics.clone()
+        };
+        let mutation_filter = identifier.map(udf_metric_name);
+        let mut counters = Self::get_subscription_invalidation_counter(
+            &window,
+            &metrics,
+            mutation_filter.as_deref(),
+        )?;
+
+        let mut overall: HashMap<&str, f64> = HashMap::new();
+        for (key, series) in counters.iter() {
+            let sum = series.iter().filter_map(|&(_, value)| value).sum1();
+            if let Some(total) = sum {
+                overall.insert(key, total);
+            }
+        }
+
+        let top_k = Self::top_k(&overall, k, false);
+
+        let mut ret = vec![];
+        for key in top_k {
+            let series = counters
+                .remove(&key)
+                .expect("everything in topk came from counters");
+            ret.push((key.to_string(), series));
+        }
+
+        if !counters.is_empty() {
+            let rest = sum_timeseries(&window, counters.values())?;
+            ret.push(("_rest".to_string(), rest));
+        }
+
+        Ok(ret)
+    }
+
+    /// Queries `subscription_invalidations:{mutation}:{tablet_id}` metrics.
+    /// If `mutation_filter` is Some, only returns metrics for that mutation
+    /// (with the mutation prefix stripped, so keys are tablet IDs).
+    /// If None, returns all pairs (keys are `{mutation}:{tablet_id}`).
+    fn get_subscription_invalidation_counter(
+        window: &MetricsWindow,
+        metrics: &MetricStore,
+        mutation_filter: Option<&str>,
+    ) -> anyhow::Result<HashMap<String, Timeseries>> {
+        let metric_names = metrics.metric_names_for_type(MetricType::Counter);
+        let prefix = match mutation_filter {
+            Some(mutation) => format!("subscription_invalidations:{mutation}:"),
+            None => "subscription_invalidations:".to_string(),
+        };
+
+        let filtered: Vec<_> = metric_names
+            .iter()
+            .filter(|name| name.starts_with(&prefix))
+            .collect();
+
+        let mut results: HashMap<String, Vec<&CounterBucket>> = HashMap::new();
+        for name in filtered {
+            let result = metrics.query_counter(name, window.start..window.end)?;
+            let key = if mutation_filter.is_some() {
+                // Strip prefix → tablet_id
+                name[prefix.len()..].to_string()
+            } else {
+                // Strip "subscription_invalidations:" → "{mutation}:{tablet_id}"
+                name["subscription_invalidations:".len()..].to_string()
+            };
+            results.insert(key, result);
+        }
+
+        results
+            .into_iter()
+            .map(|(k, v)| {
+                Ok((
+                    k,
+                    window.resample_counters(metrics, v, false /* is_rate */)?,
+                ))
+            })
+            .collect()
     }
 
     fn get_udf_metric_counter(
@@ -2036,7 +2206,7 @@ impl<RT: Runtime> Inner<RT> {
         let mut next_time =
             (since_epoch.as_secs() as f64 * 1e3) + (since_epoch.subsec_nanos() as f64 * 1e-6);
         if let Some((last_time, _)) = self.log.back() {
-            let lower_bound = last_time.next_after(f64::INFINITY);
+            let lower_bound = last_time.next_up();
             if lower_bound > next_time {
                 next_time = lower_bound;
             }
@@ -2161,6 +2331,137 @@ fn outstanding_functions_metric(
         OutstandingFunctionState::Queued => "queued",
     };
     format!("outstanding_functions:{env_str}:{udf_type}:{state_str}")
+}
+
+/// View over `FunctionExecutionLog` that only exposes metrics methods.
+/// Obtained by checking `DeploymentOp::ViewMetrics`.
+pub struct FunctionMetricsLog<'a, RT: Runtime> {
+    log: &'a FunctionExecutionLog<RT>,
+}
+
+impl<'a, RT: Runtime> FunctionMetricsLog<'a, RT> {
+    pub(crate) fn new(log: &'a FunctionExecutionLog<RT>) -> Self {
+        Self { log }
+    }
+
+    pub fn udf_rate(
+        &self,
+        identifier: UdfIdentifier,
+        metric: UdfRate,
+        window: MetricsWindow,
+    ) -> anyhow::Result<Timeseries> {
+        self.log.udf_rate(identifier, metric, window)
+    }
+
+    pub fn cache_hit_percentage(
+        &self,
+        identifier: UdfIdentifier,
+        window: MetricsWindow,
+    ) -> anyhow::Result<Timeseries> {
+        self.log.cache_hit_percentage(identifier, window)
+    }
+
+    pub fn failure_percentage_top_k(
+        &self,
+        window: MetricsWindow,
+        k: usize,
+    ) -> anyhow::Result<Vec<(String, Timeseries)>> {
+        self.log.failure_percentage_top_k(window, k)
+    }
+
+    pub fn cache_hit_percentage_top_k(
+        &self,
+        window: MetricsWindow,
+        k: usize,
+    ) -> anyhow::Result<Vec<(String, Timeseries)>> {
+        self.log.cache_hit_percentage_top_k(window, k)
+    }
+
+    pub fn get_all_function_calls(
+        &self,
+        window: &MetricsWindow,
+    ) -> anyhow::Result<HashMap<String, Timeseries>> {
+        self.log.get_all_function_calls(window)
+    }
+
+    pub fn function_call_count_top_k(
+        &self,
+        window: MetricsWindow,
+        k: usize,
+    ) -> anyhow::Result<Vec<(String, Timeseries)>> {
+        self.log.function_call_count_top_k(window, k)
+    }
+
+    pub fn subscription_invalidations_top_k(
+        &self,
+        window: MetricsWindow,
+        k: usize,
+        identifier: Option<&UdfIdentifier>,
+    ) -> anyhow::Result<Vec<(String, Timeseries)>> {
+        self.log
+            .subscription_invalidations_top_k(window, k, identifier)
+    }
+
+    pub fn latency_percentiles(
+        &self,
+        identifier: UdfIdentifier,
+        percentiles: Vec<Percentile>,
+        window: MetricsWindow,
+    ) -> anyhow::Result<BTreeMap<Percentile, Timeseries>> {
+        self.log
+            .latency_percentiles(identifier, percentiles, window)
+    }
+
+    pub fn table_rate(
+        &self,
+        table_name: TableName,
+        metric: TableRate,
+        window: MetricsWindow,
+    ) -> anyhow::Result<Timeseries> {
+        self.log.table_rate(table_name, metric, window)
+    }
+
+    pub fn scheduled_job_lag(&self, window: MetricsWindow) -> anyhow::Result<Timeseries> {
+        self.log.scheduled_job_lag(window)
+    }
+
+    pub fn function_concurrency(
+        &self,
+        window: MetricsWindow,
+    ) -> anyhow::Result<BTreeMap<String, Timeseries>> {
+        self.log.function_concurrency(window)
+    }
+
+    pub fn udf_summary(
+        &self,
+        cursor: Option<CursorMs>,
+    ) -> (Option<UdfMetricSummary>, Option<CursorMs>) {
+        self.log.udf_summary(cursor)
+    }
+}
+
+/// View over `FunctionExecutionLog` that only exposes log entry streaming
+/// methods. Obtained by checking `DeploymentOp::ViewLogs`.
+pub struct FunctionEntriesLog<'a, RT: Runtime> {
+    log: &'a FunctionExecutionLog<RT>,
+}
+
+impl<'a, RT: Runtime> FunctionEntriesLog<'a, RT> {
+    pub(crate) fn new(log: &'a FunctionExecutionLog<RT>) -> Self {
+        Self { log }
+    }
+
+    pub async fn stream(&self, cursor: CursorMs) -> (Vec<FunctionExecution>, CursorMs) {
+        self.log.stream(cursor).await
+    }
+
+    pub async fn stream_parts(&self, cursor: CursorMs) -> (Vec<FunctionExecutionPart>, CursorMs) {
+        self.log.stream_parts(cursor).await
+    }
+
+    pub fn latest_cursor(&self) -> CursorMs {
+        self.log.latest_cursor()
+    }
 }
 
 fn udf_metric_name(identifier: &UdfIdentifier) -> String {

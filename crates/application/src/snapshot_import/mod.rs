@@ -96,7 +96,10 @@ use futures::{
     StreamExt,
     TryStreamExt,
 };
-use keybroker::Identity;
+use keybroker::{
+    DeploymentOp,
+    Identity,
+};
 use model::{
     deployment_audit_log::{
         types::DeploymentAuditLogEvent,
@@ -188,8 +191,6 @@ mod prepare_component;
 mod progress;
 mod schema_constraints;
 mod table_change;
-#[cfg(test)]
-mod tests;
 mod worker;
 
 pub use worker::SnapshotImportWorker;
@@ -503,9 +504,7 @@ pub async fn start_stored_import<RT: Runtime>(
     fq_object_key: FullyQualifiedObjectKey,
     requestor: ImportRequestor,
 ) -> anyhow::Result<DeveloperDocumentId> {
-    if !(identity.is_admin() || identity.is_system()) {
-        anyhow::bail!(ImportError::Unauthorized);
-    }
+    identity.require_operation(DeploymentOp::ImportBackups)?;
     let (_, id, _) = application
         .database
         .execute_with_overloaded_retries(
@@ -537,9 +536,7 @@ pub async fn perform_import<RT: Runtime>(
     identity: Identity,
     import_id: DeveloperDocumentId,
 ) -> anyhow::Result<()> {
-    if !identity.is_admin() {
-        anyhow::bail!(ImportError::Unauthorized);
-    }
+    identity.require_operation(DeploymentOp::ImportBackups)?;
     application
         .database
         .execute_with_overloaded_retries(
@@ -565,9 +562,7 @@ pub async fn cancel_import<RT: Runtime>(
     identity: Identity,
     import_id: DeveloperDocumentId,
 ) -> anyhow::Result<()> {
-    if !identity.is_admin() {
-        anyhow::bail!(ImportError::Unauthorized);
-    }
+    identity.require_operation(DeploymentOp::ImportBackups)?;
     application
         .database
         .execute_with_overloaded_retries(
@@ -791,7 +786,7 @@ async fn import_objects<RT: Runtime>(
         .then(async |(component_path, mut table_name, objects)| {
             let component_id = prepare_component_for_import(database, &component_path).await?;
             // Remap the storage table; this is a bit hacky
-            if table_name == *FILE_STORAGE_VIRTUAL_TABLE {
+            if table_name == FILE_STORAGE_VIRTUAL_TABLE {
                 table_name = FILE_STORAGE_TABLE.clone();
             }
             anyhow::Ok((component_path, component_id, table_name, objects.peekable()))
@@ -801,7 +796,7 @@ async fn import_objects<RT: Runtime>(
 
     let (tables_tables, mut tables) = tables
         .into_iter()
-        .partition::<Vec<_>, _>(|(_, _, table_name, _)| *table_name == *TABLES_TABLE);
+        .partition::<Vec<_>, _>(|(_, _, table_name, _)| *table_name == TABLES_TABLE);
 
     database
         .runtime()
@@ -1299,9 +1294,9 @@ async fn import_single_table<RT: Runtime>(
         .await;
     }
 
-    anyhow::ensure!(*table_name != *TABLES_TABLE);
+    anyhow::ensure!(*table_name != TABLES_TABLE);
 
-    if *table_name == *FILE_STORAGE_TABLE {
+    if *table_name == FILE_STORAGE_TABLE {
         let storage_files = storage_files_by_component
             .remove(component_path)
             .unwrap_or_default();
@@ -1421,7 +1416,7 @@ async fn insert_import_objects<RT: Runtime>(
     }
     let object_ids: Vec<_> = objects_to_insert
         .iter()
-        .filter_map(|object| object.get(&**ID_FIELD))
+        .filter_map(|object| object.get(&*ID_FIELD))
         .collect();
     let object_ids_dedup: BTreeSet<_> = object_ids.iter().collect();
     if object_ids_dedup.len() < object_ids.len() {
@@ -1466,14 +1461,14 @@ async fn prepare_table_for_import<RT: Runtime>(
     import_id: Option<ResolvedDocumentId>,
 ) -> anyhow::Result<(TabletIdAndTableNumber, u64)> {
     anyhow::ensure!(
-        table_name == &*FILE_STORAGE_TABLE || !table_name.is_system(),
+        table_name == &FILE_STORAGE_TABLE || !table_name.is_system(),
         ErrorMetadata::bad_request(
             "InvalidTableName",
             format!("Invalid table name {table_name} starts with metadata prefix '_'")
         )
     );
-    let display_table_name = if table_name == &*FILE_STORAGE_TABLE {
-        &*FILE_STORAGE_VIRTUAL_TABLE
+    let display_table_name = if table_name == &FILE_STORAGE_TABLE {
+        &FILE_STORAGE_VIRTUAL_TABLE
     } else {
         table_name
     };
@@ -1663,7 +1658,7 @@ async fn table_number_for_import(
 ) -> Option<TableNumber> {
     let first_object = Pin::new(objects).peek().await?.as_ref().ok()?;
     let object = first_object.as_object()?;
-    let first_id = object.get(&**ID_FIELD)?;
+    let first_id = object.get(&*ID_FIELD)?;
     let JsonValue::String(id) = first_id else {
         return None;
     };

@@ -21,6 +21,7 @@ authentication = { path = "crates/authentication" }
 aws-config = { version = "1.6", default-features = false, features = [ "client-hyper", "default-https-client", "rustls", "rt-tokio", "sso" ] }
 aws-credential-types = "1"
 aws-lc-rs = { version = "1.13", default-features = false, features = [ "aws-lc-sys", "prebuilt-nasm" ] }
+aws-sdk-firehose = { version = "1.72", default-features = false, features = [ "default-https-client", "rt-tokio" ] }
 aws-sdk-s3 = { version = "1.83", default-features = false, features = [ "default-https-client", "rt-tokio", "sigv4a" ] }
 aws-smithy-http = "0.62.0"
 aws-smithy-types-convert = { version = "0.60", features = [ "convert-streams" ] }
@@ -49,7 +50,7 @@ clusters = { path = "crates/clusters" }
 cmd_util = { path = "crates/cmd_util" }
 colored = "3"
 common = { path = "crates/common" }
-compact_str = "0.9.0"
+compact_str = { version = "0.9.0", features = [ "serde" ] }
 const-oid = "0.9.6"
 const_format = { version = "0.2.34", features = [ "fmt" ] }
 convex = { path = "crates/convex" }
@@ -61,11 +62,12 @@ csf = "0.1.11"
 cstr = "0.2.11"
 csv-async = "1.2"
 ctrlc = "3.4"
+dashmap = "6"
 data-url = "0.3.1"
 database = { path = "crates/database" }
 db_connection = { path = "crates/db_connection" }
-deno_core = "0.366.0"
-deno_core_icudata = "0.74.0"
+deno_core = "0.398.0"
+deno_core_icudata = "0.77.0"
 derive_more = { version = "2", features = [ "full" ] }
 divan = "0.1.14"
 dotenvy = "0.15.7"
@@ -77,7 +79,7 @@ errors = { path = "crates/errors" }
 event-listener = "5.3.1"
 events = { path = "crates/events" }
 exports = { path = "crates/exports" }
-fastrace = { git = "https://github.com/get-convex/fastrace", rev = "8ceac57a6371c96db3778827e31ec0b3ac760075", version = "0.7", features = [ "enable" ] }
+fastrace = { version = "0.7", features = [ "enable" ] }
 fastrand = "2.3.0"
 file_storage = { path = "crates/file_storage" }
 fivetran_common = { path = "crates/fivetran_common" }
@@ -85,7 +87,6 @@ fivetran_destination = { path = "crates/fivetran_destination" }
 fivetran_source = { path = "crates/fivetran_source" }
 flate2 = { version = "1.1", features = [ "zlib-rs" ] }
 flexbuffers = "25"
-float_next_after = "1.0.0"
 fnv = "1.0.7"
 function_runner = { path = "crates/function_runner" }
 futures = "0.3"
@@ -123,7 +124,7 @@ libc = "0.2"
 libsodium-sys-stable = { version = "1.22.2", features = [ "minimal" ] }
 log_interleaver = { path = "crates/log_interleaver" }
 log_streaming = { path = "crates/log_streaming" }
-lru = "0.16.0"
+lru = "0.17.0"
 lz4_flex = "0.13"
 maplit = "1"
 memchr = "2.7"
@@ -137,10 +138,9 @@ moka = { version = "0.12", features = [ "future", "sync" ] }
 multer = "3.1.0"
 must-let = { git = "https://github.com/sujayakar/must-let", rev = "5b487d78db235e396e61dd03ce261ced0eafff9d" }
 mysql = { path = "crates/mysql" }
-mysql_async = { git = "https://github.com/goffrie/mysql_async", rev = "90ff86d613d8c466baa4da7b0c49c148bc14a019", default-features = false, features = [ "default-rustls" ] }
+mysql_async = { git = "https://github.com/get-convex/mysql_async", rev = "deac775566d62246248a48fd3df58d6b5c03b729", default-features = false, features = [ "default-rustls" ] }
 native-tls = { version = "0.2", features = [ "alpn", "vendored" ] }
 node_executor = { path = "crates/node_executor" }
-num_cpus = "1.16.0"
 oauth2 = { version = "5", default-features = false, features = [ "reqwest" ] }
 once_cell = "1.19"
 openidconnect = { git = "https://github.com/get-convex/openidconnect-rs", rev = "15a9c551eafcf3b60d307feb94332352ac56c099", default-features = false, features = [ "accept-rfc3339-timestamps", "timing-resistant-secret-traits", "reqwest" ] }
@@ -152,29 +152,27 @@ pb = { path = "crates/pb" }
 pb_build = { path = "crates/pb_build" }
 pb_extras = { path = "crates/pb_extras" }
 performance_stats = { path = "crates/performance_stats" }
-phf = { version = "0.11.2", features = [ "macros" ] }
+phf = { version = "0.13.0", features = [ "macros" ] }
 pin-project = "1"
 pkcs8 = "0.10.2"
 postgres = { path = "crates/postgres" }
 postgres-protocol = { version = "0.6" }
 pretty_assertions = "1"
-proc-macro2 = { version = "1.0" }
 prometheus = { git = "https://github.com/get-convex/rust-prometheus", rev = "8794d2bbf2a5a9adc501067ee4440dde6b5e6e25" }
 proptest = "1"
 proptest-derive = "0.5.0"
 proptest-http = { git = "https://github.com/nipunn1313/proptest-http", rev = "0e658bd4f6dbb73bdd3be66f0d2c34c00cc3a446" }
-prost = { version = "0.13", features = [ "no-recursion-limit" ] }
-prost-reflect = { version = "0.15.0", features = [ "text-format", "miette" ] }
-prost-types = "0.13"
-pyo3 = "0.27"
-pyo3-async-runtimes = { version = "0.27", features = [ "tokio-runtime" ] }
-pyo3-build-config = { version = "0.27", features = [ "resolve-config" ] }
+prost = { version = "0.14", features = [ "no-recursion-limit" ] }
+prost-reflect = { version = "0.16", features = [ "text-format", "miette" ] }
+prost-types = "0.14"
+pyo3 = "0.28"
+pyo3-async-runtimes = { version = "0.28", features = [ "tokio-runtime" ] }
+pyo3-build-config = { version = "0.28", features = [ "resolve-config" ] }
 qdrant_common = { git = "https://github.com/get-convex/qdrant", rev = "a5d1b7bc9fd04861316b6455204c8a946d43117e", package = "qdrant_common" }
 qdrant_segment = { git = "https://github.com/get-convex/qdrant", rev = "a5d1b7bc9fd04861316b6455204c8a946d43117e", package = "segment" }
 quote = "1.0"
 rand = "0.9"
 rand_chacha = "0.9.0"
-rand_distr = "0.5"
 rc-zip = { version = "5", features = [ "deflate", "deflate64", "zstd" ] }
 ref-cast = "1.0.20"
 regex = "1"
@@ -187,6 +185,7 @@ rustls = { version = "0.23", default-features = false }
 rustls-native-certs = { version = "0.8" }
 rustls-pki-types = { version = "1" }
 saffron = { git = "https://github.com/get-convex/saffron", rev = "1d842379919fb5c1988ac127cebd6167b1eb9bec", features = [ "std" ] }
+scopeguard = { version = "1.1" }
 search = { path = "crates/search" }
 semver = { version = "1", features = [ "serde" ] }
 sentry = { version = "0.46", features = [ "anyhow", "tower", "tower-http" ] }
@@ -208,7 +207,7 @@ spki = { version = "0.7.3", features = [ "std" ] }
 sqlite = { path = "crates/sqlite" }
 storage = { path = "crates/storage" }
 storage_zip_reader = { path = "crates/storage_zip_reader" }
-strum = { version = "0.27", features = [ "derive" ] }
+strum = { version = "0.28", features = [ "derive" ] }
 sucds = { version = "0.8.1", features = [ "intrinsics" ] }
 syn = { version = "2.0", features = [ "full" ] }
 sync = { path = "crates/sync" }
@@ -230,11 +229,13 @@ tokio-postgres = { version = "0.7.13", features = [ "with-serde_json-1" ] }
 tokio-postgres-rustls = { version = "0.13" }
 tokio-stream = { version = "0.1", features = [ "io-util", "sync", "signal" ] }
 tokio-tungstenite = { version = "0.28.0", features = [ "native-tls-vendored" ] }
-tokio-util = { version = "0.7.13", features = [ "io", "rt", "io-util" ] }
-tonic = { package = "tonic", version = "0.13", features = [ "gzip", "tls-aws-lc", "tls-native-roots" ] }
-tonic-build = "0.13"
-tonic-health = "0.13"
-tonic-middleware = "0.3"
+tokio-util = { version = "0.7.13", features = [ "io", "rt", "io-util", "join-map" ] }
+tonic = { package = "tonic", version = "0.14", features = [ "gzip", "tls-aws-lc", "tls-native-roots" ] }
+tonic-build = "0.14"
+tonic-health = "0.14"
+tonic-middleware = "0.4"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
 tower = { version = "0.5.2", features = [ "limit", "timeout", "util" ] }
 tower-cookies = "0.11"
 tower-http = { version = "0.6", features = [ "trace", "cors", "decompression-br", "limit" ] }

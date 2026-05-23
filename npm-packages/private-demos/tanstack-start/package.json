@@ -26,15 +26,15 @@
   },
   "devDependencies": {
     "@convex-dev/eslint-plugin": "workspace:*",
-    "@tanstack/eslint-config": "^0.3.0",
+    "@tanstack/eslint-config": "^0.4.0",
     "@types/react": "^18.2.65",
     "@types/react-dom": "^18.2.21",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitejs/plugin-react": "^4.2.1",
     "eslint": "^9.37.0",
-    "prettier": "^3.8.0",
+    "prettier": "3.8.1",
     "typescript": "^5.9.2",
-    "vite-tsconfig-paths": "^5.1.3",
-    "vite": "^7.1.11"
+    "vite-tsconfig-paths": "^6.0.0",
+    "vite": "^7.3.2"
   }
 }

@@ -117,22 +117,39 @@ impl<RT: Runtime> PostHogLogsSink<RT> {
     }
 
     async fn verify_creds(&mut self) -> anyhow::Result<()> {
-        // Send a minimal OTLP request with an empty logRecords array
-        let deployment_metadata = self.deployment_metadata.lock().clone();
+        // PostHog's ingestion endpoints return 200 even for invalid project tokens,
+        // so we use the /decide endpoint which actually validates the token.
+        let mut decide_url = self.endpoint_url.clone();
+        decide_url.set_path("/decide");
+        decide_url.set_query(Some("v=3"));
+
         let payload = json!({
-            "resourceLogs": [{
-                "resource": {
-                    "attributes": self.build_resource_attributes(&deployment_metadata)
-                },
-                "scopeLogs": [{
-                    "scope": { "name": "convex" },
-                    "logRecords": []
-                }]
-            }]
+            "api_key": self.api_key,
+            "distinct_id": "convex-verification",
         });
-        self.send_batch(serde_json::to_vec(&payload)?, true, false)
-            .await?;
-        Ok(())
+        let header_map = HeaderMap::from_iter([(CONTENT_TYPE, APPLICATION_JSON_CONTENT_TYPE)]);
+        let body = Bytes::from(serde_json::to_vec(&payload)?);
+
+        let response = self
+            .fetch_client
+            .fetch(HttpRequestStream {
+                url: decide_url,
+                method: http::Method::POST,
+                headers: header_map,
+                body: Box::pin(futures::stream::once(async { Ok(body) })),
+                signal: Box::pin(futures::future::pending()),
+            })
+            .await;
+
+        match response.and_then(categorize_http_response_stream) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "PostHogLogsInvalidProjectToken",
+                    format!("Failed to verify PostHog project token: {e}"),
+                ));
+            },
+        }
     }
 
     async fn go(mut self) {
@@ -221,6 +238,7 @@ impl<RT: Runtime> PostHogLogsSink<RT> {
             StructuredLogEvent::Exception { .. } => "exception",
             StructuredLogEvent::StorageApiBandwidth { .. } => "storage_bandwidth",
             StructuredLogEvent::LogStreamEgress { .. } => "log_stream_egress",
+            StructuredLogEvent::CustomAudit { .. } => "custom_audit",
         };
         attributes.push(json!({"key": "convex.topic", "value": {"stringValue": topic}}));
 
@@ -280,19 +298,14 @@ impl<RT: Runtime> PostHogLogsSink<RT> {
             }]
         });
 
-        self.send_batch(serde_json::to_vec(&payload)?, false, track_egress)
+        self.send_batch(serde_json::to_vec(&payload)?, track_egress)
             .await?;
         crate::metrics::posthog_logs_sink_logs_sent(batch_size);
 
         Ok(())
     }
 
-    async fn send_batch(
-        &mut self,
-        batch_json: Vec<u8>,
-        is_verification: bool,
-        track_egress: bool,
-    ) -> anyhow::Result<()> {
+    async fn send_batch(&mut self, batch_json: Vec<u8>, track_egress: bool) -> anyhow::Result<()> {
         let header_map = HeaderMap::from_iter([
             (
                 AUTHORIZATION,
@@ -315,10 +328,7 @@ impl<RT: Runtime> PostHogLogsSink<RT> {
                 })
                 .await;
 
-            if !is_verification
-                && track_egress
-                && let Ok(r) = &response
-            {
+            if track_egress && let Ok(r) = &response {
                 let num_bytes_egress = r.request_size.load(Ordering::Relaxed);
                 utils::track_log_sink_bandwidth(
                     num_bytes_egress,
@@ -353,291 +363,5 @@ impl<RT: Runtime> PostHogLogsSink<RT> {
             "PostHogLogsMaxRetriesExceeded",
             "Exceeded max number of retry requests to PostHog Logs. Please try again later."
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        sync::Arc,
-        time::Duration,
-    };
-
-    use common::{
-        http::{
-            fetch::StaticFetchClient,
-            HttpRequestStream,
-            HttpResponse,
-        },
-        log_streaming::LogEvent,
-        runtime::{
-            testing::TestRuntime,
-            Runtime,
-        },
-    };
-    use errors::ErrorMetadata;
-    use futures::FutureExt;
-    use http::{
-        header::AUTHORIZATION,
-        StatusCode,
-    };
-    use model::log_sinks::types::posthog_logs::PostHogLogsConfig;
-    use parking_lot::Mutex;
-    use reqwest::header::HeaderMap;
-    use serde_json::Value as JsonValue;
-
-    use crate::{
-        sinks::{
-            posthog_logs::PostHogLogsSink,
-            utils::EgressCounter,
-        },
-        LoggingDeploymentMetadata,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_posthog_logs_requests(rt: TestRuntime) -> anyhow::Result<()> {
-        let config = PostHogLogsConfig {
-            api_key: "phc_test_key".to_string().into(),
-            host: Some("https://us.i.posthog.com".to_string()),
-            service_name: Some("test-service".to_string()),
-        };
-
-        let topic_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-
-        let mut fetch_client = StaticFetchClient::new();
-        {
-            let buffer = Arc::clone(&topic_buffer);
-            let url: reqwest::Url = "https://us.i.posthog.com/i/v1/logs".parse()?;
-            let handler = move |request: HttpRequestStream| {
-                let buffer = Arc::clone(&buffer);
-                async move {
-                    let request = request.into_http_request().await.unwrap();
-                    let Some(true) = request
-                        .headers
-                        .get(AUTHORIZATION)
-                        .map(|v| v.eq("Bearer phc_test_key"))
-                    else {
-                        anyhow::bail!(ErrorMetadata::forbidden("NoAuth", "bad api key"));
-                    };
-
-                    let json: JsonValue = serde_json::from_slice(&request.body.unwrap()).unwrap();
-
-                    // Verify OTLP structure
-                    let resource_logs = json["resourceLogs"].as_array().unwrap();
-                    assert_eq!(resource_logs.len(), 1);
-
-                    let resource = &resource_logs[0]["resource"];
-                    let attrs = resource["attributes"].as_array().unwrap();
-                    // Check service.name attribute exists
-                    let service_attr = attrs.iter().find(|a| a["key"] == "service.name").unwrap();
-                    assert_eq!(service_attr["value"]["stringValue"], "test-service");
-
-                    let scope_logs = resource_logs[0]["scopeLogs"].as_array().unwrap();
-                    let log_records = scope_logs[0]["logRecords"].as_array().unwrap();
-
-                    if !log_records.is_empty() {
-                        for record in log_records {
-                            let attrs = record["attributes"].as_array().unwrap();
-                            let topic_attr =
-                                attrs.iter().find(|a| a["key"] == "convex.topic").unwrap();
-                            buffer.lock().push(
-                                topic_attr["value"]["stringValue"]
-                                    .as_str()
-                                    .unwrap()
-                                    .to_string(),
-                            );
-                        }
-                    } else {
-                        buffer.lock().push("empty_verification".to_string());
-                    }
-
-                    Ok(HttpResponse {
-                        status: StatusCode::OK,
-                        headers: HeaderMap::new(),
-                        body: Some("success".to_string().into_bytes()),
-                        url: None,
-                        request_size: "success".len() as u64,
-                    }
-                    .into())
-                }
-                .boxed()
-            };
-            fetch_client.register_http_route(url, reqwest::Method::POST, handler);
-        }
-
-        let meta = Arc::new(Mutex::new(LoggingDeploymentMetadata {
-            deployment_name: "test-deployment".to_owned(),
-            deployment_type: None,
-            deployment_ref: None,
-            project_name: None,
-            project_slug: None,
-            deployment_region: Some("test".to_string()),
-        }));
-
-        let egress_counter = EgressCounter::default();
-        let sink = PostHogLogsSink::start(
-            rt.clone(),
-            config,
-            Arc::new(fetch_client),
-            meta.clone(),
-            egress_counter,
-            true,
-        )
-        .await?;
-
-        // Verification sends empty logRecords
-        assert_eq!(
-            &*topic_buffer.lock(),
-            &vec!["empty_verification".to_string()]
-        );
-
-        // Send a regular log event (should pass default_log_filter)
-        sink.events_sender
-            .send(vec![Arc::new(LogEvent::default_for_verification(&rt)?)])
-            .await?;
-        rt.wait(Duration::from_secs(1)).await;
-
-        // Send an exception event (should be filtered out by default_log_filter)
-        sink.events_sender
-            .send(vec![Arc::new(LogEvent::sample_exception(&rt)?)])
-            .await?;
-        rt.wait(Duration::from_secs(1)).await;
-
-        // Only the verification event should have been sent (not the exception)
-        assert_eq!(
-            &*topic_buffer.lock(),
-            &vec!["empty_verification".to_string(), "verification".to_string(),]
-        );
-
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_posthog_logs_bad_api_key(rt: TestRuntime) -> anyhow::Result<()> {
-        let config = PostHogLogsConfig {
-            api_key: "phc_test_key".to_string().into(),
-            host: Some("https://us.i.posthog.com".to_string()),
-            service_name: None,
-        };
-
-        let mut fetch_client = StaticFetchClient::new();
-        let url: reqwest::Url = "https://us.i.posthog.com/i/v1/logs".parse()?;
-        let handler = |request: HttpRequestStream| {
-            async move {
-                let Some(true) = request
-                    .headers
-                    .get(AUTHORIZATION)
-                    .map(|v| v.eq("INCORRECT_api_key"))
-                else {
-                    anyhow::bail!(ErrorMetadata::forbidden("NoAuth", "bad api key"));
-                };
-                Ok(HttpResponse {
-                    status: StatusCode::OK,
-                    headers: HeaderMap::new(),
-                    body: Some("success!".to_string().into_bytes()),
-                    url: None,
-                    request_size: "success!".len() as u64,
-                }
-                .into())
-            }
-            .boxed()
-        };
-        fetch_client.register_http_route(url, reqwest::Method::POST, Box::new(handler));
-
-        let meta = Arc::new(Mutex::new(LoggingDeploymentMetadata {
-            deployment_name: "test-deployment".to_owned(),
-            deployment_type: None,
-            deployment_ref: None,
-            project_name: None,
-            project_slug: None,
-            deployment_region: Some("test".to_string()),
-        }));
-
-        let egress_counter = EgressCounter::default();
-        assert!(PostHogLogsSink::start(
-            rt.clone(),
-            config,
-            Arc::new(fetch_client),
-            meta,
-            egress_counter,
-            true,
-        )
-        .await
-        .is_err());
-
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_posthog_logs_tracks_bandwidth(rt: TestRuntime) -> anyhow::Result<()> {
-        let config = PostHogLogsConfig {
-            api_key: "phc_test_key".to_string().into(),
-            host: Some("https://us.i.posthog.com".to_string()),
-            service_name: Some("test-service".to_string()),
-        };
-
-        let actual_request_size = Arc::new(Mutex::new(0u64));
-
-        let mut fetch_client = StaticFetchClient::new();
-        let url: reqwest::Url = "https://us.i.posthog.com/i/v1/logs".parse()?;
-        let size_tracker = actual_request_size.clone();
-        let handler = move |request: HttpRequestStream| {
-            let size_tracker = size_tracker.clone();
-            async move {
-                let request = request.into_http_request().await.unwrap();
-                let request_size = request.body.as_ref().map(|b| b.len()).unwrap_or(0) as u64;
-                *size_tracker.lock() = request_size;
-
-                Ok(HttpResponse {
-                    status: StatusCode::OK,
-                    headers: HeaderMap::new(),
-                    body: Some("success".to_string().into_bytes()),
-                    url: None,
-                    request_size,
-                }
-                .into())
-            }
-            .boxed()
-        };
-        fetch_client.register_http_route(url, reqwest::Method::POST, Box::new(handler));
-
-        let meta = Arc::new(Mutex::new(LoggingDeploymentMetadata {
-            deployment_name: "test-deployment".to_owned(),
-            deployment_type: None,
-            deployment_ref: None,
-            project_name: None,
-            project_slug: None,
-            deployment_region: Some("test".to_string()),
-        }));
-
-        let egress_counter = EgressCounter::default();
-
-        let sink = PostHogLogsSink::start(
-            rt.clone(),
-            config,
-            Arc::new(fetch_client),
-            meta.clone(),
-            egress_counter.clone(),
-            true,
-        )
-        .await?;
-
-        sink.events_sender
-            .send(vec![Arc::new(LogEvent::default_for_verification(&rt)?)])
-            .await?;
-        rt.wait(Duration::from_secs(1)).await;
-
-        let actual_size = *actual_request_size.lock();
-        assert!(
-            actual_size > 0,
-            "Expected actual request size to be non-zero"
-        );
-        let tracked = egress_counter.load(std::sync::atomic::Ordering::Relaxed);
-        assert_eq!(
-            tracked, actual_size,
-            "Expected egress counter ({tracked}) to match actual request size ({actual_size})",
-        );
-
-        Ok(())
     }
 }

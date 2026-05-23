@@ -1,6 +1,6 @@
 import { useRouter } from "next/router";
 import { LDMultiKindContext } from "launchdarkly-js-sdk-common";
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 import { createGlobalState } from "react-use";
 import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
@@ -8,6 +8,7 @@ import { useProfile } from "api/profile";
 import { useCurrentTeam } from "api/teams";
 import { useCurrentProject } from "api/projects";
 import { useCurrentDeployment } from "api/deployments";
+import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 
 export const useGlobalLDContext = createGlobalState<
   LDMultiKindContext | undefined
@@ -69,10 +70,15 @@ export const useLDContext = () => {
 
 export const useLDContextWithDeployment = () => {
   const ctx = useLDContext();
-  const serverVersion = useQuery(udfs.getVersion.default);
+  const { useIsOperationAllowed } = useContext(DeploymentInfoContext);
+  const canViewData = useIsOperationAllowed("ViewData");
+  const serverVersion = useQuery(
+    udfs.getVersion.default,
+    canViewData ? undefined : "skip",
+  );
   const deployment = useCurrentDeployment();
 
-  if (!ctx || serverVersion === undefined || !deployment) {
+  if (!ctx || (canViewData && serverVersion === undefined) || !deployment) {
     return undefined;
   }
 
@@ -81,7 +87,7 @@ export const useLDContextWithDeployment = () => {
     key: deployment.name,
     type: deployment.deploymentType,
     createTime: deployment.createTime,
-    serverVersion,
+    serverVersion: serverVersion ?? null,
     // Same as serverVersion, but renaming to npmPackageVersion.
     // Keeping both here for now to avoid breaking changes to existing
     // flag configs.

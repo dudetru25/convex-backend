@@ -23,7 +23,7 @@ import {
 import { captureMessage } from "@sentry/nextjs";
 import startCase from "lodash/startCase";
 import { Link } from "@ui/Link";
-import { useDeploymentById } from "api/deployments";
+import { useDeploymentByName } from "api/deployments";
 import { BackupIdentifier } from "elements/BackupIdentifier";
 import { TeamMemberLink } from "elements/TeamMemberLink";
 import { Tooltip } from "@ui/Tooltip";
@@ -79,6 +79,7 @@ export function AuditLogItem({
                   inline
                   variant="neutral"
                   size="xs"
+                  aria-label={open ? "Hide details" : "Show details"}
                 >
                   {open ? <ChevronUpIcon /> : <ChevronDownIcon />}
                 </DisclosureButton>
@@ -359,7 +360,7 @@ function EntryAction({
       return (
         <span>
           changed the subscription plan from{" "}
-          <span className="font-semibold">{metadata.previous?.plan}</span>·to{" "}
+          <span className="font-semibold">{metadata.previous?.plan}</span> to{" "}
           <span className="font-semibold">{metadata.current?.plan}</span>
         </span>
       );
@@ -402,6 +403,8 @@ function EntryAction({
         </span>
       );
     case "createTeamAccessToken":
+    case "createProjectAccessToken":
+    case "createDeploymentAccessToken":
       return (
         <span>
           {metadata.current && (
@@ -414,8 +417,10 @@ function EntryAction({
         </span>
       );
     case "viewTeamAccessToken":
+    case "viewProjectAccessToken":
+    case "viewDeploymentAccessToken":
       // we expect these to never be logged
-      captureMessage("Found viewTeamAccessToken audit log", "error");
+      captureMessage("Found viewAccessToken audit log", "error");
       return (
         <span>
           {metadata.current && (
@@ -428,6 +433,8 @@ function EntryAction({
         </span>
       );
     case "updateTeamAccessToken":
+    case "updateProjectAccessToken":
+    case "updateDeploymentAccessToken":
       return (
         <span>
           {metadata.current && (
@@ -440,6 +447,8 @@ function EntryAction({
         </span>
       );
     case "deleteTeamAccessToken":
+    case "deleteProjectAccessToken":
+    case "deleteDeploymentAccessToken":
       return (
         <span>
           {metadata.previous && (
@@ -459,10 +468,10 @@ function EntryAction({
           : metadata.previous
             ? "deleted"
             : "requested";
-      const deploymentId =
-        metadata.current?.sourceDeploymentId ||
-        metadata.previous?.sourceDeploymentId;
-      if (!deploymentId) {
+      const deploymentName =
+        metadata.current?.sourceDeploymentName ||
+        metadata.previous?.sourceDeploymentName;
+      if (!deploymentName) {
         captureMessage(`Found malformed metadata for ${action}`, "error");
         return <UnhandledAction action={action} />;
       }
@@ -471,7 +480,7 @@ function EntryAction({
           {verb} a backup of{" "}
           <DeploymentSettingsLink
             team={team}
-            deploymentId={deploymentId}
+            deploymentName={deploymentName}
             urlSuffix="/backups"
           />
         </span>
@@ -479,9 +488,9 @@ function EntryAction({
     }
     case "restoreFromCloudBackup":
       if (
-        !metadata.current?.targetDeploymentId ||
+        !metadata.current?.targetDeploymentName ||
         !metadata.current?.backup ||
-        !metadata.current?.backup?.sourceDeploymentId ||
+        !metadata.current?.backup?.sourceDeploymentName ||
         !metadata.current?.backup?.requestedTime
       ) {
         captureMessage(`Found malformed metadata for ${action}`, "error");
@@ -492,7 +501,7 @@ function EntryAction({
           restored into{" "}
           <DeploymentSettingsLink
             team={team}
-            deploymentId={metadata.current?.targetDeploymentId}
+            deploymentName={metadata.current?.targetDeploymentName}
             urlSuffix="/backups"
           />{" "}
           from the backup <BackupIdentifier backup={metadata.current?.backup} />
@@ -501,8 +510,8 @@ function EntryAction({
     case "configurePeriodicBackup":
     case "disablePeriodicBackup": {
       if (
-        !metadata.current?.sourceDeploymentId &&
-        !metadata.previous?.sourceDeploymentId
+        !metadata.current?.sourceDeploymentName &&
+        !metadata.previous?.sourceDeploymentName
       ) {
         captureMessage(`Found malformed metadata for ${action}`, "error");
         return <UnhandledAction action={action} />;
@@ -518,9 +527,9 @@ function EntryAction({
           {verb} a periodic backup schedule for{" "}
           <DeploymentSettingsLink
             team={team}
-            deploymentId={
-              metadata.current?.sourceDeploymentId ||
-              metadata.previous?.sourceDeploymentId
+            deploymentName={
+              metadata.current?.sourceDeploymentName ||
+              metadata.previous?.sourceDeploymentName
             }
             urlSuffix="/backups"
           />{" "}
@@ -657,6 +666,26 @@ function EntryAction({
     }
     case "receiveDeployment": {
       return <span>received a deployment from another project</span>;
+    }
+    case "createCustomRole":
+    case "updateCustomRole":
+    case "deleteCustomRole": {
+      const name = metadata.current?.name || metadata.previous?.name;
+      if (!name) {
+        captureMessage(`Found malformed metadata for ${action}`, "error");
+        return <UnhandledAction action={action} />;
+      }
+      const verb =
+        action === "createCustomRole"
+          ? "created"
+          : action === "updateCustomRole"
+            ? "updated"
+            : "deleted";
+      return (
+        <span>
+          {verb} the custom role <span className="font-semibold">{name}</span>
+        </span>
+      );
     }
     default:
       action satisfies never;
@@ -869,14 +898,14 @@ function deploymentDisplayName(
 }
 function DeploymentSettingsLink({
   team,
-  deploymentId,
+  deploymentName,
   urlSuffix = "",
 }: {
   team: TeamResponse;
-  deploymentId: number;
+  deploymentName: string;
   urlSuffix?: string;
 }) {
-  const deployment = useDeploymentById(team.id, deploymentId);
+  const deployment = useDeploymentByName(deploymentName);
   const { project, isLoading: isLoadingProject } = useProjectById(
     deployment?.projectId,
   );
@@ -892,7 +921,7 @@ function DeploymentSettingsLink({
   if (!project) {
     captureMessage(
       `Malformed deploy key audit log entry:
-      deployment ${deploymentId} has project id ${deployment.projectId}
+      deployment ${deploymentName} has project id ${deployment.projectId}
       which is not found within the projects of team ${team.id}`,
       "error",
     );
@@ -945,27 +974,16 @@ function AccessTokenSettingsLink({
   metadataEntity: Record<string, any>;
   verb: string;
 }) {
-  const keyType =
-    metadataEntity.projectId && !metadataEntity.deploymentId
+  const keyType = metadataEntity.deploymentId
+    ? "deploy key"
+    : metadataEntity.projectId
       ? "preview deploy key"
-      : metadataEntity.deploymentId
-        ? "deploy key"
-        : "access token";
+      : "access token";
 
   return (
     <>
       {verb} the {keyType}{" "}
       <span className="font-semibold">{metadataEntity.name}</span>
-      {metadataEntity.deploymentId && (
-        <>
-          {" "}
-          in{" "}
-          <DeploymentSettingsLink
-            team={team}
-            deploymentId={metadataEntity?.deploymentId}
-          />
-        </>
-      )}
       {metadataEntity.projectId && (
         <>
           {" "}
@@ -1013,10 +1031,10 @@ function SpendingLimitLine({
 }) {
   return (
     <div className="contents">
-      <header className="mr-2 flex items-center gap-1">
+      <div className="mr-2 flex items-center gap-1">
         <div className="text-content-secondary">{label}</div>
         <HelpTooltip tipSide="top">{tooltip}</HelpTooltip>
-      </header>
+      </div>
       <SpendingValue valueCents={previousValue} />
       <ArrowRightIcon className="text-content-tertiary" />
       <SpendingValue valueCents={currentValue} />

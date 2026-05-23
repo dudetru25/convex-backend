@@ -1,6 +1,7 @@
 export type InProjectSelector =
   | { kind: "dev" }
   | { kind: "prod" }
+  | { kind: "local" }
   | { kind: "reference"; reference: string };
 
 export type ParsedDeploymentSelector =
@@ -17,6 +18,7 @@ export type ParsedDeploymentSelector =
 function parseInProjectSelector(s: string): InProjectSelector {
   if (s === "dev") return { kind: "dev" };
   if (s === "prod") return { kind: "prod" };
+  if (s === "local") return { kind: "local" };
   return { kind: "reference", reference: s };
 }
 

@@ -500,22 +500,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/projects/{project_id}/provision": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["provision_deployment_dashboard"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/teams/{team_id}/deployments/{deployment_id}": {
         parameters: {
             query?: never;
@@ -580,6 +564,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/teams/{team_id}/list_my_custom_roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list my custom roles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/deployments/{deployment_id}/request_cloud_backup": {
         parameters: {
             query?: never;
@@ -612,14 +612,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/teams/{team_id}/list_cloud_backups": {
+    "/deployments/{deployment_id}/list_cloud_backups": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["list_cloud_backups"];
+        get: operations["list_cloud_backups_by_deployment"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1095,6 +1095,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/teams/{team_id}/has_failed_payment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["has_failed_payment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/teams/{team_id}/unschedule_cancel_orb_subscription": {
         parameters: {
             query?: never;
@@ -1297,22 +1313,6 @@ export interface paths {
         get: operations["get_token_info"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/teams/{team_slug}/usage/record_tokens": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["record_tokens"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1817,6 +1817,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/vercel/potential_teams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_potential_vercel_teams_dashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vercel/potential_teams/{proposed_team_id}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["join_vercel_team_dashboard"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1848,7 +1880,7 @@ export interface components {
             referralCode: components["schemas"]["ReferralCode"];
         };
         /** @enum {string} */
-        AuditLogAction: "joinTeam" | "createTeam" | "updateTeam" | "deleteTeam" | "createProject" | "transferProject" | "receiveProject" | "updateProject" | "deleteProject" | "createProjectEnvironmentVariable" | "updateProjectEnvironmentVariable" | "deleteProjectEnvironmentVariable" | "createDeployment" | "deleteDeployment" | "inviteMember" | "cancelMemberInvitation" | "removeMember" | "updateMemberRole" | "updateMemberProjectRole" | "updatePaymentMethod" | "updateBillingContact" | "updateBillingAddress" | "createSubscription" | "resumeSubscription" | "cancelSubscription" | "changeSubscriptionPlan" | "createTeamAccessToken" | "updateTeamAccessToken" | "deleteTeamAccessToken" | "viewTeamAccessToken" | "createCustomDomain" | "deleteCustomDomain" | "startManualCloudBackup" | "restoreFromCloudBackup" | "configurePeriodicBackup" | "disablePeriodicBackup" | "deleteCloudBackup" | "disableTeamExceedingSpendingLimits" | "setSpendingLimit" | "applyReferralCode" | "createOAuthApplication" | "updateOAuthApplication" | "deleteOAuthApplication" | "verifyOAuthApplication" | "generateOAuthClientSecret" | "createWorkosTeam" | "createWorkosEnvironment" | "deleteWorkosEnvironment" | "retrieveWorkosEnvironmentCredentials" | "disconnectWorkosTeam" | "inviteWorkosTeamMember" | "createProjectWorkosEnvironment" | "deleteProjectWorkosEnvironment" | "retrieveProjectWorkosEnvironmentCredentials" | "enableSSO" | "disableSSO" | "updateSSO" | "transferDeployment" | "receiveDeployment" | "updateDeployment";
+        AuditLogAction: "joinTeam" | "createTeam" | "updateTeam" | "deleteTeam" | "createProject" | "transferProject" | "receiveProject" | "updateProject" | "deleteProject" | "createProjectEnvironmentVariable" | "updateProjectEnvironmentVariable" | "deleteProjectEnvironmentVariable" | "createDeployment" | "deleteDeployment" | "inviteMember" | "cancelMemberInvitation" | "removeMember" | "updateMemberRole" | "updateMemberProjectRole" | "updatePaymentMethod" | "updateBillingContact" | "updateBillingAddress" | "createSubscription" | "resumeSubscription" | "cancelSubscription" | "changeSubscriptionPlan" | "createTeamAccessToken" | "updateTeamAccessToken" | "deleteTeamAccessToken" | "viewTeamAccessToken" | "createProjectAccessToken" | "updateProjectAccessToken" | "deleteProjectAccessToken" | "viewProjectAccessToken" | "createDeploymentAccessToken" | "updateDeploymentAccessToken" | "deleteDeploymentAccessToken" | "viewDeploymentAccessToken" | "createCustomDomain" | "deleteCustomDomain" | "startManualCloudBackup" | "restoreFromCloudBackup" | "configurePeriodicBackup" | "disablePeriodicBackup" | "deleteCloudBackup" | "disableTeamExceedingSpendingLimits" | "setSpendingLimit" | "applyReferralCode" | "createOAuthApplication" | "updateOAuthApplication" | "deleteOAuthApplication" | "verifyOAuthApplication" | "generateOAuthClientSecret" | "createWorkosTeam" | "createWorkosEnvironment" | "deleteWorkosEnvironment" | "retrieveWorkosEnvironmentCredentials" | "disconnectWorkosTeam" | "inviteWorkosTeamMember" | "createProjectWorkosEnvironment" | "deleteProjectWorkosEnvironment" | "retrieveProjectWorkosEnvironmentCredentials" | "enableSSO" | "disableSSO" | "updateSSO" | "transferDeployment" | "receiveDeployment" | "updateDeployment" | "createCustomRole" | "updateCustomRole" | "deleteCustomRole";
         /** @description Represents the `ValidatedActor` equivalent for audit logs. This identifies
          *     who executed an AuditLogEvent */
         AuditLogActor: "system" | {
@@ -1908,6 +1940,12 @@ export interface components {
             authnToken: string;
             deploymentId?: null | components["schemas"]["DeploymentId"];
             deviceName?: null | components["schemas"]["DeviceName"];
+            /**
+             * Format: int64
+             * @description Timestamp in milliseconds when this token will expire. Must be at
+             *     least 30 minutes in the future.
+             */
+            expiresAt?: number | null;
             oauthApp?: null | components["schemas"]["OauthAppMetadata"];
             permissions?: string[] | null;
             projectId?: null | components["schemas"]["ProjectId"];
@@ -1956,6 +1994,8 @@ export interface components {
         CloudBackupId: number;
         CloudBackupResponse: {
             /** Format: int64 */
+            completedTime?: number | null;
+            /** Format: int64 */
             expirationTime: number;
             id: components["schemas"]["CloudBackupId"];
             includeStorage: boolean;
@@ -1979,7 +2019,14 @@ export interface components {
             includeStorage?: boolean | null;
         };
         CreateInvitationArgs: {
+            /** @description Custom roles to attach when `role` is `custom`. Required and non-empty
+             *     in that case, and forbidden otherwise. */
+            customRoles?: components["schemas"]["CustomRoleId"][] | null;
             email: string;
+            /** @description Role to assign when the invitation is accepted.
+             *     Pass `custom` together with a non-empty `customRoles` list to invite a
+             *     member into a custom role; `admin` and `developer` must be sent without
+             *     `customRoles`. */
             role: components["schemas"]["Role"];
         };
         CreateProjectArgs: {
@@ -1990,7 +2037,6 @@ export interface components {
             team: components["schemas"]["TeamSlug"];
         };
         CreateProjectResponse: {
-            adminKey?: null | components["schemas"]["AdminKey"];
             deploymentName?: string | null;
             /** Format: int64 */
             deploymentsRemaining?: number | null;
@@ -2015,6 +2061,18 @@ export interface components {
         };
         CreateTeamArgs: {
             name: components["schemas"]["ProposedTeamName"];
+        };
+        /** Format: int64 */
+        CustomRoleId: number;
+        CustomRoleResponse: {
+            /** Format: int64 */
+            createTime: number;
+            creator?: null | components["schemas"]["MemberId"];
+            description?: string | null;
+            id: components["schemas"]["CustomRoleId"];
+            name: string;
+            statements: components["schemas"]["RoleStatement"][];
+            teamId: components["schemas"]["TeamId"];
         };
         DeleteAccessTokenArgs: {
             name: components["schemas"]["DeviceName"];
@@ -2227,6 +2285,9 @@ export interface components {
             hasAssociatedWorkosTeam: boolean;
             teamId: components["schemas"]["TeamId"];
         };
+        HasFailedPaymentResponse: {
+            hasFailedPayment: boolean;
+        };
         IdentityResponse: {
             email?: string | null;
             id: string;
@@ -2250,6 +2311,9 @@ export interface components {
             eligibleEmails: string[];
         };
         InvitationResponse: {
+            /** @description The custom roles attached to this invitation. Present iff `role` is
+             *     `custom`. */
+            customRoles?: components["schemas"]["TeamMemberCustomRole"][] | null;
             email: string;
             expired: boolean;
             role: components["schemas"]["Role"];
@@ -2285,6 +2349,13 @@ export interface components {
         IsDefaultDeployment: boolean;
         ListEnvVariableResponse: {
             configs: components["schemas"]["EnvVariableConfigJson"][];
+        };
+        ListMyCustomRolesResponse: {
+            customRoles: components["schemas"]["CustomRoleResponse"][];
+            /** @description The team member's built-in role. When `custom`, `customRoles` lists
+             *     the role definitions whose statements determine what the member can
+             *     do; for `admin`/`developer` it is empty. */
+            role: components["schemas"]["Role"];
         };
         ManagedBy: "vercel" | {
             oauthApp: string;
@@ -2334,9 +2405,15 @@ export interface components {
         };
         OrbSubscriptionResponse: {
             billingAddress?: null | components["schemas"]["Address"];
-            billingContact: components["schemas"]["BillingContactResponse"];
+            billingContact?: null | components["schemas"]["BillingContactResponse"];
             /** Format: int64 */
             endDate?: number | null;
+            /** @description Whether this subscription includes new billing metrics (e.g. Database
+             *     I/O). */
+            hasNewBilling: boolean;
+            /** @description The first renewal date on or after the new billing cutover (May 6,
+             *     2026). Only set when `has_new_billing` is false. */
+            newBillingStartDate?: string | null;
             nextBillingPeriodStart: string;
             paymentMethod?: null | components["schemas"]["PaymentMethodResponse"];
             plan: components["schemas"]["PlanResponse"];
@@ -2458,6 +2535,17 @@ export interface components {
             /** @description The project this deployment belongs to. */
             projectId: components["schemas"]["ProjectId"];
         };
+        PotentialVercelTeam: {
+            planId: string;
+            planName: string;
+            /** @description Human-readable description of billing impact when joining this team.
+             *     `None` for free plans. Clients should show this verbatim so CLI and
+             *     dashboard stay in sync on pricing copy. */
+            pricingNotice?: string | null;
+            teamId: components["schemas"]["TeamId"];
+            teamName: components["schemas"]["TeamName"];
+            teamSlug: components["schemas"]["TeamSlug"];
+        };
         PreviewDeploymentIdentifier: string;
         ProfileEmailArgs: {
             email: string;
@@ -2505,14 +2593,6 @@ export interface components {
         ProjectSlug: string;
         ProjectsResponse: components["schemas"]["PaginatedProjectsResponse"] | components["schemas"]["ProjectDetails"][];
         ProposedTeamName: string;
-        ProvisionDeploymentDashboardArgs: {
-            deploymentClass?: string | null;
-            deploymentType: components["schemas"]["DeploymentType"];
-            region?: null | components["schemas"]["RegionName"];
-        };
-        ProvisionDeploymentDashboardResponse: {
-            deploymentName: string;
-        };
         ProvisionEnvironmentResponse: {
             apiKey: string;
             clientId: string;
@@ -2547,10 +2627,6 @@ export interface components {
             workosTeamId: string;
             workosTeamName: string;
         };
-        RecordTokensArgs: {
-            /** Format: int64 */
-            centitokens: number;
-        };
         ReferralCode: string;
         ReferralState: {
             referrals: components["schemas"]["TeamName"][];
@@ -2572,7 +2648,31 @@ export interface components {
             id: components["schemas"]["CloudBackupId"];
         };
         /** @enum {string} */
-        Role: "admin" | "developer";
+        Role: "admin" | "developer" | "custom";
+        /** @description A single permission rule within a custom role. */
+        RoleStatement: {
+            actions: components["schemas"]["RoleStatementActions"];
+            effect: components["schemas"]["RoleStatementEffect"];
+            /**
+             * @description Resource path like `project:*`, `project:slug=my-app`, or
+             *     `project:*:deployment:type=prod`.
+             * @example project:*
+             */
+            resource: string;
+        };
+        /**
+         * @description An action that can be allowed or denied by a custom role statement.
+         * @enum {string}
+         */
+        RoleStatementAction: "team:update" | "team:delete" | "project:create" | "project:transfer" | "project:receive" | "project:update" | "project:delete" | "project:view" | "project:updateMemberRole" | "defaultEnvironmentVariable:create" | "defaultEnvironmentVariable:update" | "defaultEnvironmentVariable:delete" | "defaultEnvironmentVariable:view" | "deployment:create" | "deployment:transfer" | "deployment:receive" | "deployment:updateReference" | "deployment:updateDashboardEditConfirmation" | "deployment:updateExpiresAt" | "deployment:updateSendLogsToClient" | "deployment:updateClass" | "deployment:updateIsDefault" | "deployment:updateType" | "deployment:delete" | "deployment:view" | "deployment:integrations:view" | "deployment:integrations:write" | "deployment:customDomain:create" | "deployment:customDomain:delete" | "deployment:customDomain:view" | "member:invite" | "member:cancelInvitation" | "member:remove" | "member:updateRole" | "member:view" | "billing:paymentMethod:update" | "billing:contact:update" | "billing:address:update" | "billing:subscription:changePlan" | "billing:spendingLimit:update" | "billing:view" | "billing:invoices:view" | "team:auditLog:view" | "team:token:create" | "team:token:update" | "team:token:delete" | "team:token:view" | "project:token:create" | "project:token:update" | "project:token:delete" | "project:token:view" | "deployment:token:create" | "deployment:token:update" | "deployment:token:delete" | "deployment:token:view" | "oauthApplication:create" | "oauthApplication:update" | "oauthApplication:delete" | "oauthApplication:view" | "oauthApplication:generateClientSecret" | "team:usage:view" | "deployment:insights:view" | "deployment:backups:create" | "deployment:backups:import" | "deployment:backups:configurePeriodic" | "deployment:backups:disablePeriodic" | "deployment:backups:delete" | "deployment:backups:view" | "sso:enable" | "sso:disable" | "sso:update" | "sso:view" | "customRole:view" | "integration:view" | "integration:create" | "integration:update" | "integration:delete" | "deployment:deploy" | "deployment:env:view" | "deployment:env:write" | "deployment:pause" | "deployment:unpause" | "deployment:logs:view" | "deployment:metrics:view" | "deployment:data:view" | "deployment:data:write" | "deployment:backups:download" | "deployment:functions:actAsUser" | "deployment:functions:runInternalQueries" | "deployment:functions:runInternalMutations" | "deployment:functions:runInternalActions" | "deployment:functions:runTestQuery" | "deployment:auditLog:view";
+        RoleStatementActions: components["schemas"]["RoleStatementWildcardAction"] | components["schemas"]["RoleStatementAction"][];
+        /**
+         * @description Whether a rule grants or revokes access.
+         * @enum {string}
+         */
+        RoleStatementEffect: "allow" | "deny";
+        /** @enum {string} */
+        RoleStatementWildcardAction: "*";
         /** @enum {string} */
         SSODomainState: "verified" | "pending" | "failed" | "legacyVerified";
         SSOOrganizationDomain: {
@@ -2624,7 +2724,7 @@ export interface components {
             creationTime: number;
             creator?: null | components["schemas"]["MemberId"];
             /** Format: int64 */
-            expirationTime?: number | null;
+            expiresAt?: number | null;
             /** Format: int64 */
             lastUsedTime?: number | null;
             name: components["schemas"]["DeviceName"];
@@ -2639,6 +2739,7 @@ export interface components {
             /** Format: int64 */
             auditLogRetentionDays: number;
             customDomainsEnabled: boolean;
+            customRolesEnabled: boolean;
             deploymentClassSelectionEnabled: boolean;
             logStreamingEnabled: boolean;
             managementApiEnabled: boolean;
@@ -2648,8 +2749,6 @@ export interface components {
             maxCloudBackups: number;
             /** Format: int64 */
             maxDeployments: number;
-            /** Format: int64 */
-            maxProjects: number;
             /** Format: int64 */
             maxTeamMembers: number;
             periodicBackupsEnabled: boolean;
@@ -2670,6 +2769,8 @@ export interface components {
             /** Format: int64 */
             teamMaxFunctionCalls: number;
             /** Format: int64 */
+            teamMaxSearchQueries: number;
+            /** Format: int64 */
             teamMaxVectorBandwidth: number;
             /** Format: int64 */
             teamMaxVectorStorage: number;
@@ -2677,13 +2778,24 @@ export interface components {
         /** Format: int64 */
         TeamId: number;
         TeamMember: {
+            /** @description The custom roles attached to this team member. Present iff
+             *     `role` is `custom`. */
+            customRoles?: components["schemas"]["TeamMemberCustomRole"][] | null;
             /** @description The email of the team member */
             email: string;
             id: components["schemas"]["MemberId"];
             /** @description The name of the team member */
             name?: string | null;
-            /** @description The role of the team member */
+            /** @description The role of the team member. `custom` indicates the member's
+             *     permissions come from the attached `customRoles`. */
             role: components["schemas"]["Role"];
+        };
+        /** @description A custom role attached to a team member, denormalized with the
+         *     role's display name so API consumers can render members without a
+         *     separate roles lookup. */
+        TeamMemberCustomRole: {
+            id: components["schemas"]["CustomRoleId"];
+            name: string;
         };
         TeamName: string;
         TeamResponse: {
@@ -2784,7 +2896,7 @@ export interface components {
             workosEnvironmentName: string;
         };
         /** @enum {string} */
-        WorkOSProductionState: "active" | "inactive";
+        WorkOSProductionState: "active" | "inactive" | "suspended" | "deleting";
         WorkOSTeamAssociation: {
             adminEmail: string;
             creatorEmail: string;
@@ -2846,6 +2958,8 @@ export type CreateProjectArgs = components['schemas']['CreateProjectArgs'];
 export type CreateProjectResponse = components['schemas']['CreateProjectResponse'];
 export type CreateSubscriptionArgs = components['schemas']['CreateSubscriptionArgs'];
 export type CreateTeamArgs = components['schemas']['CreateTeamArgs'];
+export type CustomRoleId = components['schemas']['CustomRoleId'];
+export type CustomRoleResponse = components['schemas']['CustomRoleResponse'];
 export type DeleteAccessTokenArgs = components['schemas']['DeleteAccessTokenArgs'];
 export type DeleteProjectEnvironmentRequest = components['schemas']['DeleteProjectEnvironmentRequest'];
 export type DeleteProjectEnvironmentResponse = components['schemas']['DeleteProjectEnvironmentResponse'];
@@ -2880,6 +2994,7 @@ export type GetProjectEnvironmentsResponse = components['schemas']['GetProjectEn
 export type GetSpendingLimitsResponse = components['schemas']['GetSpendingLimitsResponse'];
 export type GetTokenInfoResponse = components['schemas']['GetTokenInfoResponse'];
 export type HasAssociatedWorkOsTeamResponse = components['schemas']['HasAssociatedWorkOSTeamResponse'];
+export type HasFailedPaymentResponse = components['schemas']['HasFailedPaymentResponse'];
 export type IdentityResponse = components['schemas']['IdentityResponse'];
 export type InstanceAuthForDashboardInteractionsResponse = components['schemas']['InstanceAuthForDashboardInteractionsResponse'];
 export type InvitationEligibleEmailsResponse = components['schemas']['InvitationEligibleEmailsResponse'];
@@ -2890,6 +3005,7 @@ export type InvoiceResponse = components['schemas']['InvoiceResponse'];
 export type InvoicesResponse = components['schemas']['InvoicesResponse'];
 export type IsDefaultDeployment = components['schemas']['IsDefaultDeployment'];
 export type ListEnvVariableResponse = components['schemas']['ListEnvVariableResponse'];
+export type ListMyCustomRolesResponse = components['schemas']['ListMyCustomRolesResponse'];
 export type ManagedBy = components['schemas']['ManagedBy'];
 export type MemberDataResponse = components['schemas']['MemberDataResponse'];
 export type MemberEmailId = components['schemas']['MemberEmailId'];
@@ -2908,6 +3024,7 @@ export type PeriodicBackupConfig = components['schemas']['PeriodicBackupConfig']
 export type PlanResponse = components['schemas']['PlanResponse'];
 export type PlansResponse = components['schemas']['PlansResponse'];
 export type PlatformDeploymentResponse = components['schemas']['PlatformDeploymentResponse'];
+export type PotentialVercelTeam = components['schemas']['PotentialVercelTeam'];
 export type PreviewDeploymentIdentifier = components['schemas']['PreviewDeploymentIdentifier'];
 export type ProfileEmailArgs = components['schemas']['ProfileEmailArgs'];
 export type ProjectDetails = components['schemas']['ProjectDetails'];
@@ -2920,14 +3037,11 @@ export type ProjectRoleUpdateArg = components['schemas']['ProjectRoleUpdateArg']
 export type ProjectSlug = components['schemas']['ProjectSlug'];
 export type ProjectsResponse = components['schemas']['ProjectsResponse'];
 export type ProposedTeamName = components['schemas']['ProposedTeamName'];
-export type ProvisionDeploymentDashboardArgs = components['schemas']['ProvisionDeploymentDashboardArgs'];
-export type ProvisionDeploymentDashboardResponse = components['schemas']['ProvisionDeploymentDashboardResponse'];
 export type ProvisionEnvironmentResponse = components['schemas']['ProvisionEnvironmentResponse'];
 export type ProvisionProjectEnvironmentRequest = components['schemas']['ProvisionProjectEnvironmentRequest'];
 export type ProvisionProjectEnvironmentResponse = components['schemas']['ProvisionProjectEnvironmentResponse'];
 export type ProvisionWorkOsTeamRequest = components['schemas']['ProvisionWorkOSTeamRequest'];
 export type ProvisionWorkOsTeamResponse = components['schemas']['ProvisionWorkOSTeamResponse'];
-export type RecordTokensArgs = components['schemas']['RecordTokensArgs'];
 export type ReferralCode = components['schemas']['ReferralCode'];
 export type ReferralState = components['schemas']['ReferralState'];
 export type RegionName = components['schemas']['RegionName'];
@@ -2936,6 +3050,11 @@ export type RemoveMemberArgs = components['schemas']['RemoveMemberArgs'];
 export type RequestCloudBackupArgs = components['schemas']['RequestCloudBackupArgs'];
 export type RestoreFromCloudBackupArgs = components['schemas']['RestoreFromCloudBackupArgs'];
 export type Role = components['schemas']['Role'];
+export type RoleStatement = components['schemas']['RoleStatement'];
+export type RoleStatementAction = components['schemas']['RoleStatementAction'];
+export type RoleStatementActions = components['schemas']['RoleStatementActions'];
+export type RoleStatementEffect = components['schemas']['RoleStatementEffect'];
+export type RoleStatementWildcardAction = components['schemas']['RoleStatementWildcardAction'];
 export type SsoDomainState = components['schemas']['SSODomainState'];
 export type SsoOrganizationDomain = components['schemas']['SSOOrganizationDomain'];
 export type SsoOrganizationResponse = components['schemas']['SSOOrganizationResponse'];
@@ -2949,6 +3068,7 @@ export type TeamCurrentBillingPeriodResponse = components['schemas']['TeamCurren
 export type TeamEntitlementsResponse = components['schemas']['TeamEntitlementsResponse'];
 export type TeamId = components['schemas']['TeamId'];
 export type TeamMember = components['schemas']['TeamMember'];
+export type TeamMemberCustomRole = components['schemas']['TeamMemberCustomRole'];
 export type TeamName = components['schemas']['TeamName'];
 export type TeamResponse = components['schemas']['TeamResponse'];
 export type TeamSlug = components['schemas']['TeamSlug'];
@@ -3705,31 +3825,6 @@ export interface operations {
             };
         };
     };
-    provision_deployment_dashboard: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProvisionDeploymentDashboardArgs"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProvisionDeploymentDashboardResponse"];
-                };
-            };
-        };
-    };
     get_deployment_by_id: {
         parameters: {
             query?: never;
@@ -3820,6 +3915,27 @@ export interface operations {
             };
         };
     };
+    "list my custom roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListMyCustomRolesResponse"];
+                };
+            };
+        };
+    };
     request_cloud_backup: {
         parameters: {
             query?: never;
@@ -3868,12 +3984,12 @@ export interface operations {
             };
         };
     };
-    list_cloud_backups: {
+    list_cloud_backups_by_deployment: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                team_id: string;
+                deployment_id: string;
             };
             cookie?: never;
         };
@@ -4508,7 +4624,9 @@ export interface operations {
     };
     list_invoices: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number | null;
+            };
             header?: never;
             path: {
                 team_id: string;
@@ -4523,6 +4641,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InvoicesResponse"];
+                };
+            };
+        };
+    };
+    has_failed_payment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HasFailedPaymentResponse"];
                 };
             };
         };
@@ -4753,6 +4892,7 @@ export interface operations {
                 from?: string;
                 to?: string;
                 projectId?: components["schemas"]["ProjectId"];
+                /** @description Required for insights queries; ignored otherwise. */
                 deploymentName?: components["schemas"]["CloudDeploymentName"];
                 componentPath?: string;
                 udfId?: string;
@@ -4771,7 +4911,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": string[][];
+                    "application/json": (string | null)[][];
                 };
             };
         };
@@ -4810,31 +4950,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GetTokenInfoResponse"];
-                };
-            };
-        };
-    };
-    record_tokens: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                team_slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RecordTokensArgs"];
-            };
-        };
         responses: {
             200: {
                 headers: {
@@ -5530,6 +5645,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GenerateSSOConfigurationLinkResponse"];
+                };
+            };
+        };
+    };
+    list_potential_vercel_teams_dashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PotentialVercelTeam"][];
+                };
+            };
+        };
+    };
+    join_vercel_team_dashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The Convex team to join */
+                proposed_team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamResponse"];
                 };
             };
         };

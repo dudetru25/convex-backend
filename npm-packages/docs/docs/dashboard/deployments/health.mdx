@@ -7,8 +7,6 @@ description:
   performance, scheduler status, and deployment insights for optimization."
 ---
 
-import { Screenshot } from "@site/src/components/Screenshot";
-
 The [health page](https://dashboard.convex.dev/deployment/) is the landing page
 for your deployment. On this page, you can see some important information about
 the health of your deployment.
@@ -23,7 +21,10 @@ divided by the total number of requests.
 
 ## Cache Hit Rate
 
-![Cache Hit Rate Card](/screenshots/health_cache_hit_rate.png)
+<Screenshot
+  story="docs/components/HealthCacheHitRate"
+  alt="Cache Hit Rate Card"
+/>
 
 The cache hit rate card shows the percentage of cache hits by minute over the
 last hour. The cache hit rate is calculated as the number of cache hits divided
@@ -33,17 +34,14 @@ Cache hit rate only applies to query functions.
 
 ## Scheduler Status
 
-![Scheduler Status Card](/screenshots/scheduler_overdue.png)
+<Screenshot
+  story="docs/components/HealthSchedulerStatus"
+  alt="Scheduler Status Chart"
+/>
 
 The scheduler status card shows the status of the
 [scheduler](/scheduling/scheduled-functions). If the scheduler falls behind due
-to too many scheduled tasks, the status will show as "Overdue", displaying the
-lag time in minutes.
-
-You may click the button in the top right corner of the card to view a chart
-showing the scheduler status over the last hour.
-
-![Scheduler Status Chart](/screenshots/scheduler_status.png)
+to too many scheduled tasks, the status will display the lag time in minutes.
 
 ## Last Deployed
 

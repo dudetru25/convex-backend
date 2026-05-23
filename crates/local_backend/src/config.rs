@@ -10,10 +10,9 @@ use common::types::{
     ConvexSite,
 };
 use keybroker::{
-    InstanceSecret,
+    DeploymentSecret,
     KeyBroker,
     DEV_INSTANCE_NAME,
-    DEV_SECRET,
 };
 use metrics::SERVER_VERSION_STR;
 use model::database_globals::types::StorageTagInitializer;
@@ -198,13 +197,13 @@ impl LocalConfig {
         KeyBroker::new(&name, self.secret()?)
     }
 
-    pub fn secret(&self) -> anyhow::Result<InstanceSecret> {
-        InstanceSecret::try_from(
-            self.instance_secret
-                .clone()
-                .unwrap_or(DEV_SECRET.to_owned())
-                .as_str(),
-        )
+    pub fn secret(&self) -> anyhow::Result<DeploymentSecret> {
+        let secret = self.instance_secret.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "--instance-secret is required. Generate one with `openssl rand -hex 32`",
+            )
+        })?;
+        DeploymentSecret::try_from(secret)
     }
 
     pub fn storage_tag_initializer(&self) -> StorageTagInitializer {
@@ -217,22 +216,4 @@ impl LocalConfig {
         }
     }
 
-    #[cfg(test)]
-    pub fn new_for_test() -> anyhow::Result<Self> {
-        use anyhow::Context;
-
-        let tempdir_handle = tempfile::tempdir()?;
-        let db_path = tempdir_handle.path().join("convex_local_backend.sqlite3");
-        // Easiest way to get a config object with defaults is to parse from cmd line
-        let config = Self::try_parse_from([
-            "convex-local-backend",
-            db_path.to_str().context("invalid db path")?,
-            "--local-storage",
-            tempdir_handle
-                .path()
-                .to_str()
-                .context("invalid local storage path")?,
-        ])?;
-        Ok(config)
-    }
 }

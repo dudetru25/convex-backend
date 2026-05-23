@@ -95,7 +95,7 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
     In a new terminal window, install the Clerk React SDK:
 
     ```sh
-    npm install @clerk/clerk-react
+    npm install @clerk/react
     ```
 
   </Step>
@@ -124,11 +124,11 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
 
   <Step title="Show UI based on authentication state">
     You can control which UI is shown when the user is signed in or signed out using
-    Convex's `<Authenticated>`, `<Unauthenticated>` and `<AuthLoading>` helper components.
+    Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
 
     In the following example, the `<Content />` component is a child of `<Authenticated>`,
     so its content and any of its child components are guaranteed to have an authenticated
-    user, and Convex queries can require authentication.
+    user, and Convex queries can require authentication. `<AuthRefreshing>` renders when queries and mutations are pending and the socket is paused for token refresh (a generally rare case).
 
     <Admonition type="tip">
     If you choose to build your own auth-integrated components without using the helpers,
@@ -140,8 +140,14 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
     </Admonition>
 
     ```tsx title="src/App.tsx"
-    import { SignInButton, UserButton } from "@clerk/clerk-react";
-    import { Authenticated, Unauthenticated, AuthLoading, useQuery } from "convex/react";
+    import { SignInButton, UserButton } from "@clerk/react";
+    import {
+      Authenticated,
+      Unauthenticated,
+      AuthLoading,
+      AuthRefreshing,
+      useQuery,
+    } from "convex/react";
     import { api } from "../convex/_generated/api";
 
     function App() {
@@ -157,6 +163,9 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
           <AuthLoading>
             <p>Still loading</p>
           </AuthLoading>
+          <AuthRefreshing>
+            <p>Refreshing token...</p>
+          </AuthRefreshing>
         </main>
       );
     }
@@ -370,11 +379,11 @@ follow the [Convex Next.js Quickstart](/quickstart/nextjs.mdx) first. Then:
   </Step>
   <Step title="Show UI based on authentication state">
     You can control which UI is shown when the user is signed in or signed out using
-    Convex's `<Authenticated>`, `<Unauthenticated>` and `<AuthLoading>` helper components.
+    Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
 
     In the following example, the `<Content />` component is a child of `<Authenticated>`,
     so its content and any of its child components are guaranteed to have an authenticated
-    user, and Convex queries can require authentication.
+    user, and Convex queries can require authentication. `<AuthRefreshing>` renders when queries and mutations are pending and the socket is paused for token refresh (a generally rare case).
 
     <Admonition type="tip">
     If you choose to build your own auth-integrated components without using the helpers,
@@ -512,13 +521,10 @@ Clerk instance.
 
 {/* TODO: Update screenshot to use `CLERK_FRONTEND_API_URL`. It should be in the format `https://verb-noun-00.clerk.accounts.dev` */}
 
-<p style={{ textAlign: "center" }}>
-  <img
-    src="/screenshots/clerk-convex-dashboard.png"
-    alt="Convex dashboard dev deployment settings"
-    width={600}
-  />
-</p>
+<Screenshot
+  story="docs/pages/project/deployment/settings/EnvironmentVariables#Clerk"
+  alt="Convex dashboard dev deployment settings"
+/>
 
 Then, to switch your deployment to the new configuration, run `npx convex dev`.
 
@@ -577,14 +583,13 @@ For more thorough debugging steps, see
   providerProvider={<code>ClerkProvider</code>}
   configProp={
     <>
-      the{" "}
+      Clerk's{" "}
       <a
-        href="https://clerk.com/docs/authentication/sign-in#override-ur-ls"
+        href="https://clerk.com/docs/guides/development/customize-redirect-urls"
         target="_blank"
       >
-        <code>afterSignIn</code>
-      </a>{" "}
-      prop
+        redirect URL props or environment variables
+      </a>
     </>
   }
 />

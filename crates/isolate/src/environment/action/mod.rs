@@ -12,11 +12,15 @@ use std::{
     cmp::Ordering,
     collections::BTreeMap,
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::anyhow;
 use common::{
-    components::ComponentId,
+    components::{
+        ComponentId,
+        ComponentPath,
+    },
     errors::JsError,
     execution_context::ExecutionContext,
     fastrace_helpers::EncodedSpan,
@@ -98,6 +102,7 @@ use udf::{
         approaching_limit_warning,
         SystemWarning,
     },
+    ActionCallbacks,
     ActionOutcome,
     HttpActionOutcome,
     HttpActionRequest,
@@ -181,14 +186,14 @@ use crate::{
     },
     strings,
     termination::{
+        ContextTerminationReason,
         IsolateHandle,
-        TerminationReason,
+        IsolateTerminationReason,
     },
     timeout::{
         FunctionExecutionTime,
         Timeout,
     },
-    ActionCallbacks,
 };
 
 // `CollectResult` starts off as a future that is forever pending,
@@ -249,11 +254,14 @@ impl<RT: Runtime> ActionEnvironment<RT> {
     pub fn new(
         rt: RT,
         component: ComponentId,
+        udf_path: CanonicalizedUdfPath,
+        component_path: ComponentPath,
         EnvironmentData {
             key_broker,
             default_system_env_vars,
             file_storage,
             module_loader,
+            deployment,
         }: EnvironmentData<RT>,
         identity: Identity,
         transaction: Transaction<RT>,
@@ -283,7 +291,10 @@ impl<RT: Runtime> ActionEnvironment<RT> {
             context,
             resources: resources.clone(),
             component_id: component,
+            udf_path,
+            component_path,
             convex_origin_override: convex_origin_override.clone(),
+            deployment,
         };
         let (pending_task_sender, pending_task_receiver) = spsc::unbounded_channel();
         let running_tasks = rt.spawn("task_executor", task_executor.go(pending_task_receiver));
@@ -1039,10 +1050,14 @@ impl<RT: Runtime> ActionEnvironment<RT> {
                 let err = match scope.format_traceback(as_local) {
                     Ok(e) => e,
                     Err(e) => {
-                        handle.terminate_and_throw(TerminationReason::SystemError(Some(e)))?;
+                        handle.terminate_and_throw(
+                            IsolateTerminationReason::SystemError(Some(e)).into(),
+                        )?;
                     },
                 };
-                handle.terminate_and_throw(TerminationReason::UnhandledPromiseRejection(err))?;
+                handle.terminate_and_throw(
+                    ContextTerminationReason::UnhandledPromiseRejection(err).into(),
+                )?;
             }
 
             // Check for dynamic import requests.
@@ -1177,7 +1192,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
                     anyhow::bail!("Cancelled");
                 },
             }
-            let permit = timeout.with_timeout(regain_permit.acquire()).await?;
+            let permit = timeout.with_timeout()(regain_permit.acquire()).await?;
             timeout.permit = Some(permit);
             handle.check_terminated()?;
         };
@@ -1362,6 +1377,14 @@ impl<RT: Runtime> IsolateEnvironment<RT> for ActionEnvironment<RT> {
 
     fn unix_timestamp(&mut self) -> anyhow::Result<UnixTimestamp> {
         self.phase.unix_timestamp()
+    }
+
+    fn performance_now(&mut self) -> anyhow::Result<Duration> {
+        self.phase.performance_now()
+    }
+
+    fn performance_time_origin(&mut self) -> anyhow::Result<UnixTimestamp> {
+        self.phase.performance_time_origin()
     }
 
     fn get_environment_variable(

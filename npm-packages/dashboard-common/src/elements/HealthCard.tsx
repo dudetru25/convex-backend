@@ -1,12 +1,12 @@
 import {
   CrossCircledIcon,
   ExclamationTriangleIcon,
-  InfoCircledIcon,
 } from "@radix-ui/react-icons";
 import { cn } from "@ui/cn";
 import React from "react";
 import { Sheet } from "@ui/Sheet";
 import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { LoadingTransition } from "@ui/Loading";
 
 export function HealthCard({
@@ -32,10 +32,10 @@ export function HealthCard({
     <Sheet
       padding={false}
       className={cn(
-        "flex w-full min-w-48 animate-fadeInFromLoading flex-col transition-all",
+        "flex w-full min-w-64 animate-fadeInFromLoading flex-col transition-all",
         size === "xs" && "h-fit",
         size === "sm" && "min-h-fit",
-        size === "md" && "max-h-72 min-h-36",
+        size === "md" && "min-h-[14rem]",
         size === "lg" && "max-h-[21rem] min-h-fit w-full",
       )}
     >
@@ -60,11 +60,7 @@ export function HealthCard({
               </Tooltip>
             )}
             {action}
-            {tip && (
-              <Tooltip tip={tip} className="border border-transparent p-1">
-                <InfoCircledIcon />
-              </Tooltip>
-            )}
+            {tip && <HelpTooltip>{tip}</HelpTooltip>}
           </div>
         </div>
         {size !== "xs" && (

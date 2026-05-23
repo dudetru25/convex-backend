@@ -19,6 +19,10 @@ const MANIFEST_PATH = path.resolve(
   "../docs/src/generated/screenshotManifest.ts",
 );
 
+const CROP_PADDING = 32; // in (real) pixels
+const CROP_PADDING_PAGE = 64; // in (real) pixels, for element crops in page stories
+const DEVICE_SCALE_FACTOR = 2;
+
 /** Convert PascalCase to snake_case */
 function toSnakeCase(str: string): string {
   return str
@@ -26,12 +30,19 @@ function toSnakeCase(str: string): string {
     .toLowerCase();
 }
 
-/** Derive output filename from story title and theme */
-function filenameFromTitle(title: string, theme: "light" | "dark"): string {
+/** Derive output filename from story title, story name, and theme */
+function filenameFromTitle(
+  title: string,
+  storyName: string,
+  theme: "light" | "dark",
+): string {
   // Strip "docs/" prefix
   const withoutPrefix = title.replace(/^docs\//i, "");
   // Split by "/" and convert each segment to snake_case
   const segments = withoutPrefix.split("/").map(toSnakeCase);
+  if (storyName !== "Default") {
+    segments.push(storyName.toLowerCase().replace(/\s+/g, "_"));
+  }
   return `${segments.join("_")}_${theme}.webp`;
 }
 
@@ -105,7 +116,10 @@ if (!indexRes.ok) {
   process.exit(1);
 }
 const index = (await indexRes.json()) as {
-  entries: Record<string, { id: string; title: string; type: string }>;
+  entries: Record<
+    string,
+    { id: string; title: string; name: string; type: string }
+  >;
 };
 
 const docsStories = Object.values(index.entries).filter(
@@ -152,7 +166,7 @@ function updateSpinner() {
 }
 
 async function captureScreenshot(
-  story: { id: string; title: string; type: string },
+  story: { id: string; title: string; name: string; type: string },
   theme: "light" | "dark",
 ): Promise<{
   filename: string;
@@ -160,7 +174,9 @@ async function captureScreenshot(
   storyTitle: string;
   status: "created" | "updated" | "unchanged";
 } | null> {
-  const filename = filenameFromTitle(story.title, theme);
+  const filename = filenameFromTitle(story.title, story.name, theme);
+  const storyTitle =
+    story.name === "Default" ? story.title : `${story.title}#${story.name}`;
   const outputPath = path.join(OUTPUT_DIR, filename);
   const url = `http://127.0.0.1:${port}/iframe.html?id=${encodeURIComponent(story.id)}&viewMode=story&globals=theme:${theme}`;
 
@@ -179,11 +195,40 @@ async function captureScreenshot(
     // rendering caused by shared state between stories.
     context = await browser.newContext({
       viewport: { width: 1024, height: 700 },
-      deviceScaleFactor: 2,
+      deviceScaleFactor: DEVICE_SCALE_FACTOR,
     });
     const page = await context.newPage();
+    // Disable CSS animations and cursor blinking to ensure stable screenshots
+    // of components like Monaco editor that otherwise have non-deterministic renders.
+    await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto(url, { waitUntil: "networkidle", timeout: 60_000 });
     await page.evaluate(() => document.fonts.ready);
+
+    // Hide Monaco editor cursors to ensure stable screenshots
+    await page.addStyleTag({
+      content:
+        ".monaco-editor .cursors-layer > .cursor { display: none !important; }",
+    });
+    await page.addStyleTag({
+      content: ".monaco-editor .slider { opacity: 0 !important; }",
+    });
+
+    // Check for element-level crop selector from story parameters.
+    // In Storybook 10, the store API is storyStoreValue.loadStory().
+    const screenshotSelector: string | null = await page.evaluate(
+      async (storyId: string) => {
+        try {
+          const preview = (window as any).__STORYBOOK_PREVIEW__;
+          const store = preview?.storyStoreValue;
+          if (!store) return null;
+          const story = await store.loadStory({ storyId });
+          return story?.parameters?.screenshotSelector ?? null;
+        } catch {
+          return null;
+        }
+      },
+      story.id,
+    );
 
     const isComponentStory = story.title
       .toLowerCase()
@@ -196,19 +241,79 @@ async function captureScreenshot(
       bgColor = await page.evaluate(
         () => getComputedStyle(document.body).backgroundColor,
       );
-      png = await root.screenshot({ omitBackground: true });
+      png = await root.screenshot({
+        omitBackground: true,
+        caret: "hide",
+        animations: "disabled",
+      });
     } else {
-      png = await page.screenshot({ fullPage: false });
+      png = await page.screenshot({
+        fullPage: false,
+        caret: "hide",
+        animations: "disabled",
+      });
     }
 
-    const PADDING = 32;
+    // If a screenshotSelector is specified, crop to the union bounding box
+    // of all matching elements with 16px padding.
+    if (screenshotSelector) {
+      const elements = await page.locator(screenshotSelector).all();
+      const boxes = (
+        await Promise.all(elements.map((el) => el.boundingBox()))
+      ).filter(
+        (b): b is { x: number; y: number; width: number; height: number } =>
+          b !== null,
+      );
+
+      if (boxes.length > 0) {
+        // Compute union bounding box in CSS pixels
+        const minX = Math.min(...boxes.map((b) => b.x));
+        const minY = Math.min(...boxes.map((b) => b.y));
+        const maxX = Math.max(...boxes.map((b) => b.x + b.width));
+        const maxY = Math.max(...boxes.map((b) => b.y + b.height));
+
+        // Get image dimensions to clamp
+        const meta = await sharp(png).metadata();
+        const imgW = meta.width!;
+        const imgH = meta.height!;
+
+        // Convert to pixel coordinates and add padding, clamped to image bounds
+        const padding = isComponentStory ? CROP_PADDING : CROP_PADDING_PAGE;
+        const left = Math.max(
+          0,
+          Math.round(minX * DEVICE_SCALE_FACTOR) - padding,
+        );
+        const top = Math.max(
+          0,
+          Math.round(minY * DEVICE_SCALE_FACTOR) - padding,
+        );
+        const right = Math.min(
+          imgW,
+          Math.round(maxX * DEVICE_SCALE_FACTOR) + padding,
+        );
+        const bottom = Math.min(
+          imgH,
+          Math.round(maxY * DEVICE_SCALE_FACTOR) + padding,
+        );
+
+        png = await sharp(png)
+          .extract({
+            left,
+            top,
+            width: right - left,
+            height: bottom - top,
+          })
+          .toBuffer();
+      }
+    }
+
     const pipeline = sharp(png);
-    if (isComponentStory && bgColor) {
+    if (!screenshotSelector && isComponentStory && bgColor) {
       pipeline.trim().extend({
-        top: PADDING,
-        bottom: PADDING,
-        left: PADDING,
-        right: PADDING,
+        top: CROP_PADDING,
+        bottom: CROP_PADDING,
+        left: CROP_PADDING,
+        right: CROP_PADDING,
         background: bgColor,
       });
     }
@@ -272,7 +377,7 @@ async function captureScreenshot(
     updateSpinner();
     spinner.render();
 
-    return { filename, theme, storyTitle: story.title, status };
+    return { filename, theme, storyTitle, status };
   } catch (error) {
     inProgress.delete(filename);
     completed++;
@@ -284,7 +389,7 @@ async function captureScreenshot(
     // If the file already existed, preserve it by returning an "unchanged"
     // result so it won't be deleted as stale and stays in the manifest.
     if (existingWebp !== null) {
-      return { filename, theme, storyTitle: story.title, status: "unchanged" };
+      return { filename, theme, storyTitle, status: "unchanged" };
     }
     return null;
   } finally {

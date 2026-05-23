@@ -3,29 +3,172 @@
 
 export const screenshots = [
   {
+    "storyTitle": "docs/components/CustomDomains",
+    "light": {
+      "filename": "components_custom_domains_light.webp",
+      "width": 1856,
+      "height": 670
+    },
+    "dark": {
+      "filename": "components_custom_domains_dark.webp",
+      "width": 1856,
+      "height": 670
+    }
+  },
+  {
+    "storyTitle": "docs/components/DeploymentEnvironmentVariables",
+    "light": {
+      "filename": "components_deployment_environment_variables_light.webp",
+      "width": 1408,
+      "height": 870
+    },
+    "dark": {
+      "filename": "components_deployment_environment_variables_dark.webp",
+      "width": 1408,
+      "height": 870
+    }
+  },
+  {
+    "storyTitle": "docs/components/DeploymentEnvironmentVariables#With Default Diff",
+    "light": {
+      "filename": "components_deployment_environment_variables_with_default_diff_light.webp",
+      "width": 1408,
+      "height": 1018
+    },
+    "dark": {
+      "filename": "components_deployment_environment_variables_with_default_diff_dark.webp",
+      "width": 1408,
+      "height": 1018
+    }
+  },
+  {
+    "storyTitle": "docs/components/DeploymentEnvironmentVariables#Edit Inline",
+    "light": {
+      "filename": "components_deployment_environment_variables_edit_inline_light.webp",
+      "width": 1408,
+      "height": 1076
+    },
+    "dark": {
+      "filename": "components_deployment_environment_variables_edit_inline_dark.webp",
+      "width": 1408,
+      "height": 1076
+    }
+  },
+  {
+    "storyTitle": "docs/components/DeploymentExpiry",
+    "light": {
+      "filename": "components_deployment_expiry_light.webp",
+      "width": 1408,
+      "height": 452
+    },
+    "dark": {
+      "filename": "components_deployment_expiry_dark.webp",
+      "width": 1408,
+      "height": 452
+    }
+  },
+  {
+    "storyTitle": "docs/components/HealthCacheHitRate",
+    "light": {
+      "filename": "components_health_cache_hit_rate_light.webp",
+      "width": 832,
+      "height": 564
+    },
+    "dark": {
+      "filename": "components_health_cache_hit_rate_dark.webp",
+      "width": 832,
+      "height": 564
+    }
+  },
+  {
     "storyTitle": "docs/components/HealthFailureRate",
     "light": {
       "filename": "components_health_failure_rate_light.webp",
       "width": 832,
-      "height": 566
+      "height": 556
     },
     "dark": {
       "filename": "components_health_failure_rate_dark.webp",
       "width": 832,
-      "height": 566
+      "height": 556
+    }
+  },
+  {
+    "storyTitle": "docs/components/HealthSchedulerStatus",
+    "light": {
+      "filename": "components_health_scheduler_status_light.webp",
+      "width": 832,
+      "height": 556
+    },
+    "dark": {
+      "filename": "components_health_scheduler_status_dark.webp",
+      "width": 832,
+      "height": 556
+    }
+  },
+  {
+    "storyTitle": "docs/components/OverrideEnvironmentVariables",
+    "light": {
+      "filename": "components_override_environment_variables_light.webp",
+      "width": 1408,
+      "height": 644
+    },
+    "dark": {
+      "filename": "components_override_environment_variables_dark.webp",
+      "width": 1408,
+      "height": 644
+    }
+  },
+  {
+    "storyTitle": "docs/components/PauseDeployment#Running",
+    "light": {
+      "filename": "components_pause_deployment_running_light.webp",
+      "width": 1408,
+      "height": 524
+    },
+    "dark": {
+      "filename": "components_pause_deployment_running_dark.webp",
+      "width": 1408,
+      "height": 524
+    }
+  },
+  {
+    "storyTitle": "docs/components/PauseDeployment#Paused",
+    "light": {
+      "filename": "components_pause_deployment_paused_light.webp",
+      "width": 1408,
+      "height": 524
+    },
+    "dark": {
+      "filename": "components_pause_deployment_paused_dark.webp",
+      "width": 1408,
+      "height": 524
     }
   },
   {
     "storyTitle": "docs/components/ProjectCard",
     "light": {
       "filename": "components_project_card_light.webp",
-      "width": 1039,
-      "height": 455
+      "width": 1100,
+      "height": 535
     },
     "dark": {
       "filename": "components_project_card_dark.webp",
-      "width": 1039,
-      "height": 455
+      "width": 1100,
+      "height": 535
+    }
+  },
+  {
+    "storyTitle": "docs/components/ProjectDefaultEnvironmentVariables",
+    "light": {
+      "filename": "components_project_default_environment_variables_light.webp",
+      "width": 1408,
+      "height": 904
+    },
+    "dark": {
+      "filename": "components_project_default_environment_variables_dark.webp",
+      "width": 1408,
+      "height": 904
     }
   },
   {
@@ -52,6 +195,19 @@ export const screenshots = [
       "filename": "components_usage_by_project_chart_dark.webp",
       "width": 2048,
       "height": 918
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects",
+    "light": {
+      "filename": "pages_projects_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_projects_dark.webp",
+      "width": 2048,
+      "height": 1400
     }
   },
   {
@@ -128,6 +284,305 @@ export const screenshots = [
     },
     "dark": {
       "filename": "pages_project_project_settings_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data",
+    "light": {
+      "filename": "pages_project_deployment_data_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Filters",
+    "light": {
+      "filename": "pages_project_deployment_data_filters_light.webp",
+      "width": 1434,
+      "height": 608
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_filters_dark.webp",
+      "width": 1434,
+      "height": 608
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Add Document",
+    "light": {
+      "filename": "pages_project_deployment_data_add_document_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_add_document_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Edit Inline",
+    "light": {
+      "filename": "pages_project_deployment_data_edit_inline_light.webp",
+      "width": 896,
+      "height": 268
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_edit_inline_dark.webp",
+      "width": 896,
+      "height": 268
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Edit Document",
+    "light": {
+      "filename": "pages_project_deployment_data_edit_document_light.webp",
+      "width": 583,
+      "height": 594
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_edit_document_dark.webp",
+      "width": 583,
+      "height": 594
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Context Menu",
+    "light": {
+      "filename": "pages_project_deployment_data_context_menu_light.webp",
+      "width": 1046,
+      "height": 798
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_context_menu_dark.webp",
+      "width": 1046,
+      "height": 798
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Bulk Edit",
+    "light": {
+      "filename": "pages_project_deployment_data_bulk_edit_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_bulk_edit_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Custom Query",
+    "light": {
+      "filename": "pages_project_deployment_data_custom_query_light.webp",
+      "width": 397,
+      "height": 636
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_custom_query_dark.webp",
+      "width": 397,
+      "height": 636
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Custom Query Runner",
+    "light": {
+      "filename": "pages_project_deployment_data_custom_query_runner_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_custom_query_runner_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Generate Schema",
+    "light": {
+      "filename": "pages_project_deployment_data_generate_schema_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_generate_schema_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Component Dropdown",
+    "light": {
+      "filename": "pages_project_deployment_data_component_dropdown_light.webp",
+      "width": 828,
+      "height": 538
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_component_dropdown_dark.webp",
+      "width": 828,
+      "height": 538
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Multiple Dev Deployments Selector",
+    "light": {
+      "filename": "pages_project_deployment_data_multiple_dev_deployments_selector_light.webp",
+      "width": 920,
+      "height": 922
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_multiple_dev_deployments_selector_dark.webp",
+      "width": 920,
+      "height": 922
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/DeploymentSettings",
+    "light": {
+      "filename": "pages_project_deployment_deployment_settings_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_deployment_settings_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/FileStorage",
+    "light": {
+      "filename": "pages_project_deployment_file_storage_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_file_storage_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/History",
+    "light": {
+      "filename": "pages_project_deployment_history_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_history_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/schedules/Crons",
+    "light": {
+      "filename": "pages_project_deployment_schedules_crons_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_schedules_crons_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/schedules/Crons#History",
+    "light": {
+      "filename": "pages_project_deployment_schedules_crons_history_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_schedules_crons_history_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/EnvironmentVariables",
+    "light": {
+      "filename": "pages_project_deployment_settings_environment_variables_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_environment_variables_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/EnvironmentVariables#Auth 0",
+    "light": {
+      "filename": "pages_project_deployment_settings_environment_variables_auth_0_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_environment_variables_auth_0_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/EnvironmentVariables#Clerk",
+    "light": {
+      "filename": "pages_project_deployment_settings_environment_variables_clerk_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_environment_variables_clerk_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations#Configure Sentry",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_configure_sentry_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_configure_sentry_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations#Configure Datadog",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_configure_datadog_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_configure_datadog_dark.webp",
       "width": 2048,
       "height": 1400
     }

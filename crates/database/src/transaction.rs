@@ -1,5 +1,3 @@
-#[cfg(any(test, feature = "testing"))]
-use std::fmt::Debug;
 use std::{
     collections::{
         BTreeMap,
@@ -44,7 +42,6 @@ use common::{
         TEXT_INDEX_SIZE_HARD_LIMIT,
         VECTOR_INDEX_SIZE_HARD_LIMIT,
     },
-    persistence::RetentionValidator,
     query::{
         CursorPosition,
         Order,
@@ -57,7 +54,6 @@ use common::{
         GenericIndexName,
         IndexId,
         IndexName,
-        PersistenceVersion,
         RepeatableTimestamp,
         StableIndexName,
         TableName,
@@ -111,6 +107,7 @@ use crate::{
     execution_size::{
         FunctionExecutionSize,
         ScheduledFunctionsSize,
+        TransactionLimits,
     },
     metrics::{
         self,
@@ -160,6 +157,9 @@ pub struct Transaction<RT: Runtime> {
     // Size of any functions scheduled from this transaction.
     pub scheduled_size: ScheduledFunctionsSize,
 
+    // Transaction limits (reads, writes, scheduled). Defaults to global limits.
+    pub(crate) limits: TransactionLimits,
+
     pub(crate) reads: TransactionReadSet,
     pub(crate) writes: NestedWrites<Writes>,
 
@@ -175,22 +175,11 @@ pub struct Transaction<RT: Runtime> {
 
     pub(crate) stats: BTreeMap<TabletId, TableStats>,
 
-    pub(crate) retention_validator: Arc<dyn RetentionValidator>,
-
     pub(crate) runtime: RT,
 
     pub usage_tracker: FunctionUsageTracker,
     pub(crate) virtual_system_mapping: VirtualSystemMapping,
 
-    #[cfg(any(test, feature = "testing"))]
-    index_size_override: Option<usize>,
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl<RT: Runtime> Debug for Transaction<RT> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Transaction").finish()
-    }
 }
 
 #[async_trait]
@@ -206,6 +195,9 @@ pub struct SubtransactionToken {
     tables: NestedWriteToken,
     schema_registry: NestedWriteToken,
     component_registry: NestedWriteToken,
+    /// Parent's transaction limits, restored when the subtransaction
+    /// commits or rolls back.
+    limits: TransactionLimits,
 }
 
 impl<RT: Runtime> Transaction<RT> {
@@ -220,7 +212,6 @@ impl<RT: Runtime> Transaction<RT> {
         count: Arc<dyn TableCountSnapshot>,
         runtime: RT,
         usage_tracker: FunctionUsageTracker,
-        retention_validator: Arc<dyn RetentionValidator>,
         virtual_system_mapping: VirtualSystemMapping,
     ) -> Self {
         Self {
@@ -230,6 +221,7 @@ impl<RT: Runtime> Transaction<RT> {
             id_generator,
             next_creation_time: creation_time,
             scheduled_size: ScheduledFunctionsSize::default(),
+            limits: TransactionLimits::default(),
             index: NestedWrites::new(index),
             metadata: NestedWrites::new(metadata),
             schema_registry: NestedWrites::new(schema_registry),
@@ -238,16 +230,9 @@ impl<RT: Runtime> Transaction<RT> {
             table_count_deltas: BTreeMap::new(),
             stats: BTreeMap::new(),
             runtime,
-            retention_validator,
             usage_tracker,
             virtual_system_mapping,
-            #[cfg(any(test, feature = "testing"))]
-            index_size_override: None,
         }
-    }
-
-    pub fn persistence_version(&self) -> PersistenceVersion {
-        self.index.index_registry().persistence_version()
     }
 
     pub fn table_mapping(&mut self) -> &TableMapping {
@@ -350,6 +335,7 @@ impl<RT: Runtime> Transaction<RT> {
             tables: self.metadata.begin_nested(),
             schema_registry: self.schema_registry.begin_nested(),
             component_registry: self.component_registry.begin_nested(),
+            limits: self.limits.clone(),
         }
     }
 
@@ -360,6 +346,7 @@ impl<RT: Runtime> Transaction<RT> {
         self.schema_registry.commit_nested(tokens.schema_registry)?;
         self.component_registry
             .commit_nested(tokens.component_registry)?;
+        self.limits = tokens.limits;
         Ok(())
     }
 
@@ -371,6 +358,7 @@ impl<RT: Runtime> Transaction<RT> {
             .rollback_nested(tokens.schema_registry)?;
         self.component_registry
             .rollback_nested(tokens.component_registry)?;
+        self.limits = tokens.limits;
         Ok(())
     }
 
@@ -434,6 +422,21 @@ impl<RT: Runtime> Transaction<RT> {
             write_size: self.writes.user_size().to_owned(),
             scheduled_size: self.scheduled_size.clone(),
         }
+    }
+
+    /// Returns the transaction limits.
+    pub fn transaction_limits(&self) -> &TransactionLimits {
+        &self.limits
+    }
+
+    /// Apply a per-call budget on top of the transaction's current usage,
+    /// clamped by the transaction's existing limits. The argument is
+    /// interpreted as "this call may use up to N additional bytes/rows/etc.";
+    /// the result is an absolute ceiling that can only tighten the current
+    /// limits, never loosen them.
+    pub fn set_transaction_limits(&mut self, budget: TransactionLimits) {
+        let usage = self.execution_size();
+        self.limits = TransactionLimits::from_budget(budget, &usage, &self.limits);
     }
 
     pub fn user_tx_read_size(&self) -> &TransactionReadSize {
@@ -796,17 +799,6 @@ impl<RT: Runtime> Transaction<RT> {
     }
 
     // XXX move to table model?
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn create_system_table_testing(
-        &mut self,
-        namespace: TableNamespace,
-        table_name: &TableName,
-        default_table_number: Option<TableNumber>,
-    ) -> anyhow::Result<bool> {
-        self.create_system_table(namespace, table_name, default_table_number)
-            .await
-    }
-
     async fn table_number_for_system_table(
         &mut self,
         namespace: TableNamespace,
@@ -936,8 +928,12 @@ impl<RT: Runtime> Transaction<RT> {
             .await
             .try_into()
             .map_err(|_| anyhow::anyhow!("expected result"))?;
-        self.reads
-            .record_indexed_directly(index_name, IndexedFields::by_id(), interval)?;
+        self.reads.record_indexed_directly(
+            index_name,
+            IndexedFields::by_id(),
+            interval,
+            &self.limits,
+        )?;
         let IndexRangeResponse {
             page: range_results,
             cursor,
@@ -961,6 +957,7 @@ impl<RT: Runtime> Transaction<RT> {
                     doc.size(),
                     &self.usage_tracker,
                     &self.virtual_system_mapping,
+                    &self.limits,
                 )?;
 
                 Some((doc.unpack(), timestamp))
@@ -1038,6 +1035,7 @@ impl<RT: Runtime> Transaction<RT> {
             id,
             old_document_and_ts,
             new_document,
+            &self.limits,
         )?;
         stats.rows_written += 1;
 
@@ -1123,6 +1121,7 @@ impl<RT: Runtime> Transaction<RT> {
             document.size(),
             &self.usage_tracker,
             &self.virtual_system_mapping,
+            &self.limits,
         )
     }
 
@@ -1157,14 +1156,45 @@ impl<RT: Runtime> Transaction<RT> {
             .await
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn set_index_size_hard_limit(&mut self, size: usize) {
-        self.index_size_override = Some(size);
-    }
-
     pub fn finalize(self) -> anyhow::Result<FinalTransaction> {
         FinalTransaction::new(self)
     }
+
+    /// Clone the transaction to use for a snapshot query.
+    pub fn clone_for_snapshot_query(&self) -> anyhow::Result<Transaction<RT>> {
+        Ok(Transaction {
+            identity: self.identity.clone(),
+            id_generator: self.id_generator.clone_for_snapshot_query(),
+            next_creation_time: self.next_creation_time,
+            scheduled_size: self.scheduled_size.clone(),
+            limits: self.limits.clone(),
+            // Don't clone the read set because it is expensive and doesn't matter in a snapshot
+            // query
+            reads: TransactionReadSet::new(),
+            // Reset the write set because the query should observe a snapshot of the database from
+            // the start of the transaction
+            writes: NestedWrites::new(Writes::new()),
+            // Reset pending writes
+            index: NestedWrites::new(self.index.clone_for_snapshot_query()),
+            // TODO(ENG-10621): to be absolutely safe, we should reset changes to metadata,
+            // schema_registry, and component_registry. Metadata may contain newly
+            // created tables, but the tables will appear empty to snapshot query. It is
+            // only correct to clone schema_registry and component_registry if
+            // there were no writes to those tables
+            metadata: self.metadata.clone(),
+            schema_registry: self.schema_registry.clone(),
+            component_registry: self.component_registry.clone(),
+            count_snapshot: self.count_snapshot.clone(),
+            // Also reset table_count_deltas
+            table_count_deltas: BTreeMap::new(),
+            stats: self.stats.clone(),
+            runtime: self.runtime.clone(),
+            usage_tracker: self.usage_tracker.clone(),
+            virtual_system_mapping: self.virtual_system_mapping.clone(),
+
+        })
+    }
+
 }
 
 #[derive(Debug)]
@@ -1189,8 +1219,6 @@ pub struct FinalTransaction {
 
     pub(crate) usage_tracker: FunctionUsageTracker,
 
-    #[cfg(any(test, feature = "testing"))]
-    index_size_override: Option<usize>,
 }
 
 impl FinalTransaction {
@@ -1211,8 +1239,6 @@ impl FinalTransaction {
             writes: transaction.writes.into_flat()?,
             usage_tracker: transaction.usage_tracker,
 
-            #[cfg(any(test, feature = "testing"))]
-            index_size_override: transaction.index_size_override,
         })
     }
 
@@ -1222,18 +1248,8 @@ impl FinalTransaction {
     ) -> anyhow::Result<()> {
         #[allow(unused_mut)]
         let mut vector_size_limit = *VECTOR_INDEX_SIZE_HARD_LIMIT;
-        #[cfg(any(test, feature = "testing"))]
-        if let Some(size) = self.index_size_override {
-            vector_size_limit = size;
-        }
-
         #[allow(unused_mut)]
         let mut search_size_limit = *TEXT_INDEX_SIZE_HARD_LIMIT;
-        #[cfg(any(test, feature = "testing"))]
-        if let Some(size) = self.index_size_override {
-            search_size_limit = size;
-        }
-
         let modified_tables: BTreeSet<_> = self
             .writes
             .coalesced_writes()

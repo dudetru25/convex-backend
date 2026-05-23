@@ -5,6 +5,7 @@ import { setupConsole } from "./02_console";
 import { setupEvent } from "./02_event";
 import { setupTimers } from "./02_timers.js";
 import { setupAbortSignal } from "./03_abort_signal.js";
+import { setupAsyncHooks } from "./04_async_hooks.js";
 import { setupStreams } from "./06_streams.js";
 import { setupTextEncoding } from "./08_text_encoding.js";
 import { setupBlob } from "./09_file.js";
@@ -13,6 +14,7 @@ import { setupFormData } from "./21_formdata.js";
 import { requestFromConvexJson, setupRequest } from "./23_request.js";
 import { convexJsonFromResponse, setupResponse } from "./23_response.js";
 import { setupFetch } from "./26_fetch.js";
+import { setupPerformance } from "./27_performance.js";
 import { setupSourceMapping } from "./errors.js";
 import { throwUncatchableDeveloperError } from "./helpers.js";
 import { getBlob, getResponse, storeBlob, storeRequest } from "./storage.js";
@@ -43,6 +45,7 @@ export function setup(global: any) {
   setupStructuredClone(global);
   setupTimers(global);
   setupAbortSignal(global);
+  setupAsyncHooks(global);
   setupStreams(global);
   setupTextEncoding(global);
   setupBlob(global);
@@ -51,6 +54,8 @@ export function setup(global: any) {
   setupRequest(global);
   setupResponse(global);
   setupFetch(global);
+
+  global.Convex.setupPerformance = () => setupPerformance(global);
 
   global.Convex.jsSyscall = (op: string, args: Record<string, any>) => {
     switch (op) {
@@ -81,7 +86,7 @@ function setupDate(global) {
   const originalDate = global.Date;
   delete global.Date;
 
-  function Date(...args) {
+  function Date(this: any, ...args) {
     // `Date()` was called directly, not as a constructor.
     if (!(this instanceof Date)) {
       const date = new (Date as any)();

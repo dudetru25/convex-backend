@@ -7,12 +7,17 @@ import {
   useUpdateProjectEnvVars,
 } from "api/environmentVariables";
 import { useCurrentProject } from "api/projects";
-import { useHasProjectAdminPermissions } from "api/roles";
 import {
-  DeploymentType as DeploymentTypeType,
-  UpdateEnvironmentVariables,
-} from "generatedApi";
+  useHasCustomRolePermission,
+  useHasProjectAdminPermissions,
+} from "api/roles";
+import { useCurrentTeam } from "api/teams";
+import { defaultEnvironmentVariableResource } from "lib/permissions";
+import { DeploymentType as DeploymentTypeType } from "generatedApi";
+import { UpdateDefaultEnvironmentVariablesArgs } from "@convex-dev/platform/managementApi";
 import { Link } from "@ui/Link";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { EnvironmentVariables } from "@common/features/settings/components/EnvironmentVariables";
 import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
 
@@ -30,18 +35,97 @@ const DEFAULT_DEPLOYMENT_TYPES: DeploymentTypeType[] = [
 export function DefaultEnvironmentVariables() {
   const project = useCurrentProject();
   const projectId = project?.id;
+  const team = useCurrentTeam();
+  const hasAdminPermissions = useHasProjectAdminPermissions(projectId);
+  // Listing default env vars is server-gated on
+  // `defaultEnvironmentVariable:view`. Skip the fetch for custom-role
+  // members without that grant — otherwise the request 403s and the
+  // section renders an empty loading state instead of a clear "no
+  // permission" message.
+  const canViewCustom = useHasCustomRolePermission(
+    team?.id,
+    "defaultEnvironmentVariable:view",
+    project ? defaultEnvironmentVariableResource(project) : undefined,
+    true,
+  );
+  // `canViewCustom` is `undefined` while the role list loads. Gate the
+  // NoPermissionMessage on explicit denial (`=== false`) so the
+  // permission state doesn't flicker for everyone on first paint.
+  const canView = hasAdminPermissions || canViewCustom === true;
+  const isViewDenied = !hasAdminPermissions && canViewCustom === false;
+  // Project defaults split write into separate `:create`, `:update`, and
+  // `:delete` actions, so gate each row button on the matching grant.
+  const canCreateCustom = useHasCustomRolePermission(
+    team?.id,
+    "defaultEnvironmentVariable:create",
+    project ? defaultEnvironmentVariableResource(project) : undefined,
+    false,
+  );
+  const canEditCustom = useHasCustomRolePermission(
+    team?.id,
+    "defaultEnvironmentVariable:update",
+    project ? defaultEnvironmentVariableResource(project) : undefined,
+    false,
+  );
+  const canDeleteCustom = useHasCustomRolePermission(
+    team?.id,
+    "defaultEnvironmentVariable:delete",
+    project ? defaultEnvironmentVariableResource(project) : undefined,
+    false,
+  );
+  const canCreate = hasAdminPermissions || canCreateCustom === true;
+  const canEdit = hasAdminPermissions || canEditCustom === true;
+  const canDelete = hasAdminPermissions || canDeleteCustom === true;
+
   const environmentVariables = useProjectEnvironmentVariables(
-    projectId,
+    canView ? projectId : undefined,
     100,
   )?.configs;
   const updateEnvironmentVariables = useUpdateProjectEnvVars(projectId);
-  const hasAdminPermissions = useHasProjectAdminPermissions(projectId);
+
+  if (isViewDenied) {
+    return (
+      <Sheet className="flex flex-col gap-4 text-sm">
+        <h3>Default Environment Variables</h3>
+        <NoPermissionMessage
+          message="You do not have permission to view default environment variables for this project."
+          missingPermission="defaultEnvironmentVariable:view"
+        />
+      </Sheet>
+    );
+  }
 
   return (
     <DefaultEnvironmentVariablesInner
       environmentVariables={environmentVariables}
       onUpdate={updateEnvironmentVariables}
-      hasAdminPermissions={hasAdminPermissions}
+      canCreate={canCreate}
+      canEdit={canEdit}
+      canDelete={canDelete}
+      disabledTipForCreate={
+        canCreate
+          ? undefined
+          : permissionDeniedTip(
+              "You do not have permission to add default environment variables.",
+              "defaultEnvironmentVariable:create",
+            )
+      }
+      disabledTipForEdit={
+        canEdit
+          ? undefined
+          : permissionDeniedTip(
+              "You do not have permission to edit default environment variables.",
+              "defaultEnvironmentVariable:update",
+            )
+      }
+      disabledTipForDelete={
+        canDelete
+          ? undefined
+          : permissionDeniedTip(
+              "You do not have permission to delete default environment variables.",
+              "defaultEnvironmentVariable:delete",
+            )
+      }
     />
   );
 }
@@ -50,10 +134,27 @@ export function DefaultEnvironmentVariablesInner({
   environmentVariables,
   onUpdate,
   hasAdminPermissions,
+  disabledTip,
+  canCreate,
+  canEdit,
+  canDelete,
+  disabledTipForCreate,
+  disabledTipForEdit,
+  disabledTipForDelete,
 }: {
   environmentVariables: ProjectEnvVarConfig[] | undefined;
-  onUpdate: (value: UpdateEnvironmentVariables) => Promise<void>;
-  hasAdminPermissions: boolean;
+  onUpdate: (value: UpdateDefaultEnvironmentVariablesArgs) => Promise<void>;
+  /** Default permission used by the EnvironmentVariables form when no
+   *  per-action gate is supplied below. Stories and tests can keep
+   *  passing this single flag. */
+  hasAdminPermissions?: boolean;
+  disabledTip?: React.ReactNode;
+  canCreate?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
+  disabledTipForCreate?: React.ReactNode;
+  disabledTipForEdit?: React.ReactNode;
+  disabledTipForDelete?: React.ReactNode;
 }) {
   const [initialValues, setInitialValues] = useState<
     ProjectEnvVarConfig[] | undefined
@@ -81,37 +182,86 @@ export function DefaultEnvironmentVariablesInner({
         </p>
       </div>
       <EnvironmentVariables
-        hasAdminPermissions={hasAdminPermissions}
+        hasAdminPermissions={hasAdminPermissions ?? false}
+        disabledTip={disabledTip}
+        canCreate={canCreate}
+        canEdit={canEdit}
+        canDelete={canDelete}
+        disabledTipForCreate={disabledTipForCreate}
+        disabledTipForEdit={disabledTipForEdit}
+        disabledTipForDelete={disabledTipForDelete}
         environmentVariables={environmentVariables}
         updateEnvironmentVariables={async (
           creations,
           modifications,
           deletions,
         ) => {
-          await onUpdate({
-            changes: [
-              ...creations.map((newEnvVar) => ({
-                oldVariable: null,
-                newConfig: {
-                  name: newEnvVar.name,
-                  value: newEnvVar.value,
-                  deploymentTypes: [...newEnvVar.deploymentTypes],
-                },
-              })),
-              ...modifications.map(({ oldEnvVar, newEnvVar }) => ({
-                oldVariable: oldEnvVar,
-                newConfig: {
-                  name: newEnvVar.name,
-                  value: newEnvVar.value,
-                  deploymentTypes: [...newEnvVar.deploymentTypes],
-                },
-              })),
-              ...deletions.map((oldVariable) => ({
-                oldVariable,
-                newConfig: null,
-              })),
-            ],
-          });
+          const forEachDtype = (
+            name: string,
+            deploymentTypes: readonly DeploymentTypeType[],
+            value: string | null,
+          ) =>
+            deploymentTypes.map((deploymentType) => ({
+              name,
+              deploymentType,
+              value,
+            }));
+
+          const changes: UpdateDefaultEnvironmentVariablesArgs["changes"] = [];
+
+          for (const newEnvVar of creations) {
+            changes.push(
+              ...forEachDtype(
+                newEnvVar.name,
+                newEnvVar.deploymentTypes,
+                newEnvVar.value,
+              ),
+            );
+          }
+
+          for (const { oldEnvVar, newEnvVar } of modifications) {
+            if (oldEnvVar.name !== newEnvVar.name) {
+              // Name changed: delete old, create new
+              changes.push(
+                ...forEachDtype(
+                  oldEnvVar.name,
+                  oldEnvVar.deploymentTypes,
+                  null,
+                ),
+                ...forEachDtype(
+                  newEnvVar.name,
+                  newEnvVar.deploymentTypes,
+                  newEnvVar.value,
+                ),
+              );
+            } else {
+              // Upsert current deployment types
+              changes.push(
+                ...forEachDtype(
+                  newEnvVar.name,
+                  newEnvVar.deploymentTypes,
+                  newEnvVar.value,
+                ),
+              );
+              // Delete removed deployment types
+              const removed = oldEnvVar.deploymentTypes.filter(
+                (dt) => !newEnvVar.deploymentTypes.includes(dt),
+              );
+              changes.push(...forEachDtype(oldEnvVar.name, removed, null));
+            }
+          }
+
+          for (const oldVariable of deletions) {
+            changes.push(
+              ...forEachDtype(
+                oldVariable.name,
+                oldVariable.deploymentTypes,
+                null,
+              ),
+            );
+          }
+
+          await onUpdate({ changes });
           setInitialValues(undefined);
         }}
         initialFormValues={initialValues}

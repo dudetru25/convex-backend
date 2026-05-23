@@ -16,6 +16,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use authentication::token_to_authorization_header;
 use common::{
+    audit_log_lines::AuditLogVars,
     auth::AuthConfig,
     backoff::Backoff,
     bootstrap_model::components::{
@@ -33,7 +34,10 @@ use common::{
         Resource,
     },
     errors::JsError,
-    execution_context::ExecutionContext,
+    execution_context::{
+        ExecutionContext,
+        RequestContext,
+    },
     fastrace_helpers::EncodedSpan,
     knobs::{
         APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT,
@@ -69,14 +73,15 @@ use common::{
         ModuleEnvironment,
         NodeDependency,
         Timestamp,
+        UdfIdentifier,
         UdfType,
     },
-    RequestId,
 };
 use database::{
     unauthorized_error,
     Database,
     Transaction,
+    WriteSource,
 };
 use errors::{
     ErrorMetadata,
@@ -96,7 +101,6 @@ use futures::{
     future,
     FutureExt,
 };
-use isolate::ActionCallbacks;
 use keybroker::{
     Identity,
     KeyBroker,
@@ -171,6 +175,7 @@ use udf::{
         ValidatedUdfOutcome,
     },
     warnings::scheduled_arg_size_warning,
+    ActionCallbacks,
     ActionOutcome,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
@@ -181,7 +186,6 @@ use udf::{
 use usage_tracking::{
     FunctionUsageStats,
     FunctionUsageTracker,
-    OccInfo,
 };
 use value::{
     id_v6::DeveloperDocumentId,
@@ -211,6 +215,7 @@ use crate::{
         log_function_wait_timeout,
         log_mutation_already_committed,
     },
+    audit_logging::AuditLogClient,
     cache::{
         CacheManager,
         QueryCache,
@@ -230,7 +235,7 @@ use crate::{
 mod http_routing;
 mod metrics;
 
-static BUILD_DEPS_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| Duration::from_secs(1200));
+static BUILD_DEPS_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| Duration::from_secs(600));
 
 /// Wrapper for [IsolateClient]s and [FunctionRunner]s that determines where to
 /// route requests.
@@ -625,6 +630,7 @@ pub struct ApplicationFunctionRunner<RT: Runtime> {
     file_storage: TransactionalFileStorage<RT>,
 
     function_log: FunctionExecutionLog<RT>,
+    audit_log_client: AuditLogClient,
 
     cache_manager: CacheManager<RT>,
     default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
@@ -642,6 +648,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         modules_storage: Arc<dyn Storage>,
         module_cache: Arc<dyn ModuleLoader<RT>>,
         function_log: FunctionExecutionLog<RT>,
+        audit_log_client: AuditLogClient,
         default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
         cache: QueryCache,
     ) -> Self {
@@ -657,6 +664,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             database.clone(),
             isolate_functions.clone(),
             function_log.clone(),
+            audit_log_client.clone(),
             cache,
         );
 
@@ -677,6 +685,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             modules_storage,
             file_storage,
             function_log,
+            audit_log_client,
             cache_manager,
             default_system_env_vars,
             node_action_limiter,
@@ -691,7 +700,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     // Only used for running queries from REPLs.
     pub async fn run_query_without_caching(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         mut tx: Transaction<RT>,
         path: CanonicalizedComponentFunctionPath,
         arguments: SerializedArgs,
@@ -711,7 +720,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             UdfType::Query,
         )
         .await?;
-        let context = ExecutionContext::new(request_id, &caller);
+        let context = ExecutionContext::new(request_context, &caller);
         let (mut tx, outcome) = match validate_result {
             Ok(path_and_args) => {
                 self.isolate_functions
@@ -740,6 +749,15 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             FunctionOutcome::Query(o) => o,
             _ => anyhow::bail!("Received non-query outcome for query"),
         };
+
+        let vars = AuditLogVars::from_context(context.clone(), &self.runtime)?;
+        self.audit_log_client
+            .send_logs(
+                outcome.audit_log_lines.resolve_bodies(&vars)?,
+                &tx.usage_tracker,
+            )
+            .await?;
+
         let stats = tx.take_stats();
 
         let result = outcome.result.clone();
@@ -752,10 +770,9 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 start.elapsed(),
                 caller,
                 tx.usage_tracker,
-                context,
+                context.clone(),
             )
             .await;
-
         Ok((result, log_lines))
     }
 
@@ -763,7 +780,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     pub async fn retry_mutation(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         identity: Identity,
@@ -774,7 +791,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         let timer = mutation_timer();
         let result = self
             ._retry_mutation(
-                request_id,
+                request_context,
                 path,
                 arguments,
                 identity,
@@ -794,7 +811,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     async fn _retry_mutation(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         identity: Identity,
@@ -805,7 +822,14 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         if path.is_system() && !(identity.is_admin() || identity.is_system()) {
             anyhow::bail!(unauthorized_error("mutation"));
         }
-        let udf_path_string = (!path.is_system()).then_some(path.udf_path().to_string());
+        let write_source = {
+            let component_path = path.clone().debug_into_component_path();
+            if path.is_system() {
+                WriteSource::SystemUdf(Arc::new(UdfIdentifier::Function(component_path)))
+            } else {
+                WriteSource::Udf(Arc::new(UdfIdentifier::Function(component_path)))
+            }
+        };
 
         let mut backoff = Backoff::new(
             *UDF_EXECUTOR_OCC_INITIAL_BACKOFF,
@@ -818,7 +842,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
 
             // Note that we use different context for every mutation attempt.
             // This so every JS function run gets a different executionId.
-            let context = ExecutionContext::new(request_id.clone(), &caller);
+            let context = ExecutionContext::new(request_context.clone(), &caller);
 
             let start = self.runtime.monotonic_now();
             let mut tx = self
@@ -855,7 +879,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     {
                         let sleep = backoff.fail(&mut self.runtime.rng());
                         tracing::warn!(
-                            "Write throughput limit exceeded, retrying {udf_path_string:?} after \
+                            "Write throughput limit exceeded, retrying {write_source:?} after \
                              {sleep:?}",
                         );
                         self.runtime.wait(sleep).await;
@@ -916,7 +940,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             // errors from the log.
             let result = match self
                 .database
-                .commit_with_write_source(tx, udf_path_string.clone())
+                .commit_with_write_source(tx, write_source.clone())
                 .await
             {
                 Ok(ts) => Ok(MutationReturn {
@@ -933,13 +957,13 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                             log_lines,
                         })
                     } else {
-                        if e.is_occ()
+                        if let Some(occ_info) = e.occ_info()
                             && (backoff.failures() as usize) < *UDF_EXECUTOR_OCC_MAX_RETRIES
                         {
                             let sleep = backoff.fail(&mut self.runtime.rng());
                             tracing::warn!(
                                 "Optimistic concurrency control failed ({e}), retrying \
-                                 {udf_path_string:?} after {sleep:?}",
+                                 {write_source:?} after {sleep:?}",
                             );
                             self.runtime.wait(sleep).await;
                             if let Some(write_ts_raw) = e.occ_write_ts()
@@ -947,8 +971,6 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                             {
                                 self.database.wait_for_write_ts(write_ts).await;
                             }
-                            let (table_name, document_id, write_source) =
-                                e.occ_info().unwrap_or((None, None, None));
                             self.function_log
                                 .log_mutation_occ_error(
                                     outcome,
@@ -957,23 +979,17 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                                     caller.clone(),
                                     usage_tracker,
                                     context.clone(),
-                                    OccInfo {
-                                        table_name,
-                                        document_id,
-                                        write_source,
-                                        retry_count: mutation_retry_count as u64,
-                                    },
+                                    occ_info,
                                     mutation_queue_length,
                                     mutation_retry_count,
+                                    true,
                                 )
                                 .await;
                             continue;
                         }
                         outcome.result = Err(JsError::from_error_ref(&e));
 
-                        if e.is_occ() {
-                            let (table_name, document_id, write_source) =
-                                e.occ_info().unwrap_or((None, None, None));
+                        if let Some(occ_info) = e.occ_info() {
                             self.function_log
                                 .log_mutation_occ_error(
                                     outcome,
@@ -982,14 +998,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                                     caller,
                                     usage_tracker,
                                     context.clone(),
-                                    OccInfo {
-                                        table_name,
-                                        document_id,
-                                        write_source,
-                                        retry_count: mutation_retry_count as u64,
-                                    },
+                                    occ_info,
                                     mutation_queue_length,
                                     mutation_retry_count,
+                                    false,
                                 )
                                 .await;
                         } else {
@@ -1119,13 +1131,22 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 path_and_args,
                 UdfType::Mutation,
                 QueryJournal::new(),
-                context,
+                context.clone(),
             )
             .await?;
         let mutation_outcome = match outcome {
             FunctionOutcome::Mutation(o) => o,
             _ => anyhow::bail!("Received non-mutation outcome for mutation"),
         };
+
+        let vars = AuditLogVars::from_context(context, &self.runtime)?;
+        self.audit_log_client
+            .send_logs(
+                mutation_outcome.audit_log_lines.resolve_bodies(&vars)?,
+                &tx.usage_tracker,
+            )
+            .await?;
+
         let component = path.component;
 
         let table_mapping = tx.table_mapping().namespace(component.into());
@@ -1143,7 +1164,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     pub async fn run_action(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         identity: Identity,
@@ -1152,7 +1173,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         if path.is_system() && !(identity.is_admin() || identity.is_system()) {
             anyhow::bail!(unauthorized_error("action"));
         }
-        let context = ExecutionContext::new(request_id.clone(), &caller);
+        let context = ExecutionContext::new(request_context, &caller);
         let usage_tracking = FunctionUsageTracker::new();
         let start = self.runtime.monotonic_now();
         let completion_result = self
@@ -1306,8 +1327,6 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         let timer = function_total_timer(module.environment, UdfType::Action);
         let completion_result = match module.environment {
             ModuleEnvironment::Isolate => {
-                // TODO: This is the only use case of clone. We should get rid of clone,
-                // when we deprecate that codepath.
                 let outcome_future = self
                     .isolate_functions
                     .execute_action(tx, path_and_args, log_line_sender, context.clone())
@@ -1368,7 +1387,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 let source_maps_callback = async {
                     let module_version = self
                         .module_cache
-                        .get_module_with_metadata(module_metadata, source_package)
+                        .get_module_with_metadata(&module_metadata, &source_package)
                         .await?;
                     let mut source_maps = BTreeMap::new();
                     if let Some(source_map) = module_version.source_map.clone() {
@@ -1807,7 +1826,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     pub async fn run_query_at_ts(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
@@ -1816,7 +1835,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         caller: FunctionCaller,
     ) -> anyhow::Result<QueryReturn> {
         let result = self
-            .run_query_at_ts_inner(request_id, path, args, identity, ts, journal, caller)
+            .run_query_at_ts_inner(request_context, path, args, identity, ts, journal, caller)
             .await;
         match result.as_ref() {
             Ok(udf_outcome) => {
@@ -1840,7 +1859,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     async fn run_query_at_ts_inner(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
@@ -1852,12 +1871,12 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             anyhow::bail!(unauthorized_error("query"));
         }
         let start = self.runtime.monotonic_now();
-        let context = ExecutionContext::new(request_id.clone(), &caller);
+        let context = ExecutionContext::new(request_context.clone(), &caller);
         let usage_tracker = FunctionUsageTracker::new();
         let result = self
             .cache_manager
             .get(
-                request_id,
+                request_context,
                 path.clone(),
                 args.clone(),
                 identity.clone(),
@@ -1973,7 +1992,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
         let ts = self.database.now_ts_for_reads();
         let result = self
             .run_query_at_ts(
-                context.request_id,
+                RequestContext::new(context.request_id, context.request_metadata),
                 PublicFunctionPath::Component(path),
                 args,
                 identity,
@@ -1999,7 +2018,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
     ) -> anyhow::Result<FunctionResult> {
         let result = self
             .retry_mutation(
-                context.request_id,
+                RequestContext::new(context.request_id, context.request_metadata),
                 PublicFunctionPath::Component(path),
                 args,
                 identity,
@@ -2029,7 +2048,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
         let _tx = self.database.begin(identity.clone()).await?;
         let result = self
             .run_action(
-                context.request_id,
+                RequestContext::new(context.request_id, context.request_metadata),
                 PublicFunctionPath::Component(path),
                 args,
                 identity,

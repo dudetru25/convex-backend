@@ -19,6 +19,7 @@
 #![feature(duration_constructors)]
 
 pub mod async_compat;
+pub mod audit_log_lines;
 pub mod auth;
 pub mod backoff;
 pub mod bootstrap_model;
@@ -35,6 +36,7 @@ pub mod execution_context;
 pub mod ext;
 pub mod fastrace_helpers;
 pub mod floating_point;
+pub mod fmt;
 pub mod grpc;
 pub mod heap_size;
 pub mod http;
@@ -60,6 +62,7 @@ pub mod pool_stats;
 pub mod query;
 pub mod query_journal;
 pub mod retriable_stream;
+pub mod retry;
 pub mod runtime;
 pub mod schemas;
 pub mod sentry;
@@ -67,8 +70,6 @@ pub mod sha256;
 pub mod shapes;
 pub mod shutdown;
 pub mod sync;
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
 pub mod tracing;
 pub mod tracing_util;
 pub mod try_anyhow;
@@ -81,10 +82,12 @@ pub mod try_chunks;
 pub mod version;
 pub mod ws;
 
-pub use execution_context::RequestId;
+pub use execution_context::{
+    RequestContext,
+    RequestId,
+    RequestMetadata,
+};
 pub use tokio;
-#[cfg(any(test, feature = "testing"))]
-pub use value::assert_obj;
 pub use value::{
     obj,
     val,

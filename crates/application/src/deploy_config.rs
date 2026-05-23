@@ -99,6 +99,7 @@ use model::{
     deployment_audit_log::types::{
         DeploymentAuditLogEvent,
         PushComponentDiffs,
+        PushMessage,
     },
     environment_variables::EnvironmentVariablesModel,
     external_packages::types::ExternalDepsPackageId,
@@ -110,9 +111,11 @@ use model::{
     source_packages::{
         types::{
             NodeVersion,
+            NodeVersionDiff,
             SourcePackage,
         },
         upload_download::download_package,
+        SourcePackageModel,
     },
     udf_config::types::UdfConfig,
 };
@@ -139,6 +142,7 @@ use value::{
 };
 
 use crate::{
+    validate_env_var_values,
     Application,
     ApplyConfigArgs,
     ConfigMetadataAndSchema,
@@ -182,9 +186,18 @@ impl<RT: Runtime> Application<RT> {
             app_functions,
         } = self.evaluate_push_contents(config).await?;
 
-        let schema_change = self
-            .handle_schema_change_in_start_push(&app, &evaluated_components)
+        let skip_index_diff = config.dry_run || config.for_codegen;
+        let mut schema_change = self
+            .handle_schema_change_in_start_push(&app, &evaluated_components, skip_index_diff)
             .await?;
+        if skip_index_diff {
+            // Compute index diffs in a throwaway transaction so they're returned in
+            // the response but not committed as pending indexes.
+            let dry_run_schema_change = self
+                .handle_schema_change_read_only(&app, &evaluated_components)
+                .await?;
+            schema_change.index_diffs = dry_run_schema_change.index_diffs;
+        }
         self.database
             .load_indexes_into_memory(btreeset! { SCHEMAS_TABLE.clone() })
             .await?;
@@ -286,6 +299,7 @@ impl<RT: Runtime> Application<RT> {
                 system_env_var_overrides,
             )
             .await?;
+        validate_env_var_declarations(&evaluated_components)?;
         // Build and typecheck the component tree. We don't strictly need to do this
         // before `/finish_push`, but it's better to fail fast here on errors before
         // waiting for schema backfills to complete.
@@ -297,7 +311,11 @@ impl<RT: Runtime> Application<RT> {
                 .map(|(k, v)| (k.clone(), v.definition.clone()))
                 .collect(),
         )?;
-        let ctx = TypecheckContext::new(&evaluated_components, &initializer_evaluator);
+        let ctx = if config.for_codegen {
+            TypecheckContext::new_for_codegen(&evaluated_components, &initializer_evaluator)
+        } else {
+            TypecheckContext::new(&evaluated_components, &initializer_evaluator)
+        };
         let app = ctx.instantiate_root().await?;
 
         Ok(EvaluatedPushContents {
@@ -316,18 +334,21 @@ impl<RT: Runtime> Application<RT> {
         &self,
         app: &CheckedComponent,
         evaluated_components: &BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
+        skip_index_diff: bool,
     ) -> anyhow::Result<SchemaChange> {
-        // Even in dry run mode, we need to commit the schema changes so that
-        // wait_for_schema can validate the schema against existing data.
         let (_ts, schema_change) = self
             .execute_with_occ_retries(
                 Identity::system(),
                 FunctionUsageTracker::new(),
-                WriteSource::new("start_push"),
+                WriteSource::system("start_push"),
                 |tx| {
                     async move {
                         let schema_change = ComponentConfigModel::new(tx)
-                            .start_component_schema_changes(app, evaluated_components)
+                            .start_component_schema_changes(
+                                app,
+                                evaluated_components,
+                                skip_index_diff,
+                            )
                             .await?;
                         Ok(schema_change)
                     }
@@ -339,14 +360,14 @@ impl<RT: Runtime> Application<RT> {
     }
 
     #[fastrace::trace]
-    async fn handle_schema_change_in_evaluate_push(
+    async fn handle_schema_change_read_only(
         &self,
         app: &CheckedComponent,
         evaluated_components: &BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
     ) -> anyhow::Result<SchemaChange> {
         let mut tx = self.begin(Identity::system()).await?;
         let schema_change = ComponentConfigModel::new(&mut tx)
-            .start_component_schema_changes(app, evaluated_components)
+            .start_component_schema_changes(app, evaluated_components, false)
             .await?;
         drop(tx);
         Ok(schema_change)
@@ -684,7 +705,7 @@ impl<RT: Runtime> Application<RT> {
         } = self.evaluate_push_contents(config).await?;
 
         let schema_change = self
-            .handle_schema_change_in_evaluate_push(&app, &evaluated_components)
+            .handle_schema_change_read_only(&app, &evaluated_components)
             .await?;
 
         Ok(EvaluatePushResponse { schema_change })
@@ -809,6 +830,7 @@ impl<RT: Runtime> Application<RT> {
         &self,
         identity: Identity,
         mut start_push: StartPushResponse,
+        message: Option<PushMessage>,
     ) -> anyhow::Result<(FinishPushDiff, Timestamp)> {
         // Download all source packages. We can remove this once we don't store source
         // in the database.
@@ -839,6 +861,7 @@ impl<RT: Runtime> Application<RT> {
                 |tx| {
                     let start_push = &start_push;
                     let downloaded_source_packages = &downloaded_source_packages;
+                    let message = &message;
                     async move {
                         // Validate that environment variables haven't changed since `start_push`.
                         let environment_variables =
@@ -850,10 +873,48 @@ impl<RT: Runtime> Application<RT> {
                             ));
                         }
 
+                        // Validate that all required env vars declared in the
+                        // app definition are present.
+                        if let Some(app_def) =
+                            start_push.analysis.get(&ComponentDefinitionPath::root())
+                        {
+                            let missing: Vec<_> = app_def
+                                .definition
+                                .required_env_var_names()
+                                .into_iter()
+                                .filter(|name| {
+                                    !environment_variables
+                                        .iter()
+                                        .any(|(k, _)| k.to_string() == *name)
+                                })
+                                .collect();
+                            if !missing.is_empty() {
+                                anyhow::bail!(ErrorMetadata::bad_request(
+                                    "MissingEnvironmentVariables",
+                                    format!(
+                                        "Required environment variables are not set: {}. Set them \
+                                         in the Convex dashboard or CLI before pushing.",
+                                        missing.join(", ")
+                                    )
+                                ));
+                            }
+
+                            // Validate existing values match the new validators.
+                            validate_env_var_values(
+                                &environment_variables,
+                                &app_def.definition.env_vars,
+                            )?;
+                        }
+
                         // Update app state: auth info and UDF server version.
                         let auth_diff = AuthInfoModel::new(tx)
                             .put(start_push.app_auth.clone())
                             .await?;
+
+                        let prev_node_version = SourcePackageModel::new(tx, TableNamespace::Global)
+                            .get_latest()
+                            .await?
+                            .and_then(|p| p.into_value().node_version);
 
                         // Diff the component definitions.
                         let (definition_diffs, modules_by_definition, udf_config_by_definition) =
@@ -876,9 +937,22 @@ impl<RT: Runtime> Application<RT> {
                             )
                             .await?;
 
+                        let next_node_version = SourcePackageModel::new(tx, TableNamespace::Global)
+                            .get_latest()
+                            .await?
+                            .and_then(|p| p.into_value().node_version);
+
+                        let node_version_diff =
+                            (prev_node_version != next_node_version).then_some(NodeVersionDiff {
+                                previous_version: prev_node_version,
+                                next_version: next_node_version,
+                            });
+
                         let diffs = PushComponentDiffs {
                             auth_diff: auth_diff.clone(),
                             component_diffs: component_diffs.clone(),
+                            message: message.clone(),
+                            node_version_diff,
                         };
                         let audit_log_events =
                             vec![DeploymentAuditLogEvent::PushConfigWithComponents { diffs }];
@@ -895,8 +969,8 @@ impl<RT: Runtime> Application<RT> {
             )
             .await
             .map_err(|e| {
-                if let Some((_table_name, _document_id, write_source)) = e.occ_info()
-                    && let Some(write_source) = write_source
+                if let Some(occ_error_info) = e.occ_info()
+                    && let Some(write_source) = occ_error_info.write_source
                     && write_source == finish_push_write_source
                 {
                     e.context(ErrorMetadata::bad_request(
@@ -1068,6 +1142,39 @@ impl<RT: Runtime> InitializerEvaluator for ApplicationInitializerEvaluator<'_, R
     }
 }
 
+fn validate_env_var_declarations(
+    evaluated_components: &BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
+) -> anyhow::Result<()> {
+    for (path, evaluated) in evaluated_components {
+        for (name, env_var_validator) in &evaluated.definition.env_vars {
+            if !env_var_validator.validator.is_string_like_validator() {
+                let component_label = if path.is_root() {
+                    "the app".to_string()
+                } else {
+                    format!("component {path}", path = String::from(path.clone()))
+                };
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "InvalidEnvVarDeclaration",
+                    format!(
+                        "Env var `{name}` on {component_label} has a non-string validator. \
+                         Component env vars must be declared with `v.string()`, \
+                         `v.literal(\"...\")`, or a union of those."
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Convex code push is a multiphase process.
+///
+/// Clients that want to push code send this message to the backend. They use
+/// a resulting [StartPushResponse] to complete codegen and optionally
+/// complete the code push.
+///
+/// They also might decide to not do a complete push (e.g. just getting the
+/// analyze results to use for codegen).
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StartPushRequest {
@@ -1085,6 +1192,14 @@ pub struct StartPushRequest {
     // Multi-project deployment fields (optional for backward compatibility)
     pub namespace: Option<String>,
     pub project_id: Option<String>,
+
+    #[serde(default)]
+    pub dry_run: bool,
+
+    /// Indicates that this request is only for codegen and isn't initiating a
+    /// full mutiphase push.
+    #[serde(default)]
+    pub for_codegen: bool,
 }
 
 impl StartPushRequest {
@@ -1109,6 +1224,18 @@ impl StartPushRequest {
             }
         }
 
+        let proposed_node_version: Option<NodeVersion> =
+            self.node_version.map(|v| v.parse()).transpose()?;
+        let node_version = match proposed_node_version {
+            Some(NodeVersion::V18x) => {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "NodeVersionNotSupported",
+                    "Node 18 is no longer supported. Upgrade to a newer Node version (https://docs.convex.dev/production/project-configuration#configuring-the-nodejs-version)."
+                ))
+            },
+            version => version,
+        };
+
         Ok(ProjectConfig {
             config: ConfigMetadata {
                 functions: self.functions,
@@ -1125,8 +1252,10 @@ impl StartPushRequest {
                 .into_iter()
                 .map(NodeDependency::from)
                 .collect(),
-            node_version: self.node_version.map(|v| v.parse()).transpose()?,
+            node_version,
             namespace: self.namespace,
+            dry_run: self.dry_run,
+            for_codegen: self.for_codegen,
         })
     }
 }
@@ -1239,37 +1368,6 @@ impl TryFrom<AppDefinitionConfigJson> for AppDefinitionConfig {
                 .map(TryInto::try_into)
                 .collect::<anyhow::Result<_>>()?,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::AppDefinitionConfigJson;
-
-    /// Backwards compatibility test:
-    /// historically clients sent changed app modules under
-    /// `appDefinition.functions`, and did not send `unchangedModuleHashes`
-    /// at all.
-    ///
-    /// We accept that payload by:
-    /// - aliasing `functions` -> `changedModules`
-    /// - defaulting missing `unchangedModuleHashes` to an empty list
-    #[test]
-    fn test_app_definition_config_json_old_format() -> anyhow::Result<()> {
-        let json = r#"{
-            "definition": null,
-            "dependencies": [],
-            "schema": null,
-            "functions": [
-                { "path": "foo.js", "source": "// foo", "sourceMap": null, "environment": null }
-            ],
-            "udfServerVersion": "1.2.3"
-        }"#;
-
-        let parsed: AppDefinitionConfigJson = serde_json::from_str(json)?;
-        assert_eq!(parsed.changed_modules.len(), 1);
-        assert!(parsed.unchanged_module_hashes.is_empty());
-        Ok(())
     }
 }
 

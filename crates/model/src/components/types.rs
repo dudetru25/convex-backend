@@ -88,6 +88,15 @@ pub struct ProjectConfig {
     /// Tables will be prefixed and the schema will be merged accumulatively
     /// with other namespaces.
     pub namespace: Option<String>,
+
+    pub dry_run: bool,
+
+    /// When true, relax typechecks that don't affect the codegen output. The
+    /// CLI sets this for standalone component codegen (`convex codegen
+    /// --component-dir ...`), where it wraps the target component in a
+    /// synthetic root app that can't provide bindings for the child's required
+    /// env vars.
+    pub for_codegen: bool,
 }
 
 #[derive(Debug)]

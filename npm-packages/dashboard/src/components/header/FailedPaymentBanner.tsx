@@ -1,6 +1,6 @@
 import classNames from "classnames";
 import { useCurrentTeam } from "api/teams";
-import { useListInvoices } from "api/billing";
+import { useHasFailedPayment } from "api/billing";
 import { Link } from "@ui/Link";
 
 export function FailedPaymentBanner() {
@@ -23,14 +23,10 @@ export function FailedPaymentBanner() {
 
 export function useShowFailedPaymentBanner() {
   const team = useCurrentTeam();
-  const { invoices } = useListInvoices(
+  // For members without `billing:view`, `status === "denied"` and the banner
+  // stays hidden — they can't act on the linked payment-method page anyway.
+  const result = useHasFailedPayment(
     team?.managedBy === "vercel" ? undefined : team?.id,
   );
-  const failedInvoice = invoices
-    ? invoices.find(
-        (invoice) => invoice.status === "issued" && invoice.hasFailedPayment,
-      )
-    : undefined;
-
-  return failedInvoice !== undefined;
+  return result.status === "ok" && result.data.hasFailedPayment;
 }

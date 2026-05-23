@@ -1,3 +1,4 @@
+import { paths as PlatformDeploymentPaths } from "@convex-dev/platform/deploymentApi";
 import { paths as PlatformManagementPaths } from "@convex-dev/platform/managementApi";
 import { chalkStderr } from "chalk";
 import os from "os";
@@ -24,6 +25,7 @@ import {
 } from "../localDeployment/bigBrain.js";
 import type {
   paths as CliManagementPaths,
+  RegionName,
   TeamResponse,
 } from "../../generatedApi.js";
 import createClient from "openapi-fetch";
@@ -37,6 +39,8 @@ export const BIG_BRAIN_URL = `${provisionHost}/api/`;
 const PLATFORM_MANAGEMENT_API_URL = `${provisionHost}/v1/`;
 export const ENV_VAR_FILE_PATH = ".env.local";
 export const CONVEX_DEPLOY_KEY_ENV_VAR_NAME = "CONVEX_DEPLOY_KEY";
+// Alias for CONVEX_DEPLOY_KEY. Accepted anywhere CONVEX_DEPLOY_KEY is.
+export const CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME = "CONVEX_DEPLOYMENT_TOKEN";
 export const CONVEX_DEPLOYMENT_ENV_VAR_NAME = "CONVEX_DEPLOYMENT";
 export const CONVEX_SELF_HOSTED_URL_VAR_NAME = "CONVEX_SELF_HOSTED_URL";
 export const CONVEX_SELF_HOSTED_ADMIN_KEY_VAR_NAME =
@@ -82,6 +86,19 @@ export async function processDeployKeyValue(
   }
 
   return deployKey;
+}
+
+/**
+ * Reads the deploy key from environment variables, accepting either
+ * CONVEX_DEPLOY_KEY or its alias CONVEX_DEPLOYMENT_TOKEN. CONVEX_DEPLOY_KEY
+ * takes precedence when both are set.
+ */
+export function readDeployKeyFromEnv(
+  getEnv: (name: string) => string | undefined | null,
+): string | undefined {
+  const fromDeployKey = getEnv(CONVEX_DEPLOY_KEY_ENV_VAR_NAME);
+  const fromToken = getEnv(CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME);
+  return fromDeployKey || fromToken || undefined;
 }
 
 export function parsePositiveInteger(value: string) {
@@ -357,8 +374,6 @@ export async function selectDevDeploymentType(
     userHasChosenSomethingInteractively,
     // from `--configure --dev-deployment local|cloud`
     devDeploymentFromFlag,
-    // from `--cloud or --local`
-    forceDevDeployment,
   }:
     | {
         chosenConfiguration: "new" | "existing" | "ask" | null;
@@ -367,7 +382,6 @@ export async function selectDevDeploymentType(
         projectSlug: string;
         userHasChosenSomethingInteractively: boolean;
         devDeploymentFromFlag: "cloud" | "local" | undefined;
-        forceDevDeployment: "cloud" | "local" | undefined;
       }
     | {
         chosenConfiguration: "new" | "existing" | "ask" | null;
@@ -377,10 +391,8 @@ export async function selectDevDeploymentType(
         projectSlug: undefined;
         userHasChosenSomethingInteractively: boolean;
         devDeploymentFromFlag: "cloud" | "local" | undefined;
-        forceDevDeployment: "cloud" | "local" | undefined;
       },
 ): Promise<{ devDeployment: "cloud" | "local" }> {
-  if (forceDevDeployment) return { devDeployment: forceDevDeployment };
   if (devDeploymentFromFlag) return { devDeployment: devDeploymentFromFlag };
 
   if (newOrExisting === "existing" && chosenConfiguration === null) {
@@ -419,9 +431,10 @@ export async function selectDevDeploymentType(
   return { devDeployment };
 }
 
-export function logNoDefaultRegionMessage(teamSlug: string) {
+export async function logNoDefaultRegionMessage(teamSlug: string) {
+  const { teamDashboardUrl } = await import("../dashboard.js");
   const noDefaultRegionMessage = chalkStderr.gray(
-    `Tip: you can configure a default region for your team at ${chalkStderr.underline(`https://dashboard.convex.dev/t/${teamSlug}/settings`)}`,
+    `Tip: you can configure a default region for your team at ${chalkStderr.underline(`${teamDashboardUrl(teamSlug)}/settings`)}`,
   );
   logMessage(noDefaultRegionMessage);
 }
@@ -434,7 +447,7 @@ export async function selectRegionOrUseDefault(
   if (!process.stdin.isTTY) {
     // Use the team default in non-interactive terminals
     if (!selectedTeam.defaultRegion) {
-      logNoDefaultRegionMessage(selectedTeam.slug);
+      await logNoDefaultRegionMessage(selectedTeam.slug);
     }
     return selectedTeam.defaultRegion ?? null;
   }
@@ -443,7 +456,7 @@ export async function selectRegionOrUseDefault(
     (await selectRegion(ctx, selectedTeam.id, deploymentType));
   if (!selectedTeam.defaultRegion) {
     // Log after the user chooses a region
-    logNoDefaultRegionMessage(selectedTeam.slug);
+    await logNoDefaultRegionMessage(selectedTeam.slug);
   }
   return selectedRegionName;
 }
@@ -452,7 +465,7 @@ export async function selectRegion(
   ctx: Context,
   teamId: number,
   deploymentType: CloudDeploymentType,
-): Promise<string> {
+): Promise<RegionName> {
   const regionsResponse = (
     await typedPlatformClient(ctx).GET(
       "/teams/{team_id}/list_deployment_regions",
@@ -692,7 +705,7 @@ export function cacheDir() {
  *
  * This fetch() also has retries and throws if the response is not ok.
  */
-export async function bigBrainFetch(ctx: Context): Promise<typeof fetch> {
+export function bigBrainFetch(ctx: Context): typeof fetch {
   const authHeader = ctx.bigBrainAuth()?.header;
   const bigBrainHeaders: Record<string, string> = authHeader
     ? {
@@ -758,26 +771,25 @@ export async function bigBrainAPI<T = any>({
  *
  * Pass { throw: true } to throw ThrowingFetchErrors instead of exiting the process.
  */
-function typedBigBrainClientFactory<T>(baseUrl: string) {
+function typedApiClientFactory<T>(
+  baseUrl: string,
+  fetchBuilder: (ctx: Context) => typeof fetch,
+) {
   return (ctx: Context, options: { throw?: boolean } = {}) => {
     type Paths = T extends CliManagementPaths
       ? CliManagementPaths
       : T extends PlatformManagementPaths
         ? PlatformManagementPaths
-        : never;
-    const bigBrainClient = createClient<Paths>({
+        : T extends PlatformDeploymentPaths
+          ? PlatformDeploymentPaths
+          : never;
+    const client = createClient<Paths>({
       baseUrl,
-      fetch: async (
-        resource: Request,
-        options?: RequestInit,
-      ): Promise<Response> => {
-        const fetch = await bigBrainFetch(ctx);
-        return fetch(resource, options);
-      },
+      fetch: fetchBuilder(ctx),
     });
 
     // Wrap the client with error handling - go back to proxy since middleware doesn't catch parsing errors
-    return new Proxy(bigBrainClient, {
+    return new Proxy(client, {
       get(target, prop) {
         const originalMethod = target[prop as keyof typeof target];
 
@@ -810,12 +822,30 @@ function typedBigBrainClientFactory<T>(baseUrl: string) {
   };
 }
 
-export const typedBigBrainClient =
-  typedBigBrainClientFactory<CliManagementPaths>(BIG_BRAIN_URL);
+export const typedBigBrainClient = typedApiClientFactory<CliManagementPaths>(
+  BIG_BRAIN_URL,
+  bigBrainFetch,
+);
 export const typedPlatformClient =
-  typedBigBrainClientFactory<PlatformManagementPaths>(
+  typedApiClientFactory<PlatformManagementPaths>(
     PLATFORM_MANAGEMENT_API_URL,
+    bigBrainFetch,
   );
+
+export function typedDeploymentClient(
+  ctx: Context,
+  args: { deploymentUrl: string; adminKey: string },
+  options: { throw?: boolean } = {},
+) {
+  return typedApiClientFactory<PlatformDeploymentPaths>(
+    `${args.deploymentUrl}/api/v1`,
+    (ctx) =>
+      deploymentFetch(ctx, {
+        deploymentUrl: args.deploymentUrl,
+        adminKey: args.adminKey,
+      }),
+  )(ctx, options);
+}
 
 export async function bigBrainAPIMaybeThrows({
   ctx,
@@ -828,7 +858,7 @@ export async function bigBrainAPIMaybeThrows({
   path: string;
   data?: any;
 }): Promise<any> {
-  const fetch = await bigBrainFetch(ctx);
+  const fetch = bigBrainFetch(ctx);
   const dataString =
     data === undefined
       ? method === "POST"
@@ -894,19 +924,40 @@ export function waitUntilCalled(): [Promise<unknown>, () => void] {
   return [waitPromise, () => onCalled(null)];
 }
 
-// We can eventually switch to something like `filesize` for i18n and
-// more robust formatting, but let's keep our CLI bundle small for now.
+const BYTE_UNITS: [number, string][] = [
+  [1 << 30, "GiB"],
+  [1_000_000_000, "GB"],
+  [1 << 20, "MiB"],
+  [1_000_000, "MB"],
+  [1 << 10, "KiB"],
+  [1_000, "KB"],
+];
+
+/**
+ * Format a byte count into a human-friendly string.
+ *
+ * Picks the unit (binary or decimal) that divides most cleanly.
+ * Shows one decimal place only when it divides exactly (e.g. "4.1 MiB").
+ * Falls back to raw bytes when no unit divides cleanly.
+ */
 export function formatSize(n: number): string {
-  if (n < 1024) {
-    return `${n} B`;
+  if (n === 0) {
+    return "0 bytes";
   }
-  if (n < 1024 * 1024) {
-    return `${(n / 1024).toFixed(1)} KB`;
+  for (const [unitSize, unitName] of BYTE_UNITS) {
+    if (n < unitSize) {
+      continue;
+    }
+    if (n % unitSize === 0) {
+      return `${n / unitSize} ${unitName}`;
+    }
+    if ((n * 10) % unitSize === 0) {
+      const whole = Math.floor(n / unitSize);
+      const frac = Math.floor((n * 10) / unitSize) % 10;
+      return `${whole}.${frac} ${unitName}`;
+    }
   }
-  if (n < 1024 * 1024 * 1024) {
-    return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  }
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  return `${n} bytes`;
 }
 
 export function formatDuration(ms: number): string {
@@ -1236,7 +1287,7 @@ export function deploymentFetch(
     adminKey: string;
     onError?: (err: any) => void;
   },
-): typeof throwingFetch {
+): typeof fetch {
   const { deploymentUrl, adminKey, onError } = options;
   const onErrorWithAttempt = (err: any, attempt: number) => {
     onError?.(err);

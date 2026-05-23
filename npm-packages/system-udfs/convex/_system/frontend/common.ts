@@ -34,11 +34,18 @@ export type UsageStats = {
   memoryUsedMb: number | null;
   databaseReadBytes: number;
   databaseWriteBytes: number;
+  databaseIoReadBytes: number;
+  databaseIoWriteBytes: number;
   databaseReadDocuments: number;
   storageReadBytes: number;
   storageWriteBytes: number;
   vectorIndexReadBytes: number;
   vectorIndexWriteBytes: number;
+  textIndexQueryBytes: number;
+  textIndexWriteQueryBytes: number;
+  vectorIndexReadQueryBytes: number;
+  vectorIndexWriteQueryBytes: number;
+  networkEgressBytes: number;
 };
 
 export type FunctionExecutionCompletion = {
@@ -138,13 +145,16 @@ export type Integration = Doc<"_log_sinks">;
 // Note: doesn't include exports or auth
 export type IntegrationConfig = Integration["config"];
 
-// Export integrations aren't configured on convex's side, so they don't use _log_sinks table
-export type ExportIntegrationType = "airbyte" | "fivetran";
+// Streaming export/import integrations aren't configured on convex's side, so
+// they don't use the _log_sinks table.
+export type ExportIntegrationType = "fivetran";
+export type ImportIntegrationType = "airbyte";
 // WorkOS environment mappings live in api.convex.dev for now
 export type AuthIntegrationType = "workos";
 export type IntegrationType =
   | IntegrationConfig["type"]
   | ExportIntegrationType
+  | ImportIntegrationType
   | AuthIntegrationType;
 
 export type DatadogConfig = Infer<typeof datadogConfig>;

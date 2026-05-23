@@ -11,7 +11,10 @@ use common::types::{
     ProjectId,
     TeamId,
 };
-use keybroker::AdminIdentityPrincipal;
+use keybroker::{
+    AdminIdentityPrincipal,
+    DeploymentOp,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -91,6 +94,13 @@ pub struct DeploymentAuthResponse {
     pub admin_key: AccessToken,
     pub url: String,
     pub deployment_type: DeploymentType,
+    /// The user-facing reference for this deployment (e.g. `preview/pr-42`),
+    /// usable as the `<ref>` in `team:project:<ref>` selectors. `None` for
+    /// local deployments, which don't have a Big Brain reference.
+    pub reference: Option<String>,
+    /// Whether this is the default deployment for its project (dev: per
+    /// member; prod: per project). Preview/custom/local are always `false`.
+    pub is_default: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -109,6 +119,8 @@ pub struct AccessTokenDeploymentAuthResponse {
     pub is_authorized: bool,
     pub authorized_entity: Option<AdminIdentityPrincipal>,
     pub is_read_only: Option<bool>,
+    #[serde(default)]
+    pub allowed_ops: Option<Vec<DeploymentOp>>,
 }
 
 #[derive(Deserialize, Serialize, ToSchema)]
@@ -158,6 +170,13 @@ pub struct TeamAndProjectForDeploymentResponse {
     pub team_id: TeamId,
     pub project_id: ProjectId,
     pub deployment_id: Option<DeploymentId>,
+    /// The user-facing reference for this deployment (e.g. `preview/pr-42`),
+    /// usable as the `<ref>` in `team:project:<ref>` selectors. `None` for
+    /// local deployments.
+    pub reference: Option<String>,
+    /// Whether this is the default deployment for its project (dev: per
+    /// member; prod: per project). Always `false` for local deployments.
+    pub is_default: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ToSchema)]

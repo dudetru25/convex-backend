@@ -8,6 +8,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use aws_config::retry::RetryConfig;
 use aws_sdk_s3::{
+    config::IdentityCache,
     operation::{
         create_multipart_upload::builders::CreateMultipartUploadFluentBuilder,
         head_object::{
@@ -35,7 +36,10 @@ use aws_utils::{
 use bytes::Bytes;
 use common::{
     errors::report_error,
-    knobs::STORAGE_MAX_INTERMEDIATE_PART_SIZE,
+    knobs::{
+        AWS_S3_MIN_IDENTITY_VALIDITY,
+        STORAGE_MAX_INTERMEDIATE_PART_SIZE,
+    },
     runtime::Runtime,
     types::{
         FullyQualifiedObjectKey,
@@ -184,7 +188,14 @@ async fn s3_client() -> Result<Client, anyhow::Error> {
             let config = must_s3_config_from_env()
                 .await
                 .context("AWS env variables are required when using S3 storage")?;
-            let s3_config = config.retry_config(RetryConfig::standard()).build();
+            let s3_config = config
+                .identity_cache(
+                    IdentityCache::lazy()
+                        .buffer_time(*AWS_S3_MIN_IDENTITY_VALIDITY)
+                        .build(),
+                )
+                .retry_config(RetryConfig::standard())
+                .build();
             anyhow::Ok(Client::from_conf(s3_config))
         })
         .await?
@@ -733,136 +744,3 @@ pub fn s3_bucket_name(use_case: &StorageUseCase) -> anyhow::Result<String> {
 }
 
 // Test below only works if you have AWS environment variables set
-#[cfg(test)]
-mod tests {
-
-    use std::{
-        iter,
-        time::Duration,
-    };
-
-    use bytes::Bytes;
-    use common::{
-        runtime::Runtime,
-        sha256::Sha256,
-        types::ObjectKey,
-    };
-    use futures::StreamExt;
-    use runtime::prod::ProdRuntime;
-    use storage::{
-        Storage,
-        Upload,
-        UploadExt,
-    };
-    use tokio::sync::mpsc;
-    use tokio_stream::wrappers::ReceiverStream;
-
-    use super::S3Storage;
-
-    const TEST_BUCKET: &str = "test-convex-snapshot-export2";
-    const TEST_BUFFER_SIZE: usize = 6000000;
-
-    async fn create_test_storage<RT: Runtime>(runtime: RT) -> S3Storage<RT> {
-        S3Storage::new_with_prefix(TEST_BUCKET.to_string(), "".to_owned(), runtime)
-            .await
-            .expect("Must set env variables")
-    }
-
-    // Generate some large data that's not quite identical so that we can catch
-    // hashing ordering errors.
-    fn large_upload_buffers(total_buffers: usize) -> impl Iterator<Item = Bytes> {
-        iter::from_coroutine(
-            #[coroutine]
-            move || {
-                let mut current = 0;
-                for _ in 1..total_buffers {
-                    let mut buffer = vec![0; TEST_BUFFER_SIZE];
-                    #[allow(clippy::needless_range_loop)] // We want to mutate the buffer.
-                    for i in 0..TEST_BUFFER_SIZE {
-                        buffer[i] = current;
-                        if current == u8::MAX {
-                            current = 0;
-                        } else {
-                            current += 1;
-                        }
-                    }
-                    yield buffer.into();
-                }
-            },
-        )
-    }
-
-    #[convex_macro::prod_rt_test]
-    #[ignore]
-    async fn test_parallel_upload(rt: ProdRuntime) -> anyhow::Result<()> {
-        let (sender, receiver) = mpsc::channel::<Bytes>(10);
-        let target_upload_parts = 3;
-
-        let handle = rt.spawn_thread("test", move || async move {
-            let buffers = large_upload_buffers(target_upload_parts);
-            for buffer in buffers {
-                sender.send(buffer.clone()).await.unwrap();
-            }
-            sender.send(vec![4, 5, 6].into()).await.unwrap();
-        });
-
-        let mut manual_checksum = Sha256::new();
-        for buffer in large_upload_buffers(target_upload_parts) {
-            manual_checksum.update(&buffer);
-        }
-        manual_checksum.update(&[4, 5, 6]);
-        let manual_digest = manual_checksum.finalize();
-
-        let storage = create_test_storage(rt.clone()).await;
-        let mut s3_upload = storage.start_upload().await?;
-        let (_, stream_digest) = s3_upload
-            .try_write_parallel_and_hash(ReceiverStream::new(receiver).map(Ok))
-            .await?;
-        let _key = s3_upload.complete().await?;
-
-        handle.join().await?;
-
-        assert_eq!(manual_digest, stream_digest);
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    #[ignore]
-    async fn test_sequential_upload(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = create_test_storage(rt.clone()).await;
-        let mut checksum = Sha256::new();
-        for buffer in large_upload_buffers(2) {
-            checksum.update(&buffer);
-        }
-        checksum.update(&[4, 5, 6]);
-
-        let mut s3_upload = storage.start_upload().await?;
-
-        for buffer in large_upload_buffers(2) {
-            s3_upload.write(buffer.clone()).await?;
-        }
-        s3_upload.write(vec![4, 5, 6].into()).await?;
-        let _key = s3_upload.complete().await?;
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    #[ignore]
-    async fn test_abort(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = create_test_storage(rt.clone()).await;
-        let s3_upload = storage.start_upload().await?;
-        s3_upload.abort().await?;
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    #[ignore]
-    async fn test_signed_url(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = create_test_storage(rt).await;
-        let object_key: ObjectKey = "new-key".try_into()?;
-        storage
-            .signed_url(object_key, Duration::from_secs(600))
-            .await?;
-        Ok(())
-    }
-}

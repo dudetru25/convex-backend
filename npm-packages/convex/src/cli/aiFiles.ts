@@ -1,22 +1,26 @@
 import path from "path";
 import { Command } from "@commander-js/extra-typings";
+import { chalkStderr } from "chalk";
+import { logMessage } from "../bundler/log.js";
 import { oneoffContext } from "../bundler/context.js";
 import { readProjectConfig } from "./lib/config.js";
 import { functionsDir } from "./lib/utils/utils.js";
 import {
   installAiFiles,
   enableAiFiles,
+  disableAiFiles,
   removeAiFiles,
-  safelyAttemptToDisableAiFiles,
 } from "./lib/aiFiles/index.js";
 import { statusAiFiles } from "./lib/aiFiles/status.js";
+import { writeAiFilesConfig } from "./lib/config.js";
 
 async function resolveProjectPaths() {
   const ctx = await oneoffContext({});
   const { configPath, projectConfig } = await readProjectConfig(ctx);
   const convexDir = path.resolve(functionsDir(configPath, projectConfig));
   const projectDir = path.resolve(path.dirname(configPath));
-  return { projectDir, convexDir };
+  const aiFilesConfig = projectConfig.aiFiles;
+  return { ctx, projectDir, convexDir, aiFilesConfig, projectConfig };
 }
 
 const aiInstall = new Command("install")
@@ -26,12 +30,15 @@ const aiInstall = new Command("install")
       "  - convex/_generated/ai/guidelines.md\n" +
       "  - AGENTS.md (Convex section only)\n" +
       "  - CLAUDE.md (Convex section only)\n" +
-      "  - Agent skills (installed to each coding agent's native path)",
+      "  - Agent skills (installed to each coding agent's native path, configured via convex.json)",
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await installAiFiles({ projectDir, convexDir });
+    const { projectDir, convexDir, aiFilesConfig } =
+      await resolveProjectPaths();
+    await installAiFiles({ projectDir, convexDir, aiFilesConfig });
+
+    logMessage(`${chalkStderr.green("✔")} Convex AI files installed.`);
   });
 
 const aiEnable = new Command("enable")
@@ -42,8 +49,16 @@ const aiEnable = new Command("enable")
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await enableAiFiles({ projectDir, convexDir });
+    const { projectDir, convexDir, aiFilesConfig } =
+      await resolveProjectPaths();
+
+    const newAiFilesConfig = await enableAiFiles({
+      projectDir,
+      convexDir,
+      aiFilesConfig,
+    });
+
+    await writeAiFilesConfig({ projectDir, aiFiles: newAiFilesConfig });
   });
 
 const aiUpdate = new Command("update")
@@ -53,12 +68,15 @@ const aiUpdate = new Command("update")
       "  - convex/_generated/ai/guidelines.md\n" +
       "  - AGENTS.md (Convex section only)\n" +
       "  - CLAUDE.md (Convex section only)\n" +
-      "  - Agent skills (installed to each coding agent's native path)\n\n",
+      "  - Agent skills (installed to each coding agent's native path, configured via convex.json)\n\n",
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await installAiFiles({ projectDir, convexDir });
+    const { projectDir, convexDir, aiFilesConfig } =
+      await resolveProjectPaths();
+    await installAiFiles({ projectDir, convexDir, aiFilesConfig });
+
+    logMessage(`${chalkStderr.green("✔")} Convex AI files updated.`);
   });
 
 const aiDisable = new Command("disable")
@@ -72,8 +90,18 @@ const aiDisable = new Command("disable")
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir } = await resolveProjectPaths();
-    await safelyAttemptToDisableAiFiles(projectDir);
+    const { projectDir, aiFilesConfig } = await resolveProjectPaths();
+
+    const newAiFilesConfig = disableAiFiles(aiFilesConfig);
+
+    await writeAiFilesConfig({
+      projectDir,
+      aiFiles: newAiFilesConfig,
+    });
+
+    logMessage(
+      `${chalkStderr.green(`✔`)} Convex AI files disabled. Run ${chalkStderr.bold(`npx convex ai-files enable`)} to re-enable.`,
+    );
   });
 
 const aiStatus = new Command("status")
@@ -90,8 +118,10 @@ const aiStatus = new Command("status")
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await statusAiFiles({ projectDir, convexDir });
+    const { projectDir, convexDir, aiFilesConfig } =
+      await resolveProjectPaths();
+
+    await statusAiFiles({ projectDir, convexDir, aiFilesConfig });
   });
 
 const aiRemove = new Command("remove")
@@ -109,8 +139,15 @@ const aiRemove = new Command("remove")
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await removeAiFiles({ projectDir, convexDir });
+    const { ctx, projectDir, convexDir } = await resolveProjectPaths();
+    const result = await removeAiFiles({ projectDir, convexDir });
+    if (result.kind === "error") {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: result.message,
+      });
+    }
   });
 
 export const aiFiles = new Command("ai-files")

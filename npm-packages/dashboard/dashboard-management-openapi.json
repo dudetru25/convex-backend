@@ -871,41 +871,6 @@
         }
       }
     },
-    "/projects/{project_id}/provision": {
-      "post": {
-        "operationId": "provision_deployment_dashboard",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "description": "",
-            "required": true
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProvisionDeploymentDashboardArgs"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionDeploymentDashboardResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/teams/{team_id}/deployments/{deployment_id}": {
       "get": {
         "operationId": "get_deployment_by_id",
@@ -1027,6 +992,35 @@
         }
       }
     },
+    "/teams/{team_id}/list_my_custom_roles": {
+      "get": {
+        "tags": [
+          "Custom Roles",
+          "alpha"
+        ],
+        "operationId": "list my custom roles",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListMyCustomRolesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/deployments/{deployment_id}/request_cloud_backup": {
       "post": {
         "operationId": "request_cloud_backup",
@@ -1089,12 +1083,12 @@
         }
       }
     },
-    "/teams/{team_id}/list_cloud_backups": {
+    "/deployments/{deployment_id}/list_cloud_backups": {
       "get": {
-        "operationId": "list_cloud_backups",
+        "operationId": "list_cloud_backups_by_deployment",
         "parameters": [
           {
-            "name": "team_id",
+            "name": "deployment_id",
             "in": "path",
             "description": "",
             "required": true
@@ -1873,6 +1867,19 @@
             "in": "path",
             "description": "",
             "required": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -1882,6 +1889,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/InvoicesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teams/{team_id}/has_failed_payment": {
+      "get": {
+        "operationId": "has_failed_payment",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HasFailedPaymentResponse"
                 }
               }
             }
@@ -2197,6 +2229,7 @@
           {
             "name": "deploymentName",
             "in": "query",
+            "description": "Required for insights queries; ignored otherwise.",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/CloudDeploymentName"
@@ -2241,7 +2274,10 @@
                   "items": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   }
                 }
@@ -2305,41 +2341,6 @@
             "style": "form"
           }
         ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GetTokenInfoResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/teams/{team_slug}/usage/record_tokens": {
-      "post": {
-        "operationId": "record_tokens",
-        "parameters": [
-          {
-            "name": "team_slug",
-            "in": "path",
-            "description": "",
-            "required": true
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RecordTokensArgs"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "description": "",
@@ -3248,6 +3249,51 @@
           }
         }
       }
+    },
+    "/vercel/potential_teams": {
+      "get": {
+        "operationId": "list_potential_vercel_teams_dashboard",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PotentialVercelTeam"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/vercel/potential_teams/{proposed_team_id}/join": {
+      "post": {
+        "operationId": "join_vercel_team_dashboard",
+        "parameters": [
+          {
+            "name": "proposed_team_id",
+            "in": "path",
+            "description": "The Convex team to join",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3386,6 +3432,14 @@
           "updateTeamAccessToken",
           "deleteTeamAccessToken",
           "viewTeamAccessToken",
+          "createProjectAccessToken",
+          "updateProjectAccessToken",
+          "deleteProjectAccessToken",
+          "viewProjectAccessToken",
+          "createDeploymentAccessToken",
+          "updateDeploymentAccessToken",
+          "deleteDeploymentAccessToken",
+          "viewDeploymentAccessToken",
           "createCustomDomain",
           "deleteCustomDomain",
           "startManualCloudBackup",
@@ -3415,7 +3469,10 @@
           "updateSSO",
           "transferDeployment",
           "receiveDeployment",
-          "updateDeployment"
+          "updateDeployment",
+          "createCustomRole",
+          "updateCustomRole",
+          "deleteCustomRole"
         ]
       },
       "AuditLogActor": {
@@ -3676,6 +3733,14 @@
               }
             ]
           },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when this token will expire. Must be at\nleast 30 minutes in the future."
+          },
           "oauthApp": {
             "oneOf": [
               {
@@ -3870,6 +3935,13 @@
           "includeStorage"
         ],
         "properties": {
+          "completedTime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
           "expirationTime": {
             "type": "integer",
             "format": "int64"
@@ -3937,11 +4009,22 @@
           "role"
         ],
         "properties": {
+          "customRoles": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CustomRoleId"
+            },
+            "description": "Custom roles to attach when `role` is `custom`. Required and non-empty\nin that case, and forbidden otherwise."
+          },
           "email": {
             "type": "string"
           },
           "role": {
-            "$ref": "#/components/schemas/Role"
+            "$ref": "#/components/schemas/Role",
+            "description": "Role to assign when the invitation is accepted.\nPass `custom` together with a non-empty `customRoles` list to invite a\nmember into a custom role; `admin` and `developer` must be sent without\n`customRoles`."
           }
         }
       },
@@ -3997,16 +4080,6 @@
           "projectsRemaining"
         ],
         "properties": {
-          "adminKey": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/AdminKey"
-              }
-            ]
-          },
           "deploymentName": {
             "type": [
               "string",
@@ -4106,6 +4179,58 @@
         "properties": {
           "name": {
             "$ref": "#/components/schemas/ProposedTeamName"
+          }
+        }
+      },
+      "CustomRoleId": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 0
+      },
+      "CustomRoleResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "teamId",
+          "name",
+          "statements",
+          "createTime"
+        ],
+        "properties": {
+          "createTime": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "creator": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MemberId"
+              }
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/CustomRoleId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "statements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleStatement"
+            }
+          },
+          "teamId": {
+            "$ref": "#/components/schemas/TeamId"
           }
         }
       },
@@ -4871,6 +4996,17 @@
           }
         }
       },
+      "HasFailedPaymentResponse": {
+        "type": "object",
+        "required": [
+          "hasFailedPayment"
+        ],
+        "properties": {
+          "hasFailedPayment": {
+            "type": "boolean"
+          }
+        }
+      },
       "IdentityResponse": {
         "type": "object",
         "required": [
@@ -4972,6 +5108,16 @@
           "role"
         ],
         "properties": {
+          "customRoles": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TeamMemberCustomRole"
+            },
+            "description": "The custom roles attached to this invitation. Present iff `role` is\n`custom`."
+          },
           "email": {
             "type": "string"
           },
@@ -5090,6 +5236,25 @@
             "items": {
               "$ref": "#/components/schemas/EnvVariableConfigJson"
             }
+          }
+        }
+      },
+      "ListMyCustomRolesResponse": {
+        "type": "object",
+        "required": [
+          "role",
+          "customRoles"
+        ],
+        "properties": {
+          "customRoles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomRoleResponse"
+            }
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "description": "The team member's built-in role. When `custom`, `customRoles` lists\nthe role definitions whose statements determine what the member can\ndo; for `admin`/`developer` it is empty."
           }
         }
       },
@@ -5295,9 +5460,9 @@
         "type": "object",
         "required": [
           "plan",
-          "billingContact",
           "status",
-          "nextBillingPeriodStart"
+          "nextBillingPeriodStart",
+          "hasNewBilling"
         ],
         "properties": {
           "billingAddress": {
@@ -5311,7 +5476,14 @@
             ]
           },
           "billingContact": {
-            "$ref": "#/components/schemas/BillingContactResponse"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BillingContactResponse"
+              }
+            ]
           },
           "endDate": {
             "type": [
@@ -5319,6 +5491,17 @@
               "null"
             ],
             "format": "int64"
+          },
+          "hasNewBilling": {
+            "type": "boolean",
+            "description": "Whether this subscription includes new billing metrics (e.g. Database\nI/O)."
+          },
+          "newBillingStartDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first renewal date on or after the new billing cutover (May 6,\n2026). Only set when `has_new_billing` is false."
           },
           "nextBillingPeriodStart": {
             "type": "string"
@@ -5659,6 +5842,40 @@
           }
         ]
       },
+      "PotentialVercelTeam": {
+        "type": "object",
+        "required": [
+          "teamId",
+          "teamName",
+          "teamSlug",
+          "planId",
+          "planName"
+        ],
+        "properties": {
+          "planId": {
+            "type": "string"
+          },
+          "planName": {
+            "type": "string"
+          },
+          "pricingNotice": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable description of billing impact when joining this team.\n`None` for free plans. Clients should show this verbatim so CLI and\ndashboard stay in sync on pricing copy."
+          },
+          "teamId": {
+            "$ref": "#/components/schemas/TeamId"
+          },
+          "teamName": {
+            "$ref": "#/components/schemas/TeamName"
+          },
+          "teamSlug": {
+            "$ref": "#/components/schemas/TeamSlug"
+          }
+        }
+      },
       "PreviewDeploymentIdentifier": {
         "type": "string"
       },
@@ -5833,45 +6050,6 @@
       "ProposedTeamName": {
         "type": "string"
       },
-      "ProvisionDeploymentDashboardArgs": {
-        "type": "object",
-        "required": [
-          "deploymentType"
-        ],
-        "properties": {
-          "deploymentClass": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "deploymentType": {
-            "$ref": "#/components/schemas/DeploymentType"
-          },
-          "region": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/RegionName"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false
-      },
-      "ProvisionDeploymentDashboardResponse": {
-        "type": "object",
-        "required": [
-          "deploymentName"
-        ],
-        "properties": {
-          "deploymentName": {
-            "type": "string"
-          }
-        }
-      },
       "ProvisionEnvironmentResponse": {
         "type": "object",
         "required": [
@@ -5985,19 +6163,6 @@
           }
         }
       },
-      "RecordTokensArgs": {
-        "type": "object",
-        "required": [
-          "centitokens"
-        ],
-        "properties": {
-          "centitokens": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          }
-        }
-      },
       "ReferralCode": {
         "type": "string"
       },
@@ -6089,7 +6254,156 @@
         "type": "string",
         "enum": [
           "admin",
-          "developer"
+          "developer",
+          "custom"
+        ]
+      },
+      "RoleStatement": {
+        "type": "object",
+        "description": "A single permission rule within a custom role.",
+        "required": [
+          "effect",
+          "actions",
+          "resource"
+        ],
+        "properties": {
+          "actions": {
+            "$ref": "#/components/schemas/RoleStatementActions"
+          },
+          "effect": {
+            "$ref": "#/components/schemas/RoleStatementEffect"
+          },
+          "resource": {
+            "type": "string",
+            "description": "Resource path like `project:*`, `project:slug=my-app`, or\n`project:*:deployment:type=prod`.",
+            "example": "project:*"
+          }
+        }
+      },
+      "RoleStatementAction": {
+        "type": "string",
+        "description": "An action that can be allowed or denied by a custom role statement.",
+        "enum": [
+          "team:update",
+          "team:delete",
+          "project:create",
+          "project:transfer",
+          "project:receive",
+          "project:update",
+          "project:delete",
+          "project:view",
+          "project:updateMemberRole",
+          "defaultEnvironmentVariable:create",
+          "defaultEnvironmentVariable:update",
+          "defaultEnvironmentVariable:delete",
+          "defaultEnvironmentVariable:view",
+          "deployment:create",
+          "deployment:transfer",
+          "deployment:receive",
+          "deployment:updateReference",
+          "deployment:updateDashboardEditConfirmation",
+          "deployment:updateExpiresAt",
+          "deployment:updateSendLogsToClient",
+          "deployment:updateClass",
+          "deployment:updateIsDefault",
+          "deployment:updateType",
+          "deployment:delete",
+          "deployment:view",
+          "deployment:integrations:view",
+          "deployment:integrations:write",
+          "deployment:customDomain:create",
+          "deployment:customDomain:delete",
+          "deployment:customDomain:view",
+          "member:invite",
+          "member:cancelInvitation",
+          "member:remove",
+          "member:updateRole",
+          "member:view",
+          "billing:paymentMethod:update",
+          "billing:contact:update",
+          "billing:address:update",
+          "billing:subscription:changePlan",
+          "billing:spendingLimit:update",
+          "billing:view",
+          "billing:invoices:view",
+          "team:auditLog:view",
+          "team:token:create",
+          "team:token:update",
+          "team:token:delete",
+          "team:token:view",
+          "project:token:create",
+          "project:token:update",
+          "project:token:delete",
+          "project:token:view",
+          "deployment:token:create",
+          "deployment:token:update",
+          "deployment:token:delete",
+          "deployment:token:view",
+          "oauthApplication:create",
+          "oauthApplication:update",
+          "oauthApplication:delete",
+          "oauthApplication:view",
+          "oauthApplication:generateClientSecret",
+          "team:usage:view",
+          "deployment:insights:view",
+          "deployment:backups:create",
+          "deployment:backups:import",
+          "deployment:backups:configurePeriodic",
+          "deployment:backups:disablePeriodic",
+          "deployment:backups:delete",
+          "deployment:backups:view",
+          "sso:enable",
+          "sso:disable",
+          "sso:update",
+          "sso:view",
+          "customRole:view",
+          "integration:view",
+          "integration:create",
+          "integration:update",
+          "integration:delete",
+          "deployment:deploy",
+          "deployment:env:view",
+          "deployment:env:write",
+          "deployment:pause",
+          "deployment:unpause",
+          "deployment:logs:view",
+          "deployment:metrics:view",
+          "deployment:data:view",
+          "deployment:data:write",
+          "deployment:backups:download",
+          "deployment:functions:actAsUser",
+          "deployment:functions:runInternalQueries",
+          "deployment:functions:runInternalMutations",
+          "deployment:functions:runInternalActions",
+          "deployment:functions:runTestQuery",
+          "deployment:auditLog:view"
+        ]
+      },
+      "RoleStatementActions": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RoleStatementWildcardAction"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleStatementAction"
+            }
+          }
+        ]
+      },
+      "RoleStatementEffect": {
+        "type": "string",
+        "description": "Whether a rule grants or revokes access.",
+        "enum": [
+          "allow",
+          "deny"
+        ]
+      },
+      "RoleStatementWildcardAction": {
+        "type": "string",
+        "enum": [
+          "*"
         ]
       },
       "SSODomainState": {
@@ -6222,7 +6536,7 @@
               }
             ]
           },
-          "expirationTime": {
+          "expiresAt": {
             "type": [
               "integer",
               "null"
@@ -6272,7 +6586,6 @@
         "type": "object",
         "required": [
           "maxTeamMembers",
-          "maxProjects",
           "teamMaxFunctionCalls",
           "teamMaxActionCompute",
           "teamMaxDatabaseStorage",
@@ -6292,7 +6605,9 @@
           "maxDeployments",
           "managementApiEnabled",
           "previewDeploymentRetentionDays",
-          "deploymentClassSelectionEnabled"
+          "deploymentClassSelectionEnabled",
+          "teamMaxSearchQueries",
+          "customRolesEnabled"
         ],
         "properties": {
           "auditLogRetentionDays": {
@@ -6300,6 +6615,9 @@
             "format": "int64"
           },
           "customDomainsEnabled": {
+            "type": "boolean"
+          },
+          "customRolesEnabled": {
             "type": "boolean"
           },
           "deploymentClassSelectionEnabled": {
@@ -6324,11 +6642,6 @@
           "maxDeployments": {
             "type": "integer",
             "format": "int64"
-          },
-          "maxProjects": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
           },
           "maxTeamMembers": {
             "type": "integer",
@@ -6379,6 +6692,11 @@
             "format": "int64",
             "minimum": 0
           },
+          "teamMaxSearchQueries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "teamMaxVectorBandwidth": {
             "type": "integer",
             "format": "int64",
@@ -6404,6 +6722,16 @@
           "role"
         ],
         "properties": {
+          "customRoles": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TeamMemberCustomRole"
+            },
+            "description": "The custom roles attached to this team member. Present iff\n`role` is `custom`."
+          },
           "email": {
             "type": "string",
             "description": "The email of the team member"
@@ -6420,7 +6748,23 @@
           },
           "role": {
             "$ref": "#/components/schemas/Role",
-            "description": "The role of the team member"
+            "description": "The role of the team member. `custom` indicates the member's\npermissions come from the attached `customRoles`."
+          }
+        }
+      },
+      "TeamMemberCustomRole": {
+        "type": "object",
+        "description": "A custom role attached to a team member, denormalized with the\nrole's display name so API consumers can render members without a\nseparate roles lookup.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/CustomRoleId"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -6894,7 +7238,9 @@
         "type": "string",
         "enum": [
           "active",
-          "inactive"
+          "inactive",
+          "suspended",
+          "deleting"
         ]
       },
       "WorkOSTeamAssociation": {

@@ -113,6 +113,33 @@ code to the deployment before running the function.
 
 Use `--prod` to run functions in the production deployment for a project.
 
+#### Run an inline query
+
+You can also evaluate a readonly inline query on your deployment:
+
+```sh
+npx convex run --inline-query 'await ctx.db.query("messages").take(5)'
+```
+
+For multi-statement queries, use an explicit `return`:
+
+```sh
+npx convex run --inline-query 'const firstMessage = await ctx.db.query("messages").first(); console.log(firstMessage?._id); return firstMessage;'
+```
+
+If you need full control, you can pass a full module source that exports a
+default query:
+
+```sh
+npx convex run --inline-query 'export default query({ handler: async (ctx) => { console.log("Write and test your query function here!"); return await ctx.db.query("YOUR_TABLE_NAME").take(10); }, })'
+```
+
+The function call is also completely sandboxed, so it can only read data and
+cannot modify the database or access the network.
+
+Use `--component <path>` to run the inline query inside a mounted component. Use
+`--prod` to run the inline query on the production deployment for a project.
+
 ### Tail deployment logs
 
 You can choose how to pipe logs from your dev deployment to your console:
@@ -162,7 +189,7 @@ npx convex data <table>
 ```
 
 Display a simple view of the
-[dashboard data page](/dashboard/deployments/data.md) in the command line.
+[dashboard data page](/dashboard/deployments/data.mdx) in the command line.
 
 The command supports `--limit` and `--order` flags to change data displayed. For
 more complex filters, use the dashboard data page or write a
@@ -200,7 +227,7 @@ npx convex env remove <name>
 See and update the
 [deployment environment variables](/production/environment-variables). You can
 alternatively use the
-[settings page on the dashboard](/dashboard/deployments/settings.md#environment-variables).
+[settings page on the dashboard](/dashboard/deployments/settings.mdx#environment-variables).
 
 Tip: to avoid secrets from ending up in your terminal shell history, you can
 pass the value via stdin, from a file, or interactively.
@@ -271,7 +298,7 @@ This command will:
 
 Once this command succeeds the new functions will be available immediately.
 
-### Deploy Convex functions to a [preview deployment](/production/hosting/preview-deployments.mdx)
+### Deploy Convex functions to a [preview deployment](/production/multiple-deployments.mdx#preview)
 
 ```sh
 npx convex deploy
@@ -285,7 +312,7 @@ this command will:
    name for Vercel, Netlify, GitHub, and GitLab environments, or the
    `--preview-create` option can be used to customize the name associated with
    the newly created deployment.
-   ```
+   ```sh
    npx convex deploy --preview-create my-branch-name
    ```
 1. Run a command if specified with `--cmd`. The command will have CONVEX_URL (or

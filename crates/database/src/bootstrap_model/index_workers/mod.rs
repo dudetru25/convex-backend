@@ -123,11 +123,7 @@ impl<'a, RT: Runtime> IndexWorkerMetadataModel<'a, RT> {
     }
 }
 
-pub static INDEX_WORKER_METADATA_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_index_worker_metadata"
-        .parse()
-        .expect("_index_worker_metadata is an invalid table name")
-});
+pub static INDEX_WORKER_METADATA_TABLE: TableName = TableName::const_new("_index_worker_metadata");
 
 static INDEX_DOC_ID_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "index_id".parse().expect("Invalid built-in field"));
@@ -155,10 +151,6 @@ impl SystemTable for IndexWorkerMetadataTable {
 /// metadata. This must be used only within the index worker as an
 /// implementation detail of how the index is built.
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct IndexWorkerMetadataRecord {
     index_id: InternalId,
     pub index_metadata: IndexWorkerMetadata,
@@ -198,10 +190,6 @@ impl TryFrom<SerializedIndexWorkerMetadataRecord> for IndexWorkerMetadataRecord 
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub enum IndexWorkerMetadata {
     TextSearch(IndexWorkerBatchMetadata),
     VectorSearch(IndexWorkerBatchMetadata),
@@ -264,10 +252,6 @@ impl TryFrom<SerializedIndexWorkerMetadata> for IndexWorkerMetadata {
 ///
 /// For now this is vector and text search.
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct IndexWorkerBatchMetadata {
     fast_forward_ts: Timestamp,
 }
@@ -291,40 +275,5 @@ impl TryFrom<SerializedIndexWorkerBatchMetadata> for IndexWorkerBatchMetadata {
     fn try_from(value: SerializedIndexWorkerBatchMetadata) -> Result<Self, Self::Error> {
         let fast_forward_ts = Timestamp::try_from(value.fast_forward_ts)?;
         Ok(IndexWorkerBatchMetadata { fast_forward_ts })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use sync_types::Timestamp;
-    use value::{
-        assert_obj,
-        InternalId,
-    };
-
-    use crate::bootstrap_model::index_workers::{
-        IndexWorkerBatchMetadata,
-        IndexWorkerMetadata,
-        IndexWorkerMetadataRecord,
-    };
-
-    #[test]
-    fn test_frozen_obj() {
-        assert_eq!(
-            IndexWorkerMetadataRecord::try_from(assert_obj! {
-                "index_id" => "BJbr11wH980UmedO1cm7Aw",
-                "index_metadata" => assert_obj! {
-                    "metadata" => assert_obj! { "fast_forward_ts" => 6067670556026735204i64 },
-                    "metadata_type" => "text_search",
-                },
-            })
-            .unwrap(),
-            IndexWorkerMetadataRecord {
-                index_id: InternalId::from_developer_str("BJbr11wH980UmedO1cm7Aw").unwrap(),
-                index_metadata: IndexWorkerMetadata::TextSearch(IndexWorkerBatchMetadata {
-                    fast_forward_ts: Timestamp::try_from(6067670556026735204i64).unwrap()
-                })
-            }
-        );
     }
 }

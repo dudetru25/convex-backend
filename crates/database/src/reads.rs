@@ -13,17 +13,12 @@ use common::{
         PackedDocument,
     },
     document_index_keys::{
-        DocumentIndexKeyValue,
-        DocumentIndexKeys,
+        DatabaseIndexWrite,
+        TextIndexWrite,
     },
     interval::{
         Interval,
         IntervalSet,
-    },
-    knobs::{
-        TRANSACTION_MAX_READ_SET_INTERVALS,
-        TRANSACTION_MAX_READ_SIZE_BYTES,
-        TRANSACTION_MAX_READ_SIZE_ROWS,
     },
     static_span,
     types::{
@@ -34,6 +29,10 @@ use common::{
     virtual_system_mapping::VirtualSystemMapping,
 };
 use errors::ErrorMetadata;
+use imbl::{
+    OrdMap,
+    Vector,
+};
 use search::QueryReads as SearchQueryReads;
 use usage_tracking::FunctionUsageTracker;
 use value::{
@@ -52,10 +51,9 @@ use crate::{
         ConflictingRead,
         ConflictingReadWithWriteSource,
     },
-    metrics,
+    execution_size::TransactionLimits,
     stack_traces::StackTrace,
     write_log::{
-        DocumentIndexKeysUpdate,
         PackedDocumentUpdate,
         WriteSource,
     },
@@ -71,7 +69,6 @@ pub const OVER_LIMIT_HELP: &str = "Consider using smaller limits in your queries
 static READ_SET_CAPTURE_BACKTRACES: LazyLock<bool> =
     LazyLock::new(|| env_config("READ_SET_CAPTURE_BACKTRACES", false));
 
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq, Eq))]
 #[derive(Debug, Clone)]
 pub struct IndexReads {
     pub fields: IndexedFields,
@@ -86,7 +83,6 @@ impl HeapSize for IndexReads {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq, Eq))]
 pub struct ReadSet {
     indexed: WithHeapSize<BTreeMap<TabletIndexName, IndexReads>>,
     search: WithHeapSize<BTreeMap<TabletIndexName, SearchQueryReads>>,
@@ -119,14 +115,6 @@ impl ReadSet {
     /// Iterate over all range reads for the given index.
     pub fn iter_indexed(&self) -> impl Iterator<Item = (&TabletIndexName, &IndexReads)> {
         self.indexed.iter()
-    }
-
-    #[cfg(test)]
-    pub fn index_reads_for_test(&self, index_name: &TabletIndexName) -> IntervalSet {
-        self.indexed
-            .get(index_name)
-            .map(|reads| reads.intervals.clone())
-            .unwrap_or_default()
     }
 
     pub fn iter_search(&self) -> impl Iterator<Item = (&TabletIndexName, &SearchQueryReads)> {
@@ -193,73 +181,6 @@ impl ReadSet {
         None
     }
 
-    #[cfg(test)]
-    pub fn overlaps_document_for_test(&self, document: &PackedDocument) -> Option<ConflictingRead> {
-        self.overlaps_document(document, &mut IndexKeyBuffer::new())
-    }
-
-    /// Determine whether a mutation to a document overlaps with the read set.
-    /// Similar to `overlaps_document` but takes the index keys instead of the
-    /// full document.
-    pub fn overlaps_index_keys(
-        &self,
-        id: ResolvedDocumentId,
-        index_keys: &DocumentIndexKeys,
-    ) -> Option<ConflictingRead> {
-        // Standard indexes
-        for (
-            index,
-            IndexReads {
-                intervals,
-                stack_traces,
-                ..
-            },
-        ) in iter_indexes_for_table(&self.indexed, id.tablet_id)
-        {
-            let Some(DocumentIndexKeyValue::Standard(index_key)) = index_keys.get(index) else {
-                metrics::log_missing_index_key_staleness();
-                continue;
-            };
-
-            if intervals.contains(index_key) {
-                let stack_traces = stack_traces.as_ref().map(|st| {
-                    st.iter()
-                        .filter_map(|(interval, trace)| {
-                            if interval.contains(index_key) {
-                                Some(trace.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                });
-                return Some(ConflictingRead {
-                    index: index.clone(),
-                    id,
-                    stack_traces,
-                });
-            }
-        }
-
-        // Search indexes
-        for (index, search_reads) in iter_indexes_for_table(&self.search, id.tablet_id) {
-            let Some(DocumentIndexKeyValue::Search(value)) = index_keys.get(index) else {
-                metrics::log_missing_search_index_key_staleness();
-                continue;
-            };
-
-            if search_reads.overlaps_search_index_key_value(value) {
-                return Some(ConflictingRead {
-                    index: index.clone(),
-                    id,
-                    stack_traces: None,
-                });
-            }
-        }
-
-        None
-    }
-
     /// writes_overlap_docs is the core logic for
     /// detecting whether a transaction or subscription intersects a commit.
     /// If a write transaction intersects, it will be retried to maintain
@@ -302,44 +223,85 @@ impl ReadSet {
         None
     }
 
-    /// Equivalent to `writes_overlap_docs` but does not need to read the full
-    /// docs
+    /// Check whether any writes in the given index maps in the timestamp
+    /// range `[from, to]` conflict with this read set. More efficient than
+    /// `writes_overlap_docs` because it looks up only indexes that were read.
     #[fastrace::trace]
-    pub fn writes_overlap_index_keys<'a>(
+    pub fn writes_overlap_by_index(
         &self,
-        updates: impl Iterator<
-            Item = (
-                &'a Timestamp,
-                impl Iterator<
-                    Item = &'a (
-                        ResolvedDocumentId,
-                        DocumentIndexKeysUpdate,
-                        Option<PackedDocument>,
-                    ),
-                >,
-                &'a WriteSource,
-            ),
+        by_database_index: &OrdMap<
+            TabletIndexName,
+            OrdMap<Timestamp, (WithHeapSize<Vector<DatabaseIndexWrite>>, WriteSource)>,
         >,
+        by_search_index: &OrdMap<
+            TabletIndexName,
+            OrdMap<Timestamp, (WithHeapSize<Vector<TextIndexWrite>>, WriteSource)>,
+        >,
+        from: Timestamp,
+        to: Timestamp,
     ) -> Option<ConflictingReadWithWriteSource> {
-        for (update_ts, updates, write_source) in updates {
-            for (id, update, _doc) in updates {
-                if let Some(ref document) = update.new_document_keys
-                    && let Some(conflicting_read) = self.overlaps_index_keys(*id, document)
-                {
-                    return Some(ConflictingReadWithWriteSource {
-                        read: conflicting_read,
-                        write_source: write_source.clone(),
-                        write_ts: *update_ts,
-                    });
+        // Check database index reads
+        for (
+            index,
+            IndexReads {
+                intervals,
+                stack_traces,
+                ..
+            },
+        ) in self.indexed.iter()
+        {
+            let Some(updates) = by_database_index.get(index) else {
+                continue;
+            };
+            for (ts, (doc_updates, write_source)) in updates.range(from..=to) {
+                for update in doc_updates.iter() {
+                    for index_key in update.update.iter() {
+                        if intervals.contains(index_key) {
+                            let stack_traces = stack_traces.as_ref().map(|st| {
+                                st.iter()
+                                    .filter_map(|(interval, trace)| {
+                                        if interval.contains(index_key) {
+                                            Some(trace.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            });
+                            return Some(ConflictingReadWithWriteSource {
+                                read: ConflictingRead {
+                                    index: index.clone(),
+                                    id: update.document_id,
+                                    stack_traces,
+                                },
+                                write_source: write_source.clone(),
+                                write_ts: *ts,
+                            });
+                        }
+                    }
                 }
-                if let Some(ref document) = update.old_document_keys
-                    && let Some(conflicting_read) = self.overlaps_index_keys(*id, document)
-                {
-                    return Some(ConflictingReadWithWriteSource {
-                        read: conflicting_read,
-                        write_source: write_source.clone(),
-                        write_ts: *update_ts,
-                    });
+            }
+        }
+        // Check search index reads
+        for (index, search_reads) in self.search.iter() {
+            let Some(updates) = by_search_index.get(index) else {
+                continue;
+            };
+            for (ts, (doc_updates, write_source)) in updates.range(from..=to) {
+                for update in doc_updates.iter() {
+                    for value in update.update.iter() {
+                        if search_reads.overlaps_search_index_key_value(value) {
+                            return Some(ConflictingReadWithWriteSource {
+                                read: ConflictingRead {
+                                    index: index.clone(),
+                                    id: update.document_id,
+                                    stack_traces: None,
+                                },
+                                write_source: write_source.clone(),
+                                write_ts: *ts,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -376,18 +338,7 @@ pub struct TransactionReadSet {
     system_tx_size: TransactionReadSize,
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl PartialEq for TransactionReadSet {
-    fn eq(&self, other: &Self) -> bool {
-        self.read_set.eq(&other.read_set)
-            && self.num_intervals.eq(&other.num_intervals)
-            && self.user_tx_size.eq(&other.user_tx_size)
-            && self.system_tx_size.eq(&other.system_tx_size)
-    }
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq, derive_more::Add, derive_more::AddAssign)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct TransactionReadSize {
     // Sum of doc.size() for all documents read.
     pub total_document_size: usize,
@@ -493,33 +444,41 @@ impl TransactionReadSet {
         document_size: usize,
         usage_tracker: &FunctionUsageTracker,
         virtual_system_mapping: &VirtualSystemMapping,
+        limits: &TransactionLimits,
     ) -> anyhow::Result<()> {
         // Database bandwidth for document reads
         // TODO: Remove when we switch over to using egress_v2
-        let skip_logging_usage =
-            table_name.is_system() && !virtual_system_mapping.has_virtual_table(&table_name);
-        let virtual_table_name = virtual_system_mapping
-            .associated_virtual_table_name(&table_name)
-            .unwrap_or(&table_name)
-            .to_string();
+        let skip_logging_usage = table_name.is_system();
         usage_tracker.track_database_egress(
             component_path.clone(),
-            virtual_table_name.clone(),
+            table_name.to_string(),
             document_size as u64,
             skip_logging_usage,
         );
         usage_tracker.track_database_egress_v2(
             component_path.clone(),
-            virtual_table_name,
+            table_name.to_string(),
             document_size as u64,
-            skip_logging_usage,
+            table_name.is_system(),
         );
+        if let Some(virtual_table_name) =
+            virtual_system_mapping.associated_virtual_table_name(&table_name)
+        {
+            usage_tracker.track_virtual_table_egress(
+                component_path.clone(),
+                virtual_table_name.to_string(),
+                document_size as u64,
+            );
+        }
         usage_tracker.track_database_egress_rows(
             component_path,
             table_name.to_string(),
             1,
             skip_logging_usage,
         );
+
+        let max_rows = limits.documents_read;
+        let max_bytes = limits.bytes_read;
 
         let tx_size = if skip_logging_usage {
             &mut self.system_tx_size
@@ -535,24 +494,24 @@ impl TransactionReadSet {
 
         if !skip_logging_usage {
             anyhow::ensure!(
-                tx_size.total_document_count <= *TRANSACTION_MAX_READ_SIZE_ROWS,
+                tx_size.total_document_count <= max_rows,
                 ErrorMetadata::pagination_limit(
                     "TooManyDocumentsRead",
                     format!(
                         "Too many documents read in a single function execution (limit: {}). \
                          {OVER_LIMIT_HELP}",
-                        *TRANSACTION_MAX_READ_SIZE_ROWS,
+                        max_rows,
                     )
                 ),
             );
             anyhow::ensure!(
-                tx_size.total_document_size <= *TRANSACTION_MAX_READ_SIZE_BYTES,
+                tx_size.total_document_size <= max_bytes,
                 ErrorMetadata::pagination_limit(
                     "TooManyBytesRead",
                     format!(
                         "Too many bytes read in a single function execution (limit: {} bytes). \
                          {OVER_LIMIT_HELP}",
-                        *TRANSACTION_MAX_READ_SIZE_BYTES,
+                        max_bytes,
                     )
                 ),
             );
@@ -565,6 +524,7 @@ impl TransactionReadSet {
         index_name: TabletIndexName,
         fields: IndexedFields,
         interval: Interval,
+        limits: &TransactionLimits,
     ) -> anyhow::Result<()> {
         let _s = static_span!();
 
@@ -573,7 +533,8 @@ impl TransactionReadSet {
 
         self.num_intervals = self.num_intervals.saturating_sub(num_intervals_before);
         self.num_intervals += num_intervals_after;
-        if self.num_intervals > *TRANSACTION_MAX_READ_SET_INTERVALS {
+        let max_intervals = limits.database_queries;
+        if self.num_intervals > max_intervals {
             anyhow::bail!(
                 anyhow::anyhow!("top three: {}", self.top_three_intervals()).context(
                     ErrorMetadata::pagination_limit(
@@ -581,7 +542,7 @@ impl TransactionReadSet {
                         format!(
                             "Too many reads in a single function execution (limit: {}). \
                              {OVER_LIMIT_HELP}",
-                            *TRANSACTION_MAX_READ_SET_INTERVALS,
+                            max_intervals,
                         ),
                     )
                 )
@@ -625,588 +586,5 @@ impl TransactionReadSet {
 
     pub fn system_tx_size(&self) -> &TransactionReadSize {
         &self.system_tx_size
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for ReadSet {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = ReadSet>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        #[derive(Debug, proptest_derive::Arbitrary)]
-        struct GeneratedReads {
-            #[proptest(
-                strategy = "prop::collection::vec(any::<(TabletIndexName, IndexedFields, \
-                            IntervalSet)>(), 0..4)"
-            )]
-            entries: Vec<(TabletIndexName, IndexedFields, IntervalSet)>,
-            #[proptest(strategy = "prop::collection::vec(any::<(TabletIndexName, \
-                                   SearchQueryReads)>(), 0..4)")]
-            search: Vec<(TabletIndexName, SearchQueryReads)>,
-        }
-
-        any::<GeneratedReads>().prop_map(|generated_reads| {
-            let indexed = generated_reads
-                .entries
-                .into_iter()
-                .map(|(index_name, fields, intervals)| {
-                    (
-                        index_name,
-                        IndexReads {
-                            fields,
-                            intervals,
-                            stack_traces: None,
-                        },
-                    )
-                })
-                .collect::<BTreeMap<_, _>>();
-            let search = generated_reads
-                .search
-                .into_iter()
-                .collect::<BTreeMap<_, _>>();
-            Self {
-                indexed: indexed.into(),
-                search: search.into(),
-            }
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use common::{
-        assert_obj,
-        document::{
-            CreationTime,
-            PackedDocument,
-            ResolvedDocument,
-        },
-        query::FilterValue,
-        testing::TestIdGenerator,
-        types::{
-            IndexDescriptor,
-            TabletIndexName,
-        },
-        value::{
-            ConvexValue,
-            FieldPath,
-            ResolvedDocumentId,
-        },
-    };
-    use search::{
-        query::{
-            FuzzyDistance,
-            TextQueryTerm,
-        },
-        FilterConditionRead,
-        QueryReads as SearchQueryReads,
-        TextQueryTermRead,
-    };
-    use value::val;
-
-    use super::TransactionReadSet;
-    use crate::ReadSet;
-
-    fn create_document_with_one_field(
-        id: ResolvedDocumentId,
-        field_name: &str,
-        value: ConvexValue,
-    ) -> anyhow::Result<ResolvedDocument> {
-        ResolvedDocument::new(
-            id,
-            CreationTime::ONE,
-            assert_obj!(
-                field_name => value
-            ),
-        )
-    }
-
-    fn create_document_with_extra_field(
-        id: ResolvedDocumentId,
-        field_name: &str,
-        value: ConvexValue,
-    ) -> anyhow::Result<ResolvedDocument> {
-        ResolvedDocument::new(
-            id,
-            CreationTime::ONE,
-            assert_obj!(
-                field_name => value,
-                "extraField" => ConvexValue::String("word".to_string().try_into()?),
-            ),
-        )
-    }
-
-    #[test]
-    fn search_fuzzy_text_no_prefix_0_distance_reads() -> anyhow::Result<()> {
-        let mut reads = TransactionReadSet::new();
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "mytable".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-        let index_name =
-            TabletIndexName::new(table_id.tablet_id, IndexDescriptor::new("search_index")?)?;
-        let field_path = "textField";
-
-        let search_reads = SearchQueryReads::new(
-            vec![TextQueryTermRead {
-                field_path: FieldPath::from_str(field_path)?,
-                term: TextQueryTerm::Fuzzy {
-                    max_distance: FuzzyDistance::Zero,
-                    token: "word".to_string(),
-                    prefix: false,
-                },
-            }]
-            .into(),
-            vec![].into(),
-        );
-
-        reads.record_search(index_name, search_reads);
-
-        let read_set = reads.into_read_set();
-        let id = id_generator.user_generate(&table_name);
-
-        assert!(read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            // If "word" is a token, it overlaps.
-            "Text containing word and other stuff."
-        )?);
-
-        assert!(!read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            // If "word" is just a substring, it does not overlap.
-            "This text doesn't have the keyword."
-        )?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn search_fuzzy_text_no_prefix_1_distance_reads() -> anyhow::Result<()> {
-        let mut reads = TransactionReadSet::new();
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "mytable".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-        let index_name =
-            TabletIndexName::new(table_id.tablet_id, IndexDescriptor::new("search_index")?)?;
-        let field_path = "textField";
-
-        let search_reads = SearchQueryReads::new(
-            vec![TextQueryTermRead {
-                field_path: FieldPath::from_str(field_path)?,
-                term: TextQueryTerm::Fuzzy {
-                    max_distance: FuzzyDistance::One,
-                    token: "wod".to_string(),
-                    prefix: false,
-                },
-            }]
-            .into(),
-            vec![].into(),
-        );
-
-        reads.record_search(index_name, search_reads);
-
-        let read_set = reads.into_read_set();
-        let id = id_generator.user_generate(&table_name);
-
-        assert!(!read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            // If "word" is just a substring, it does not overlap.
-            "This text doesn't have the keyword."
-        )?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn search_fuzzy_text_no_prefix_2_distance_reads() -> anyhow::Result<()> {
-        let mut reads = TransactionReadSet::new();
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "mytable".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-        let index_name =
-            TabletIndexName::new(table_id.tablet_id, IndexDescriptor::new("search_index")?)?;
-        let field_path = "textField";
-
-        let search_reads = SearchQueryReads::new(
-            vec![TextQueryTermRead {
-                field_path: FieldPath::from_str(field_path)?,
-                term: TextQueryTerm::Fuzzy {
-                    max_distance: FuzzyDistance::Two,
-                    token: "word".to_string(),
-                    prefix: false,
-                },
-            }]
-            .into(),
-            vec![].into(),
-        );
-
-        reads.record_search(index_name, search_reads);
-
-        let read_set = reads.into_read_set();
-        let id = id_generator.user_generate(&table_name);
-
-        assert!(read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            "Text containing word and other stuff."
-        )?);
-        assert!(!read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            "This text doesn't have the keyword."
-        )?);
-        Ok(())
-    }
-
-    #[test]
-    fn search_fuzzy_text_prefix_0_distance_reads() -> anyhow::Result<()> {
-        let mut reads = TransactionReadSet::new();
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "mytable".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-        let index_name =
-            TabletIndexName::new(table_id.tablet_id, IndexDescriptor::new("search_index")?)?;
-        let field_path = "textField";
-
-        let search_reads = SearchQueryReads::new(
-            vec![TextQueryTermRead {
-                field_path: FieldPath::from_str(field_path)?,
-                term: TextQueryTerm::Fuzzy {
-                    max_distance: FuzzyDistance::Zero,
-                    token: "word".to_string(),
-                    prefix: true,
-                },
-            }]
-            .into(),
-            vec![].into(),
-        );
-
-        reads.record_search(index_name, search_reads);
-
-        let read_set = reads.into_read_set();
-        let id = id_generator.user_generate(&table_name);
-
-        assert!(read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            // If "word.*" is a token, it overlaps.
-            "Text containing words and other stuff."
-        )?);
-
-        assert!(!read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            // If "word.*" is just a substring, it does not overlap.
-            "This text doesn't have the keyword."
-        )?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn search_fuzzy_text_prefix_1_distance_reads() -> anyhow::Result<()> {
-        let mut reads = TransactionReadSet::new();
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "mytable".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-        let index_name =
-            TabletIndexName::new(table_id.tablet_id, IndexDescriptor::new("search_index")?)?;
-        let field_path = "textField";
-
-        let search_reads = SearchQueryReads::new(
-            vec![TextQueryTermRead {
-                field_path: FieldPath::from_str(field_path)?,
-                term: TextQueryTerm::Fuzzy {
-                    max_distance: FuzzyDistance::One,
-                    token: "wrd".to_string(),
-                    prefix: true,
-                },
-            }]
-            .into(),
-            vec![].into(),
-        );
-
-        reads.record_search(index_name, search_reads);
-
-        let read_set = reads.into_read_set();
-        let id = id_generator.user_generate(&table_name);
-
-        assert!(read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            // If "wrd.*" is a token, it overlaps.
-            "Text containing wrdsythings and other stuff."
-        )?);
-
-        assert!(!read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            // If "word.*" is just a substring, it does not overlap.
-            "This text doesn't have keyword."
-        )?);
-
-        Ok(())
-    }
-
-    #[test]
-    fn search_fuzzy_text_prefix_2_distance_reads() -> anyhow::Result<()> {
-        let mut reads = TransactionReadSet::new();
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "mytable".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-        let index_name =
-            TabletIndexName::new(table_id.tablet_id, IndexDescriptor::new("search_index")?)?;
-        let field_path = "textField";
-
-        let search_reads = SearchQueryReads::new(
-            vec![TextQueryTermRead {
-                field_path: FieldPath::from_str(field_path)?,
-                term: TextQueryTerm::Fuzzy {
-                    max_distance: FuzzyDistance::Two,
-                    token: "word".to_string(),
-                    prefix: true,
-                },
-            }]
-            .into(),
-            vec![].into(),
-        );
-
-        reads.record_search(index_name, search_reads);
-
-        let read_set = reads.into_read_set();
-        let id = id_generator.user_generate(&table_name);
-
-        assert!(read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            // If "word.*" is a token, it overlaps.
-            "Text containing wordsythings and other stuff."
-        )?);
-        // This would fail if prefix s false
-        assert!(read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            "Text containing wordddd and other stuff."
-        )?);
-
-        assert!(!read_set_overlaps(
-            id,
-            &read_set,
-            field_path,
-            // If "word.*" is just a substring, it does not overlap.
-            "This text doesn't have keyword."
-        )?);
-
-        Ok(())
-    }
-
-    fn read_set_overlaps(
-        id: ResolvedDocumentId,
-        read_set: &ReadSet,
-        field_name: &str,
-        document_text: &str,
-    ) -> anyhow::Result<bool> {
-        let doc_without_word = create_document_with_one_field(id, field_name, val!(document_text))?;
-        Ok(read_set
-            .overlaps_document_for_test(&PackedDocument::pack(&doc_without_word))
-            .is_some())
-    }
-
-    #[test]
-    fn test_search_exact_text_reads() -> anyhow::Result<()> {
-        let mut reads = TransactionReadSet::new();
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "mytable".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-        let index_name =
-            TabletIndexName::new(table_id.tablet_id, IndexDescriptor::new("search_index")?)?;
-
-        let search_reads = SearchQueryReads::new(
-            vec![TextQueryTermRead {
-                field_path: FieldPath::from_str("textField")?,
-                term: TextQueryTerm::Exact("word".to_string()),
-            }]
-            .into(),
-            vec![].into(),
-        );
-
-        reads.record_search(index_name.clone(), search_reads);
-
-        let read_set = reads.into_read_set();
-
-        // If "word" is a token, it overlaps.
-        let doc_with_word = create_document_with_one_field(
-            id_generator.user_generate(&table_name),
-            "textField",
-            val!("Text containing word and other stuff."),
-        )?;
-        assert_eq!(
-            read_set
-                .overlaps_document_for_test(&PackedDocument::pack(&doc_with_word),)
-                .unwrap()
-                .index,
-            index_name
-        );
-
-        // If "word" is just a substring, it does not.
-        let doc_without_word = create_document_with_one_field(
-            id_generator.user_generate(&table_name),
-            "textField",
-            val!("This text doesn't have the keyword."),
-        )?;
-        assert_eq!(
-            read_set.overlaps_document_for_test(&PackedDocument::pack(&doc_without_word),),
-            None
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_search_filter_reads_empty_query() -> anyhow::Result<()> {
-        let mut reads = TransactionReadSet::new();
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "mytable".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-        let index_name =
-            TabletIndexName::new(table_id.tablet_id, IndexDescriptor::new("search_index")?)?;
-
-        let search_reads = SearchQueryReads::new(
-            vec![].into(),
-            vec![FilterConditionRead::Must(
-                FieldPath::from_str("nullField")?,
-                FilterValue::from_search_value(Some(&ConvexValue::Null)),
-            )]
-            .into(),
-        );
-
-        reads.record_search(index_name.clone(), search_reads);
-
-        let read_set = reads.into_read_set();
-
-        // If "nullField" is Null, it overlaps.
-        let doc_with_explicit_null = create_document_with_one_field(
-            id_generator.user_generate(&table_name),
-            "nullField",
-            ConvexValue::Null,
-        )?;
-        assert_eq!(
-            read_set
-                .overlaps_document_for_test(&PackedDocument::pack(&doc_with_explicit_null),)
-                .unwrap()
-                .index,
-            index_name
-        );
-
-        // If "nullField" is not present, it does not overlap.
-        let doc_with_missing_field = create_document_with_one_field(
-            id_generator.user_generate(&table_name),
-            "unrelatedField",
-            ConvexValue::Null,
-        )?;
-        assert_eq!(
-            read_set.overlaps_document_for_test(&PackedDocument::pack(&doc_with_missing_field),),
-            None
-        );
-
-        // If "nullField" is a different type, it does not overlap.
-        let doc_with_implicit_null = create_document_with_one_field(
-            id_generator.user_generate(&table_name),
-            "nullField",
-            ConvexValue::Int64(123),
-        )?;
-        assert_eq!(
-            read_set.overlaps_document_for_test(&PackedDocument::pack(&doc_with_implicit_null),),
-            None
-        );
-
-        Ok(())
-    }
-    #[test]
-    fn test_search_filter_reads() -> anyhow::Result<()> {
-        let mut reads = TransactionReadSet::new();
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "mytable".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-        let index_name =
-            TabletIndexName::new(table_id.tablet_id, IndexDescriptor::new("search_index")?)?;
-
-        let search_reads = SearchQueryReads::new(
-            vec![TextQueryTermRead {
-                field_path: FieldPath::from_str("extraField")?,
-                term: TextQueryTerm::Fuzzy {
-                    max_distance: FuzzyDistance::Zero,
-                    token: "word".to_string(),
-                    prefix: false,
-                },
-            }]
-            .into(),
-            vec![FilterConditionRead::Must(
-                FieldPath::from_str("nullField")?,
-                FilterValue::from_search_value(Some(&ConvexValue::Null)),
-            )]
-            .into(),
-        );
-
-        reads.record_search(index_name.clone(), search_reads);
-
-        let read_set = reads.into_read_set();
-
-        // If "nullField" is Null, it overlaps.
-        let doc_with_explicit_null = create_document_with_extra_field(
-            id_generator.user_generate(&table_name),
-            "nullField",
-            ConvexValue::Null,
-        )?;
-        assert_eq!(
-            read_set
-                .overlaps_document_for_test(&PackedDocument::pack(&doc_with_explicit_null),)
-                .unwrap()
-                .index,
-            index_name
-        );
-
-        // If "nullField" is not present, it does not overlap.
-        let doc_with_missing_field = create_document_with_extra_field(
-            id_generator.user_generate(&table_name),
-            "unrelatedField",
-            ConvexValue::Null,
-        )?;
-        assert_eq!(
-            read_set.overlaps_document_for_test(&PackedDocument::pack(&doc_with_missing_field),),
-            None
-        );
-
-        // If "nullField" is a different type, it does not overlap.
-        let doc_with_implicit_null = create_document_with_extra_field(
-            id_generator.user_generate(&table_name),
-            "nullField",
-            ConvexValue::Int64(123),
-        )?;
-        assert_eq!(
-            read_set.overlaps_document_for_test(&PackedDocument::pack(&doc_with_implicit_null),),
-            None
-        );
-
-        Ok(())
     }
 }

@@ -6,10 +6,27 @@ import {
   getDeploymentSelection,
   deploymentNameFromSelection,
 } from "./lib/deploymentSelection.js";
-import { parseDeploymentSelector } from "./lib/deploymentSelector.js";
+import {
+  parseDeploymentSelector,
+  ParsedDeploymentSelector,
+} from "./lib/deploymentSelector.js";
 import { updateEnvAndConfigForDeploymentSelection } from "./configure.js";
-import { fetchDeploymentCanonicalSiteUrl } from "./lib/env.js";
+import { fetchDeploymentCanonicalUrls } from "./lib/deploy2.js";
+import {
+  loadProjectLocalConfig,
+  saveDeploymentConfig,
+} from "./lib/localDeployment/filePaths.js";
+import {
+  checkLocalConfigMatchesProject,
+  getCloudProjectSlugsBestEffort,
+  pauseLocalDeploymentBestEffort,
+  targetProjectForLocalSelector,
+} from "./lib/localDeployment/projectMismatch.js";
+import { bigBrainStart } from "./lib/localDeployment/bigBrain.js";
+import { promptYesNo } from "./lib/utils/prompts.js";
+import { createLocalDeployment } from "./deploymentCreate.js";
 import { chalkStderr } from "chalk";
+import { logWarning } from "../bundler/log.js";
 
 export const deploymentSelect = new Command("select")
   .summary("Select the deployment to use when running commands")
@@ -17,8 +34,8 @@ export const deploymentSelect = new Command("select")
     "Select the deployment to use when running commands.\n\n" +
       "The deployment will be used by all `npx convex` commands, except `npx convex deploy`. You can also run individual commands on another deployment by using the --deployment flag on that command.\n\n" +
       "Examples:\n" +
-      "  npx convex select dev                              # Select your personal dev deployment in the current project\n" +
-      "  npx convex select dev/james                        # Select a deployment in the same project by its reference\n" +
+      "  npx convex select dev                              # Select your personal cloud dev deployment in the current project\n" +
+      "  npx convex select local                            # Select your local deployment\n" +
       "  npx convex select dev/james                        # Select a deployment in the same project by its reference\n" +
       "  npx convex select some-project:dev/james           # Select a deployment in another project in the same team\n" +
       "  npx convex select some-team:some-project:dev/james # Select a deployment in a particular team/project\n",
@@ -35,18 +52,26 @@ export const deploymentSelect = new Command("select")
     // Get the current deployment selection (no flags, just env/config state)
     const currentSelection = await getDeploymentSelection(ctx, {});
 
-    // If no project is configured and the selector needs project context, show a specific error
     const parsed = parseDeploymentSelector(selector);
+    const isLocalSelector = isLocalDeploymentSelector(parsed);
+
+    // If no project is configured and the selector needs project context, show a specific error
     if (
       currentSelection.kind === "chooseProject" &&
       parsed.kind !== "inTeamProject" &&
-      parsed.kind !== "deploymentName"
+      parsed.kind !== "deploymentName" &&
+      !isLocalSelector
     ) {
       return await ctx.crash({
         exitCode: 1,
         errorType: "fatal",
         printedMessage: `No project configured. Run \`npx convex dev\` to set up a project first, or use a full selector like 'my-team:my-project:dev/james' or 'happy-capybara-123'.`,
       });
+    }
+
+    if (isLocalSelector) {
+      await handleLocalSelect(ctx, selector, parsed, currentSelection);
+      return;
     }
 
     // Resolve the new deployment using the selector relative to the current project
@@ -64,6 +89,147 @@ export const deploymentSelect = new Command("select")
       deploymentNameFromSelection(currentSelection),
     );
   });
+
+function isLocalDeploymentSelector(parsed: ParsedDeploymentSelector): boolean {
+  return (
+    (parsed.kind === "inCurrentProject" ||
+      parsed.kind === "inProject" ||
+      parsed.kind === "inTeamProject") &&
+    parsed.selector.kind === "local"
+  );
+}
+
+async function handleLocalSelect(
+  ctx: Context,
+  selector: string,
+  parsed: ParsedDeploymentSelector,
+  currentSelection: DeploymentSelection,
+): Promise<void> {
+  const existing = loadProjectLocalConfig(ctx);
+
+  if (existing === null) {
+    // No local deployment on disk. Offer to create one (interactive only).
+    if (!process.stdin.isTTY) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: `No local deployment found. Run ${chalkStderr.bold("npx convex deployment create local")} to create one.`,
+      });
+    }
+    if (
+      currentSelection.kind === "chooseProject" &&
+      parsed.kind !== "inTeamProject"
+    ) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: `No project configured. Run \`npx convex dev\` to set up a project first.`,
+      });
+    }
+
+    // Refusing to create a project if the user didn’t explicitly specify a team.
+    if (parsed.kind === "inProject") {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: `No local deployment found. To create one in ${chalkStderr.bold(parsed.projectSlug)}, run ${chalkStderr.bold(`npx convex deployment create local --project ${parsed.projectSlug}`)}, or use a fully qualified selector like ${chalkStderr.bold(`my-team:${parsed.projectSlug}:local`)}.`,
+      });
+    }
+
+    const wantsToCreate = await promptYesNo(ctx, {
+      message: "No local deployment found. Create one now?",
+      default: true,
+    });
+    if (!wantsToCreate) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: `No local deployment found. Run ${chalkStderr.bold("npx convex deployment create local")} to create one.`,
+      });
+    }
+    const teamAndProject = teamAndProjectFromParsed(parsed);
+    await createLocalDeployment(ctx, currentSelection, true, teamAndProject);
+    return;
+  }
+
+  // Resolve the target cloud project the user is asking about
+  const target = await targetProjectForLocalSelector(
+    ctx,
+    parsed,
+    currentSelection,
+  );
+
+  let resolvedDeploymentName = existing.deploymentName;
+
+  if (target !== null) {
+    const match = checkLocalConfigMatchesProject(ctx, existing.config, target);
+    if (match === "mismatch") {
+      // The on-disk local deployment is tied to a different cloud project.
+      // Move it to the new project (warn, pause old, re-register).
+      const oldProjectId = existing.config.cloudProjectId!;
+      const oldProject = await getCloudProjectSlugsBestEffort(
+        ctx,
+        oldProjectId,
+      );
+      const oldProjectLabel =
+        oldProject !== null
+          ? `project ${chalkStderr.bold(`${oldProject.teamSlug}:${oldProject.slug}`)}`
+          : `an unknown cloud project (ID ${oldProjectId})`;
+      logWarning(
+        chalkStderr.yellow(
+          `⚠️ This local deployment was previously in ${oldProjectLabel}. Moving it to project ${chalkStderr.bold(`${target.teamSlug}:${target.slug}`)}.`,
+        ),
+      );
+      await pauseLocalDeploymentBestEffort(ctx, oldProject);
+      const { deploymentName: newDeploymentName } = await bigBrainStart(ctx, {
+        port: existing.config.ports.cloud,
+        teamSlug: target.teamSlug,
+        projectSlug: target.slug,
+        instanceName: null,
+      });
+      saveDeploymentConfig(ctx, "local", newDeploymentName, {
+        ...existing.config,
+        cloudProjectId: target.id,
+      });
+      resolvedDeploymentName = newDeploymentName;
+    } else if (match === "skip") {
+      // The on-disk config has no `cloudProjectId` — write the resolved id back
+      // so future invocations have it.
+      saveDeploymentConfig(ctx, "local", existing.deploymentName, {
+        ...existing.config,
+        cloudProjectId: target.id,
+      });
+    }
+  }
+
+  const newSelection: DeploymentSelection = {
+    kind: "deploymentWithinProject",
+    targetProject: {
+      kind: "deploymentName",
+      deploymentName: resolvedDeploymentName,
+      deploymentType: "local",
+    },
+    selectionWithinProject: {
+      kind: "deploymentSelector",
+      selector,
+    },
+  };
+  await saveSelectedDeployment(
+    ctx,
+    selector,
+    newSelection,
+    deploymentNameFromSelection(currentSelection),
+  );
+}
+
+function teamAndProjectFromParsed(
+  parsed: ParsedDeploymentSelector,
+): { teamSlug: string; projectSlug: string } | null {
+  if (parsed.kind === "inTeamProject") {
+    return { teamSlug: parsed.teamSlug, projectSlug: parsed.projectSlug };
+  }
+  return null;
+}
 
 export async function saveSelectedDeployment(
   ctx: Context,
@@ -94,10 +260,13 @@ export async function saveSelectedDeployment(
     });
   }
 
-  const siteUrl = await fetchDeploymentCanonicalSiteUrl(ctx, {
-    adminKey: deployment.adminKey,
-    deploymentUrl: deployment.url,
-  });
+  const { convexSiteUrl: siteUrl } =
+    deployment.deploymentFields.deploymentType === "local"
+      ? { convexSiteUrl: null }
+      : await fetchDeploymentCanonicalUrls(ctx, {
+          adminKey: deployment.adminKey,
+          deploymentUrl: deployment.url,
+        });
 
   await updateEnvAndConfigForDeploymentSelection(
     ctx,

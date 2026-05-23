@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     str::FromStr,
-    sync::LazyLock,
 };
 
 use common::{
@@ -12,15 +11,16 @@ use common::{
         LogEvent,
         StructuredLogEvent,
     },
+    pii::PII,
     runtime::UnixTimestamp,
     types::{
         GenericIndexName,
         IndexDiff,
         IndexName,
+        SystemStopState,
     },
 };
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
+use errors::ErrorMetadata;
 use serde::{
     Deserialize,
     Serialize,
@@ -43,7 +43,7 @@ use value::{
 
 use crate::{
     auth::types::AuthDiff,
-    backend_state::types::BackendState,
+    backend_state::types::OldBackendState,
     components::config::{
         ComponentDiff,
         SerializedComponentDiff,
@@ -60,44 +60,19 @@ use crate::{
         ImportMode,
         ImportRequestor,
     },
+    source_packages::types::{
+        NodeVersionDiff,
+        SerializedNodeVersionDiff,
+    },
 };
 
-pub static DEPLOYMENT_AUDIT_LOG_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_deployment_audit_log"
-        .parse()
-        .expect("Invalid deployment audit log table")
-});
+pub static DEPLOYMENT_AUDIT_LOG_TABLE: TableName = TableName::const_new("_deployment_audit_log");
 
 #[derive(Debug, Clone, PartialEq, Default)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AuditLogIndexDiff {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::vec(any::<(IndexName, DeveloperIndexConfig)>(), 0..4)"
-        )
-    )]
     pub added_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::vec(any::<(IndexName, DeveloperIndexConfig)>(), 0..4)"
-        )
-    )]
     pub removed_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::vec(any::<(IndexName, DeveloperIndexConfig)>(), 0..4)"
-        )
-    )]
     pub enabled_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::vec(any::<(IndexName, DeveloperIndexConfig)>(), 0..4)"
-        )
-    )]
     pub disabled_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
 }
 
@@ -133,10 +108,6 @@ impl From<IndexDiff> for AuditLogIndexDiff {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub enum DeploymentAuditLogEvent {
     CreateEnvironmentVariable {
         name: EnvVarName,
@@ -165,22 +136,19 @@ pub enum DeploymentAuditLogEvent {
         diffs: PushComponentDiffs,
     },
     BuildIndexes {
-        #[cfg_attr(
-            any(test, feature = "testing"),
-            proptest(strategy = "prop::collection::vec(any::<(IndexName, \
-                                 DeveloperIndexConfig)>(), 0..4)")
-        )]
         added_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
-        #[cfg_attr(
-            any(test, feature = "testing"),
-            proptest(strategy = "prop::collection::vec(any::<(IndexName, \
-                                 DeveloperIndexConfig)>(), 0..4)")
-        )]
         removed_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
     },
+    // Deprecated: replaced by ChangeUserStopState / ChangeSystemStopState
     ChangeDeploymentState {
-        old_state: BackendState,
-        new_state: BackendState,
+        old_state: OldBackendState,
+        new_state: OldBackendState,
+    },
+    PauseDeployment,
+    UnpauseDeployment,
+    ChangeSystemStopState {
+        old_state: SystemStopState,
+        new_state: SystemStopState,
     },
     // TODO: consider adding table names once this is logged for more places
     // and we have a story about limiting size.
@@ -195,6 +163,85 @@ pub enum DeploymentAuditLogEvent {
         table_count_deleted: u64,
     },
     DeleteScheduledJobsTable {
+        component_id: Option<String>,
+        component: ComponentPath,
+    },
+    DeleteTables {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table_names: Vec<TableName>,
+    },
+    DeleteComponent {
+        component_id: Option<String>,
+        component: ComponentPath,
+    },
+    CancelAllScheduledFunctions {
+        component_id: Option<String>,
+        component: ComponentPath,
+    },
+    CancelScheduledFunction {
+        component_id: Option<String>,
+        component: ComponentPath,
+        scheduled_function_id: String,
+        function_path: Option<String>,
+    },
+    RequestExport {
+        id: String,
+        component_id: Option<String>,
+        component: ComponentPath,
+        format: String,
+        requestor: String,
+    },
+    CancelExport {
+        id: String,
+    },
+    SetExportExpiration {
+        id: String,
+        expiration_ts_ms: i64,
+    },
+    CreateIntegration {
+        id: String,
+        r#type: String,
+    },
+    UpdateIntegration {
+        id: String,
+        r#type: String,
+    },
+    DeleteIntegration {
+        id: String,
+        r#type: String,
+    },
+    // System UDF audit events (from dashboard mutations)
+    AddDocuments {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table: String,
+        document_ids: Vec<String>,
+    },
+    DeleteDocuments {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table: String,
+        document_ids: Vec<String>,
+    },
+    UpdateDocuments {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table: String,
+        document_ids: Vec<String>,
+    },
+    CreateTable {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table: String,
+    },
+    DeleteFiles {
+        component_id: Option<String>,
+        component: ComponentPath,
+        storage_ids: Vec<String>,
+    },
+    GenerateUploadUrl {
+        component_id: Option<String>,
         component: ComponentPath,
     },
 }
@@ -248,11 +295,32 @@ impl DeploymentAuditLogEvent {
             },
             DeploymentAuditLogEvent::BuildIndexes { .. } => "build_indexes",
             DeploymentAuditLogEvent::ChangeDeploymentState { .. } => "change_deployment_state",
+            DeploymentAuditLogEvent::PauseDeployment => "pause_deployment",
+            DeploymentAuditLogEvent::UnpauseDeployment => "unpause_deployment",
+            DeploymentAuditLogEvent::ChangeSystemStopState { .. } => "change_system_stop_state",
             DeploymentAuditLogEvent::SnapshotImport { .. } => "snapshot_import",
             DeploymentAuditLogEvent::ClearTables => "clear_tables",
             DeploymentAuditLogEvent::DeleteScheduledJobsTable { .. } => {
                 "delete_scheduled_jobs_table"
             },
+            DeploymentAuditLogEvent::DeleteTables { .. } => "delete_tables",
+            DeploymentAuditLogEvent::DeleteComponent { .. } => "delete_component",
+            DeploymentAuditLogEvent::CancelAllScheduledFunctions { .. } => {
+                "cancel_all_scheduled_functions"
+            },
+            DeploymentAuditLogEvent::CancelScheduledFunction { .. } => "cancel_scheduled_function",
+            DeploymentAuditLogEvent::RequestExport { .. } => "request_export",
+            DeploymentAuditLogEvent::CancelExport { .. } => "cancel_export",
+            DeploymentAuditLogEvent::SetExportExpiration { .. } => "set_export_expiration",
+            DeploymentAuditLogEvent::CreateIntegration { .. } => "create_integration",
+            DeploymentAuditLogEvent::UpdateIntegration { .. } => "update_integration",
+            DeploymentAuditLogEvent::DeleteIntegration { .. } => "delete_integration",
+            DeploymentAuditLogEvent::AddDocuments { .. } => "add_documents",
+            DeploymentAuditLogEvent::DeleteDocuments { .. } => "delete_documents",
+            DeploymentAuditLogEvent::UpdateDocuments { .. } => "update_documents",
+            DeploymentAuditLogEvent::CreateTable { .. } => "create_table",
+            DeploymentAuditLogEvent::DeleteFiles { .. } => "delete_files",
+            DeploymentAuditLogEvent::GenerateUploadUrl { .. } => "generate_upload_url",
         }
     }
 
@@ -329,6 +397,14 @@ impl DeploymentAuditLogEvent {
             } => {
                 obj!("old_state" => old_state.to_string(), "new_state" => new_state.to_string())
             },
+            DeploymentAuditLogEvent::PauseDeployment => obj!(),
+            DeploymentAuditLogEvent::UnpauseDeployment => obj!(),
+            DeploymentAuditLogEvent::ChangeSystemStopState {
+                old_state,
+                new_state,
+            } => {
+                obj!("old_state" => old_state.to_string(), "new_state" => new_state.to_string())
+            },
             DeploymentAuditLogEvent::SnapshotImport {
                 table_names,
                 table_count,
@@ -381,10 +457,178 @@ impl DeploymentAuditLogEvent {
                 )
             },
             DeploymentAuditLogEvent::ClearTables => obj!(),
-            DeploymentAuditLogEvent::DeleteScheduledJobsTable { component } => {
-                let component = component.serialize();
+            DeploymentAuditLogEvent::DeleteScheduledJobsTable {
+                component_id,
+                component,
+            } => {
                 obj!(
-                    "component" => component
+                    "component_id" => component_id,
+                    "component" => component.serialize()
+                )
+            },
+            DeploymentAuditLogEvent::DeleteTables {
+                component_id,
+                component,
+                table_names,
+            } => {
+                let table_names: Vec<ConvexValue> = table_names
+                    .into_iter()
+                    .map(|name| anyhow::Ok(ConvexValue::String(name.to_string().try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table_names" => table_names
+                )
+            },
+            DeploymentAuditLogEvent::DeleteComponent {
+                component_id,
+                component,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize()
+                )
+            },
+            DeploymentAuditLogEvent::CancelAllScheduledFunctions {
+                component_id,
+                component,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize()
+                )
+            },
+            DeploymentAuditLogEvent::CancelScheduledFunction {
+                component_id,
+                component,
+                scheduled_function_id,
+                function_path,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "scheduled_function_id" => scheduled_function_id,
+                    "function_path" => function_path
+                )
+            },
+            DeploymentAuditLogEvent::RequestExport {
+                id,
+                component_id,
+                component,
+                format,
+                requestor,
+            } => {
+                obj!(
+                    "id" => id,
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "format" => format,
+                    "requestor" => requestor
+                )
+            },
+            DeploymentAuditLogEvent::CancelExport { id } => {
+                obj!("id" => id)
+            },
+            DeploymentAuditLogEvent::SetExportExpiration {
+                id,
+                expiration_ts_ms,
+            } => {
+                obj!("id" => id, "expiration_ts_ms" => expiration_ts_ms)
+            },
+            DeploymentAuditLogEvent::CreateIntegration { id, r#type } => {
+                obj!("id" => id, "type" => r#type)
+            },
+            DeploymentAuditLogEvent::UpdateIntegration { id, r#type } => {
+                obj!("id" => id, "type" => r#type)
+            },
+            DeploymentAuditLogEvent::DeleteIntegration { id, r#type } => {
+                obj!("id" => id, "type" => r#type)
+            },
+            DeploymentAuditLogEvent::AddDocuments {
+                component_id,
+                component,
+                table,
+                document_ids,
+            } => {
+                let ids: Vec<ConvexValue> = document_ids
+                    .into_iter()
+                    .map(|id| anyhow::Ok(ConvexValue::String(id.try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table" => table,
+                    "document_ids" => ids
+                )
+            },
+            DeploymentAuditLogEvent::DeleteDocuments {
+                component_id,
+                component,
+                table,
+                document_ids,
+            } => {
+                let ids: Vec<ConvexValue> = document_ids
+                    .into_iter()
+                    .map(|id| anyhow::Ok(ConvexValue::String(id.try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table" => table,
+                    "document_ids" => ids
+                )
+            },
+            DeploymentAuditLogEvent::UpdateDocuments {
+                component_id,
+                component,
+                table,
+                document_ids,
+            } => {
+                let ids: Vec<ConvexValue> = document_ids
+                    .into_iter()
+                    .map(|id| anyhow::Ok(ConvexValue::String(id.try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table" => table,
+                    "document_ids" => ids,
+                )
+            },
+            DeploymentAuditLogEvent::CreateTable {
+                component_id,
+                component,
+                table,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table" => table
+                )
+            },
+            DeploymentAuditLogEvent::DeleteFiles {
+                component_id,
+                component,
+                storage_ids,
+            } => {
+                let ids: Vec<ConvexValue> = storage_ids
+                    .into_iter()
+                    .map(|id| anyhow::Ok(ConvexValue::String(id.try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "storage_ids" => ids
+                )
+            },
+            DeploymentAuditLogEvent::GenerateUploadUrl {
+                component_id,
+                component,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize()
                 )
             },
         }
@@ -480,6 +724,12 @@ impl TryFrom<ConvexObject> for DeploymentAuditLogEvent {
                 old_state: remove_string(&mut fields, "old_state")?.parse()?,
                 new_state: remove_string(&mut fields, "new_state")?.parse()?,
             },
+            "pause_deployment" => DeploymentAuditLogEvent::PauseDeployment,
+            "unpause_deployment" => DeploymentAuditLogEvent::UnpauseDeployment,
+            "change_system_stop_state" => DeploymentAuditLogEvent::ChangeSystemStopState {
+                old_state: remove_string(&mut fields, "old_state")?.parse()?,
+                new_state: remove_string(&mut fields, "new_state")?.parse()?,
+            },
             "clear_tables" => DeploymentAuditLogEvent::ClearTables,
             "snapshot_import" => {
                 let table_names: BTreeMap<_, _> = remove_vec(&mut fields, "table_names")?
@@ -526,10 +776,183 @@ impl TryFrom<ConvexObject> for DeploymentAuditLogEvent {
                 }
             },
             "delete_scheduled_jobs_table" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
                 let component = ComponentPath::deserialize(
                     remove_nullable_string(&mut fields, "component")?.as_deref(),
                 )?;
-                DeploymentAuditLogEvent::DeleteScheduledJobsTable { component }
+                DeploymentAuditLogEvent::DeleteScheduledJobsTable {
+                    component_id,
+                    component,
+                }
+            },
+            "delete_tables" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table_names: Vec<TableName> =
+                    remove_vec_of_strings(&mut fields, "table_names")?
+                        .iter()
+                        .map(|s| TableName::from_str(s))
+                        .try_collect()?;
+                DeploymentAuditLogEvent::DeleteTables {
+                    component_id,
+                    component,
+                    table_names,
+                }
+            },
+            "delete_component" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                DeploymentAuditLogEvent::DeleteComponent {
+                    component_id,
+                    component,
+                }
+            },
+            "cancel_all_scheduled_functions" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                DeploymentAuditLogEvent::CancelAllScheduledFunctions {
+                    component_id,
+                    component,
+                }
+            },
+            "cancel_scheduled_function" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let scheduled_function_id = remove_string(&mut fields, "scheduled_function_id")?;
+                let function_path = remove_nullable_string(&mut fields, "function_path")?;
+                DeploymentAuditLogEvent::CancelScheduledFunction {
+                    component_id,
+                    component,
+                    scheduled_function_id,
+                    function_path,
+                }
+            },
+            "request_export" => {
+                let id = remove_string(&mut fields, "id")?;
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let format = remove_string(&mut fields, "format")?;
+                let requestor = remove_string(&mut fields, "requestor")?;
+                DeploymentAuditLogEvent::RequestExport {
+                    id,
+                    component_id,
+                    component,
+                    format,
+                    requestor,
+                }
+            },
+            "cancel_export" => {
+                let id = remove_string(&mut fields, "id")?;
+                DeploymentAuditLogEvent::CancelExport { id }
+            },
+            "set_export_expiration" => {
+                let id = remove_string(&mut fields, "id")?;
+                let expiration_ts_ms = remove_int64(&mut fields, "expiration_ts_ms")?;
+                DeploymentAuditLogEvent::SetExportExpiration {
+                    id,
+                    expiration_ts_ms,
+                }
+            },
+            "create_integration" => {
+                let id = remove_string(&mut fields, "id")?;
+                let r#type = remove_string(&mut fields, "type")?;
+                DeploymentAuditLogEvent::CreateIntegration { id, r#type }
+            },
+            "update_integration" => {
+                let id = remove_string(&mut fields, "id")?;
+                let r#type = remove_string(&mut fields, "type")?;
+                DeploymentAuditLogEvent::UpdateIntegration { id, r#type }
+            },
+            "delete_integration" => {
+                let id = remove_string(&mut fields, "id")?;
+                let r#type = remove_string(&mut fields, "type")?;
+                DeploymentAuditLogEvent::DeleteIntegration { id, r#type }
+            },
+            "add_documents" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table = remove_string(&mut fields, "table")?;
+                let document_ids = remove_vec_of_strings(&mut fields, "document_ids")?;
+                DeploymentAuditLogEvent::AddDocuments {
+                    component_id,
+                    component,
+                    table,
+                    document_ids,
+                }
+            },
+            "delete_documents" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table = remove_string(&mut fields, "table")?;
+                let document_ids = remove_vec_of_strings(&mut fields, "document_ids")?;
+                DeploymentAuditLogEvent::DeleteDocuments {
+                    component_id,
+                    component,
+                    table,
+                    document_ids,
+                }
+            },
+            "update_documents" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table = remove_string(&mut fields, "table")?;
+                let document_ids = remove_vec_of_strings(&mut fields, "document_ids")?;
+                DeploymentAuditLogEvent::UpdateDocuments {
+                    component_id,
+                    component,
+                    table,
+                    document_ids,
+                }
+            },
+            "create_table" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table = remove_string(&mut fields, "table")?;
+                DeploymentAuditLogEvent::CreateTable {
+                    component_id,
+                    component,
+                    table,
+                }
+            },
+            "delete_files" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let storage_ids = remove_vec_of_strings(&mut fields, "storage_ids")?;
+                DeploymentAuditLogEvent::DeleteFiles {
+                    component_id,
+                    component,
+                    storage_ids,
+                }
+            },
+            "generate_upload_url" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                DeploymentAuditLogEvent::GenerateUploadUrl {
+                    component_id,
+                    component,
+                }
             },
             _ => anyhow::bail!("action {action} unrecognized"),
         };
@@ -555,32 +978,11 @@ impl TryFrom<DeploymentAuditLogEvent> for serde_json::Map<String, JsonValue> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SerializedIndexDiff {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::vec(any::<
-                             SerializedNamedDeveloperIndexConfig>(), 0..4)")
-    )]
     pub added_indexes: Vec<SerializedNamedDeveloperIndexConfig>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::vec(any::<
-                             SerializedNamedDeveloperIndexConfig>(), 0..4)")
-    )]
     pub removed_indexes: Vec<SerializedNamedDeveloperIndexConfig>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::vec(any::<
-                             SerializedNamedDeveloperIndexConfig>(), 0..4)")
-    )]
     #[serde(default)]
     pub disabled_indexes: Vec<SerializedNamedDeveloperIndexConfig>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::vec(any::<
-                             SerializedNamedDeveloperIndexConfig>(), 0..4)")
-    )]
     #[serde(default)]
     pub enabled_indexes: Vec<SerializedNamedDeveloperIndexConfig>,
 }
@@ -637,19 +1039,38 @@ impl TryFrom<SerializedIndexDiff> for AuditLogIndexDiff {
         })
     }
 }
+
 #[derive(Clone, Debug)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct PushComponentDiffs {
     pub auth_diff: AuthDiff,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::btree_map(any::<ComponentPath>(), \
-                             any::<ComponentDiff>(), 0..4)")
-    )]
     pub component_diffs: BTreeMap<ComponentPath, ComponentDiff>,
+    pub message: Option<PushMessage>,
+    pub node_version_diff: Option<NodeVersionDiff>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PushMessage(PII<String>);
+
+impl PushMessage {
+    const MAX_LENGTH: usize = 1024;
+}
+
+impl TryFrom<String> for PushMessage {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.len() > PushMessage::MAX_LENGTH {
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "PushMessageTooLong",
+                format!(
+                    "Push messages can be at most {} bytes long",
+                    PushMessage::MAX_LENGTH
+                ),
+            ))
+        }
+
+        Ok(PushMessage(value.into()))
+    }
 }
 
 impl TryFrom<SerializedPushComponentDiffs> for PushComponentDiffs {
@@ -673,6 +1094,11 @@ impl TryFrom<SerializedPushComponentDiffs> for PushComponentDiffs {
         Ok(PushComponentDiffs {
             auth_diff: value.auth_diff.unwrap_or_default(),
             component_diffs,
+            message: value.message.map(PushMessage::try_from).transpose()?,
+            node_version_diff: value
+                .node_version_diff
+                .map(NodeVersionDiff::try_from)
+                .transpose()?,
         })
     }
 }
@@ -686,6 +1112,9 @@ struct ComponentPathAndDiff {
 pub struct SerializedPushComponentDiffs {
     auth_diff: Option<AuthDiff>,
     component_diffs: Vec<ComponentPathAndDiff>,
+    message: Option<String>,
+    #[serde(default)]
+    node_version_diff: Option<SerializedNodeVersionDiff>,
 }
 
 impl TryFrom<PushComponentDiffs> for SerializedPushComponentDiffs {
@@ -705,82 +1134,17 @@ impl TryFrom<PushComponentDiffs> for SerializedPushComponentDiffs {
                 })
             })
             .collect::<anyhow::Result<Vec<ComponentPathAndDiff>>>()?;
+        let node_version_diff = value
+            .node_version_diff
+            .map(SerializedNodeVersionDiff::try_from)
+            .transpose()?;
         Ok(SerializedPushComponentDiffs {
             auth_diff: Some(auth_diff),
             component_diffs,
+            message: value.message.map(|m| (m.0).0),
+            node_version_diff,
         })
     }
 }
 
 codegen_convex_serialization!(PushComponentDiffs, SerializedPushComponentDiffs);
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use common::{
-        log_streaming::LogEventFormatVersion,
-        runtime::UnixTimestamp,
-    };
-    use proptest::prelude::*;
-    use serde_json::json;
-    use value::ConvexObject;
-
-    use super::DeploymentAuditLogEvent;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 64 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_try_from(e in any::<DeploymentAuditLogEvent>()) {
-            ConvexObject::try_from(e).unwrap();
-        }
-
-        #[test]
-        fn test_json(e in any::<DeploymentAuditLogEvent>()) {
-            serde_json::Map::try_from(e).unwrap();
-        }
-    }
-
-    #[test]
-    fn test_serialization_of_audit_log_event() -> anyhow::Result<()> {
-        let event = DeploymentAuditLogEvent::to_log_event(
-            DeploymentAuditLogEvent::CreateEnvironmentVariable {
-                name: "test_env_variable".parse()?,
-            },
-            UnixTimestamp::from_millis(0),
-        )?;
-        let event_json = event.to_json_map(LogEventFormatVersion::default())?;
-        let value = serde_json::to_value(&event_json)?;
-        assert_eq!(
-            value,
-            json!({
-                "topic": "audit_log",
-                "timestamp": 0,
-                "audit_log_action": "create_environment_variable",
-                "audit_log_metadata": "{\"variable_name\":\"test_env_variable\"}",
-            })
-        );
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod proptests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use value::{
-        testing::assert_roundtrips,
-        ConvexObject,
-    };
-
-    use crate::deployment_audit_log::types::DeploymentAuditLogEvent;
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 16 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-        #[test]
-        fn test_deployment_audit_log_roundtrip(v in any::<DeploymentAuditLogEvent>()) {
-            assert_roundtrips::<DeploymentAuditLogEvent, ConvexObject>(v);
-        }
-    }
-}

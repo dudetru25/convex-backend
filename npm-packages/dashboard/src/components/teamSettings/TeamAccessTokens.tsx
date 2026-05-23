@@ -3,19 +3,27 @@ import { Sheet } from "@ui/Sheet";
 import { LoadingTransition } from "@ui/Loading";
 import { AccessTokenListItem } from "components/AccessTokenListItem";
 import { Button } from "@ui/Button";
-import { InfoCircledIcon, PlusIcon } from "@radix-ui/react-icons";
-import { Tooltip } from "@ui/Tooltip";
+import { PlusIcon } from "@radix-ui/react-icons";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import React, { useState } from "react";
 import { CreateTokenDialog } from "components/teamSettings/CreateTokenDialog";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { useCurrentTeam } from "api/teams";
 import { Link } from "@ui/Link";
 
 export function TeamAccessTokens({
   accessTokens,
   onCreateToken,
+  canCreate,
+  canDelete,
 }: {
   accessTokens: TeamAccessTokenResponse[] | undefined;
-  onCreateToken: (tokenName: string) => Promise<void>;
+  onCreateToken: (args: {
+    tokenName: string;
+    expiresAt?: number;
+  }) => Promise<void>;
+  canCreate: boolean | undefined;
+  canDelete: boolean | undefined;
 }) {
   const team = useCurrentTeam();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -31,19 +39,29 @@ export function TeamAccessTokens({
             </Link>
             .
           </p>
-          <Button onClick={() => setShowCreateDialog(true)} icon={<PlusIcon />}>
+          <Button
+            onClick={() => setShowCreateDialog(true)}
+            icon={<PlusIcon />}
+            disabled={!canCreate}
+            tip={
+              canCreate === false
+                ? permissionDeniedTip(
+                    "You do not have permission to create team access tokens.",
+                    "team:token:create",
+                  )
+                : undefined
+            }
+          >
             Create Token
           </Button>
         </div>
         <div>
           <div className="flex items-center gap-1">
             <span className="font-semibold">Team ID</span>
-            <Tooltip
-              side="right"
-              tip="This is the ID of your team. It is used to identify your team in the Platform API."
-            >
-              <InfoCircledIcon />
-            </Tooltip>
+            <HelpTooltip tipSide="right">
+              This is the ID of your team. It is used to identify your team in
+              the Platform API.
+            </HelpTooltip>
           </div>
           <span className="font-mono">{team?.id}</span>
         </div>
@@ -55,17 +73,20 @@ export function TeamAccessTokens({
             <li>
               <span className="flex items-center gap-1">
                 Manage all projects on the team
-                <Tooltip tip="This includes actions like deleting projects, managing custom domains, managing project environment variable defaults, and managing cloud backups and restores.">
-                  <InfoCircledIcon />
-                </Tooltip>
+                <HelpTooltip>
+                  This includes actions like deleting projects, managing custom
+                  domains, managing project environment variable defaults, and
+                  managing cloud backups and restores.
+                </HelpTooltip>
               </span>
             </li>
             <li>
               <span className="flex items-center gap-1">
                 Read and write data in all projects
-                <Tooltip tip="Write access to Production deployments will depend on your team-level and project-level roles.">
-                  <InfoCircledIcon />
-                </Tooltip>
+                <HelpTooltip>
+                  Write access to Production deployments will depend on your
+                  team-level and project-level roles.
+                </HelpTooltip>
               </span>
             </li>
           </ul>
@@ -90,6 +111,7 @@ export function TeamAccessTokens({
                     identifier={team.id.toString()}
                     shouldShow={false}
                     showMemberName={false}
+                    canDelete={canDelete}
                   />
                 ))
             ) : (
@@ -103,8 +125,8 @@ export function TeamAccessTokens({
       {showCreateDialog && (
         <CreateTokenDialog
           onClose={() => setShowCreateDialog(false)}
-          onSubmit={async (tokenName: string) => {
-            await onCreateToken(tokenName);
+          onSubmit={async (args) => {
+            await onCreateToken(args);
             setShowCreateDialog(false);
           }}
         />

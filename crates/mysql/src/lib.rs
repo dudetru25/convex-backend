@@ -11,8 +11,6 @@ mod connection;
 mod document_encoding;
 mod metrics;
 mod sql;
-#[cfg(test)]
-mod tests;
 use std::{
     cmp,
     collections::{
@@ -90,6 +88,7 @@ use common::{
     },
     sha256::Sha256,
     shutdown::ShutdownSignal,
+    try_anyhow,
     types::{
         IndexId,
         PersistenceVersion,
@@ -348,19 +347,6 @@ impl<RT: Runtime> MySqlPersistence<RT> {
             .is_none())
     }
 
-    #[cfg(test)]
-    pub(crate) async fn get_table_count(&self) -> anyhow::Result<usize> {
-        let mut client = self
-            .read_pool
-            .acquire("get_table_count", &self.db_name)
-            .await?;
-        client
-            .query_optional(sql::GET_TABLE_COUNT, vec![(&self.db_name).into()])
-            .await?
-            .context("GET_TABLE_COUNT query returned no rows?")?
-            .get(0)
-            .context("GET_TABLE_COUNT query returned zero columns?")
-    }
 }
 
 #[async_trait]
@@ -559,10 +545,29 @@ impl<RT: Runtime> Persistence for MySqlPersistence<RT> {
 
     async fn delete_index_entries(
         &self,
-        expired_entries: Vec<IndexEntry>,
+        mut expired_entries: Vec<IndexEntry>,
     ) -> anyhow::Result<usize> {
         let multitenant = self.multitenant;
         let instance_name = mysql_async::Value::from(&self.instance_name.raw);
+        expired_entries.sort_unstable_by(|a, b| {
+            Ord::cmp(
+                &(a.index_id, &a.key_prefix, &a.key_sha256),
+                &(b.index_id, &b.key_prefix, &b.key_sha256),
+            )
+        });
+        // We implicitly delete all timestamps less than `ts`, so just keep the
+        // highest `ts` for each index key.
+        expired_entries.dedup_by(|a, b| {
+            if (a.index_id, &a.key_prefix, &a.key_sha256)
+                == (b.index_id, &b.key_prefix, &b.key_sha256)
+            {
+                // N.B.: returning `true` to dedup_by deletes `a`, so update `b`.
+                b.ts = b.ts.max(a.ts);
+                true
+            } else {
+                false
+            }
+        });
         self.lease
             .transact(async move |tx| {
                 let mut deleted_count = 0;
@@ -587,10 +592,22 @@ impl<RT: Runtime> Persistence for MySqlPersistence<RT> {
 
     async fn delete(
         &self,
-        documents: Vec<(Timestamp, InternalDocumentId)>,
+        mut documents: Vec<(Timestamp, InternalDocumentId)>,
     ) -> anyhow::Result<usize> {
         let multitenant = self.multitenant;
         let instance_name = mysql_async::Value::from(&self.instance_name.raw);
+        documents.sort_unstable_by_key(|d| d.1);
+        // We implicitly delete all timestamps less than `d.0`, so just keep the
+        // highest timestamp for each document id.
+        documents.dedup_by(|a, b| {
+            if a.1 == b.1 {
+                // N.B.: returning `true` to dedup_by deletes `a`, so update `b`.
+                b.0 = b.0.max(a.0);
+                true
+            } else {
+                false
+            }
+        });
         self.lease
             .transact(async move |tx| {
                 let mut deleted_count = 0;
@@ -1676,38 +1693,41 @@ impl<RT: Runtime> Lease<RT> {
         F: for<'a> AsyncFnOnce(&'a mut MySqlTransaction<'_>) -> anyhow::Result<T>,
     {
         let mut client = self.pool.acquire("transact", &self.db_name).await?;
-        let mut tx = client.transaction(self.pool.cluster_name()).await?;
+        let r = try_anyhow!({
+            let mut tx = client.transaction(self.pool.cluster_name()).await?;
 
-        let timer = metrics::lease_precond_timer(self.pool.cluster_name());
-        let mut params = vec![mysql_async::Value::Int(self.lease_ts)];
-        if self.multitenant {
-            params.push((&self.instance_name.raw).into());
-        }
-        let rows: Option<Row> = tx
-            .exec_first(sql::lease_precond(self.multitenant), params)
-            .in_span(Span::enter_with_local_parent(format!(
-                "{}::lease_precondition",
-                func_path!()
-            )))
-            .await?;
-        if rows.is_none() {
-            self.lease_lost_shutdown.signal(lease_lost_error());
-            anyhow::bail!(lease_lost_error());
-        }
-        timer.finish();
+            let timer = metrics::lease_precond_timer(self.pool.cluster_name());
+            let mut params = vec![mysql_async::Value::Int(self.lease_ts)];
+            if self.multitenant {
+                params.push((&self.instance_name.raw).into());
+            }
+            let rows: Option<Row> = tx
+                .exec_first(sql::lease_precond(self.multitenant), params)
+                .in_span(Span::enter_with_local_parent(format!(
+                    "{}::lease_precondition",
+                    func_path!()
+                )))
+                .await?;
+            if rows.is_none() {
+                self.lease_lost_shutdown.signal(lease_lost_error());
+                anyhow::bail!(lease_lost_error());
+            }
+            timer.finish();
 
-        let result = f(&mut tx)
-            .in_span(Span::enter_with_local_parent(format!(
-                "{}::execute_function",
-                func_path!()
-            )))
-            .await?;
+            let result = f(&mut tx)
+                .in_span(Span::enter_with_local_parent(format!(
+                    "{}::execute_function",
+                    func_path!()
+                )))
+                .await?;
 
-        let timer = metrics::commit_timer(self.pool.cluster_name());
-        tx.commit().await?;
-        timer.finish();
+            let timer = metrics::commit_timer(self.pool.cluster_name());
+            tx.commit().await?;
+            timer.finish();
 
-        Ok(result)
+            result
+        });
+        client.handle_errors(r).await
     }
 }
 
@@ -1769,56 +1789,4 @@ fn index_params(query: &mut Vec<mysql_async::Value>, update: &PersistenceIndexEn
     query.push(deleted.into());
     query.push(tablet_id.into());
     query.push(doc_id.into());
-}
-
-#[cfg(any(test, feature = "testing"))]
-pub mod itest {
-    use std::path::Path;
-
-    use mysql_async::{
-        prelude::Queryable,
-        Conn,
-        Params,
-    };
-    use rand::Rng;
-    use url::Url;
-
-    // Returns a url to connect to the test cluster. The URL includes username and
-    // password but no dbname.
-    pub fn cluster_opts() -> String {
-        let mysql_host = if Path::new("/convex.ro").exists() {
-            // itest
-            "mysql"
-        } else {
-            // local
-            "localhost"
-        };
-        format!("mysql://root:@{mysql_host}:3306")
-    }
-
-    pub struct MySqlOpts {
-        pub db_name: String,
-        pub url: Url,
-    }
-
-    /// Returns connection options for a guaranteed-fresh Postgres database.
-    pub async fn new_db_opts() -> anyhow::Result<MySqlOpts> {
-        let cluster_url = cluster_opts();
-        let id: [u8; 16] = rand::rng().random();
-        let db_name = "test_db_".to_string() + &hex::encode(&id[..]);
-
-        // Connect using db `mysql`, create a fresh DB, and then return the connection
-        // options for that one.
-        let mut conn = Conn::from_url(format!("{cluster_url}/mysql")).await?;
-        let query = "CREATE DATABASE ".to_string() + &db_name;
-        conn.exec_drop(query.as_str(), Params::Empty).await?;
-
-        println!("DBNAME @{db_name}");
-        Ok(MySqlOpts {
-            // We use the cluster URL to connect to connect to persistence and
-            // then pass the db_name in the query themselves.
-            url: cluster_url.parse()?,
-            db_name,
-        })
-    }
 }

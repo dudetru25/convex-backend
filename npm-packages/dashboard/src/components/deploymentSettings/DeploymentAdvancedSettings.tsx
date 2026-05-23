@@ -5,19 +5,23 @@ import {
 } from "api/deployments";
 import { useCurrentProject } from "api/projects";
 import { useCurrentTeam, useTeamEntitlements } from "api/teams";
-import { useIsCurrentMemberTeamAdmin } from "api/roles";
+import {
+  useHasCustomRolePermission,
+  useHasProjectAdminPermissions,
+} from "api/roles";
+import { deploymentResource } from "lib/permissions";
 import { Sheet } from "@ui/Sheet";
 import { Button } from "@ui/Button";
 import { Checkbox } from "@ui/Checkbox";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
-import {
-  ExclamationTriangleIcon,
-  InfoCircledIcon,
-} from "@radix-ui/react-icons";
+import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { LiveTimestampDistance } from "@common/elements/TimestampDistance";
 import { cn } from "@ui/cn";
 import type { DeploymentType } from "@convex-dev/platform/managementApi";
+import { THIRTY_MINUTES_MS, toDateTimeLocalValue } from "@common/lib/format";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { DeploymentReference } from "./DeploymentReference";
 
 type TriStateValue = boolean | null;
@@ -43,17 +47,6 @@ function isSecurityWarningDeployment(deploymentType: DeploymentType): boolean {
 function triStateDisplayValue(value: TriStateValue): string {
   if (value === null) return "Default";
   return value ? "Enabled" : "Disabled";
-}
-
-const THIRTY_MINUTES_MS = 30 * 60 * 1000;
-
-function toDateTimeLocalValue(d: Date): string {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  const hours = String(d.getHours()).padStart(2, "0");
-  const minutes = String(d.getMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
 function TriStateRadioGroup({
@@ -146,9 +139,7 @@ function TriStateRadioGroup({
             </div>
             {optionLabel}
             {optionValue === null && defaultTooltip && (
-              <Tooltip tip={defaultTooltip} side="right">
-                <InfoCircledIcon className="size-3.5 text-content-secondary" />
-              </Tooltip>
+              <HelpTooltip tipSide="right">{defaultTooltip}</HelpTooltip>
             )}
           </div>
         );
@@ -169,7 +160,39 @@ export function DeploymentAdvancedSettings() {
   const project = useCurrentProject();
   const team = useCurrentTeam();
   const entitlements = useTeamEntitlements(team?.id);
-  const isTeamAdmin = useIsCurrentMemberTeamAdmin();
+  const isAdmin = useHasProjectAdminPermissions(project?.id);
+  const resource =
+    project && deployment && deployment.kind === "cloud"
+      ? deploymentResource(project, {
+          id: deployment.id,
+          deploymentType: deployment.deploymentType,
+          creator: deployment.creator ?? null,
+        })
+      : undefined;
+  const canUpdateReferenceCustom = useHasCustomRolePermission(
+    team?.id,
+    "deployment:updateReference",
+    resource,
+    false,
+  );
+  const canUpdateSendLogsCustom = useHasCustomRolePermission(
+    team?.id,
+    "deployment:updateSendLogsToClient",
+    resource,
+    false,
+  );
+  const canUpdateEditConfirmCustom = useHasCustomRolePermission(
+    team?.id,
+    "deployment:updateDashboardEditConfirmation",
+    resource,
+    false,
+  );
+  const canUpdateExpiresAtCustom = useHasCustomRolePermission(
+    team?.id,
+    "deployment:updateExpiresAt",
+    resource,
+    false,
+  );
   const modifySettings = useModifyDeploymentSettings({
     deploymentName: deployment?.name,
     projectId: project?.id,
@@ -178,14 +201,21 @@ export function DeploymentAdvancedSettings() {
   if (deployment === undefined) return null;
   if (deployment.kind === "local") return null;
 
-  const disabled = !isTeamAdmin;
+  const canUpdateReference = isAdmin || canUpdateReferenceCustom === true;
+  const canUpdateSendLogs = isAdmin || canUpdateSendLogsCustom === true;
+  const canUpdateEditConfirm = isAdmin || canUpdateEditConfirmCustom === true;
+  const canUpdateExpiresAt = isAdmin || canUpdateExpiresAtCustom === true;
   const deploymentType = deployment.deploymentType;
 
   return (
     <>
       <DeploymentReference
         value={deployment.reference}
-        canManage={isTeamAdmin}
+        canManage={canUpdateReference}
+        disabledTip={permissionDeniedTip(
+          "You do not have permission to edit the deployment reference.",
+          "deployment:updateReference",
+        )}
         onUpdate={(reference) => modifySettings({ reference })}
       />
       <TriStateSettingSheet
@@ -212,7 +242,11 @@ export function DeploymentAdvancedSettings() {
           return null;
         }}
         fieldName="sendLogsToClient"
-        disabled={disabled}
+        disabled={!canUpdateSendLogs}
+        disabledTip={permissionDeniedTip(
+          "You do not have permission to change this setting.",
+          "deployment:updateSendLogsToClient",
+        )}
         onSave={modifySettings}
       />
       <TriStateSettingSheet
@@ -236,14 +270,27 @@ export function DeploymentAdvancedSettings() {
           return null;
         }}
         fieldName="dashboardEditConfirmation"
-        disabled={disabled}
+        disabled={!canUpdateEditConfirm}
+        disabledTip={permissionDeniedTip(
+          "You do not have permission to change this setting.",
+          "deployment:updateDashboardEditConfirmation",
+        )}
         onSave={modifySettings}
       />
       <DeploymentExpirySheet
         expiresAt={deployment.expiresAt ?? null}
         deploymentType={deploymentType}
         previewRetentionDays={entitlements?.previewDeploymentRetentionDays}
-        disabled={disabled}
+        disabled={
+          !canUpdateExpiresAt
+            ? permissionDeniedTip(
+                "You do not have permission to edit deployment expiry.",
+                "deployment:updateExpiresAt",
+              )
+            : deploymentType === "prod"
+              ? "Production deployments cannot be set to expire."
+              : undefined
+        }
         onSave={modifySettings}
       />
     </>
@@ -260,6 +307,7 @@ function TriStateSettingSheet({
   getWarning,
   fieldName,
   disabled,
+  disabledTip,
   onSave,
 }: {
   title: string;
@@ -271,6 +319,7 @@ function TriStateSettingSheet({
   getWarning: (value: TriStateValue, defaultValue: boolean) => string | null;
   fieldName: "sendLogsToClient" | "dashboardEditConfirmation";
   disabled: boolean;
+  disabledTip?: React.ReactNode;
   onSave: SaveFn;
 }) {
   const [value, setValue] = useState<TriStateValue>(initialValue);
@@ -313,14 +362,19 @@ function TriStateSettingSheet({
       <h4 className="mb-2">{title}</h4>
       <p className="mb-4 text-xs text-content-secondary">{description}</p>
       <div className="flex flex-col gap-3">
-        <TriStateRadioGroup
-          name={fieldName}
-          value={value}
-          onChange={handleChange}
-          defaultForType={defaultForType}
-          defaultTooltip={defaultTooltip}
-          disabled={disabled || isSaving}
-        />
+        <Tooltip
+          tip={disabled && disabledTip ? disabledTip : undefined}
+          className="w-fit"
+        >
+          <TriStateRadioGroup
+            name={fieldName}
+            value={value}
+            onChange={handleChange}
+            defaultForType={defaultForType}
+            defaultTooltip={defaultTooltip}
+            disabled={disabled || isSaving}
+          />
+        </Tooltip>
         {warningText && (
           <div className="flex w-fit items-center gap-2 rounded-lg border bg-background-warning px-3 py-2 text-sm text-content-warning">
             <ExclamationTriangleIcon className="size-4 shrink-0" />
@@ -364,7 +418,7 @@ function TriStateSettingSheet({
   );
 }
 
-function DeploymentExpirySheet({
+export function DeploymentExpirySheet({
   expiresAt: initialExpiresAt,
   deploymentType,
   previewRetentionDays,
@@ -374,7 +428,7 @@ function DeploymentExpirySheet({
   expiresAt: number | null;
   deploymentType: DeploymentType;
   previewRetentionDays: number | undefined;
-  disabled: boolean;
+  disabled?: React.ReactNode;
   onSave: SaveFn;
 }) {
   const [hasExpiry, setHasExpiry] = useState(initialExpiresAt !== null);
@@ -429,50 +483,56 @@ function DeploymentExpirySheet({
         Set a time at which this deployment will be automatically deleted.
       </p>
       <div className="flex flex-col gap-3">
-        <label
-          className={cn(
-            "flex items-center gap-2 text-sm",
-            (disabled || isSaving) && "cursor-not-allowed opacity-50",
-          )}
-        >
-          <Checkbox
-            checked={hasExpiry}
-            onChange={() => setHasExpiry(!hasExpiry)}
-            disabled={disabled || isSaving}
-          />
-          <span>This deployment will expire at</span>
-          {hasExpiry ? (
-            <input
-              type="datetime-local"
-              value={toDateTimeLocalValue(expiryDate)}
-              min={toDateTimeLocalValue(minExpiryDate)}
-              max={
-                maxExpiryDate ? toDateTimeLocalValue(maxExpiryDate) : undefined
-              }
-              onChange={(e) => {
-                if (e.target.value) {
-                  setExpiryDate(new Date(e.target.value));
-                }
-              }}
-              disabled={disabled || isSaving}
+        <div>
+          <Tooltip className="w-auto" tip={disabled}>
+            <label
               className={cn(
-                "w-fit rounded-md border bg-background-secondary px-3 py-1.5 text-sm text-content-primary",
-                "focus:border-border-selected focus:outline-none",
-                "disabled:cursor-not-allowed disabled:opacity-50",
-              )}
-            />
-          ) : (
-            <span
-              className={cn(
-                "w-fit rounded-md border bg-background-secondary px-3 py-1.5 text-sm text-content-secondary",
-                "cursor-not-allowed opacity-50",
+                "flex items-center gap-2 text-sm",
+                (!!disabled || isSaving) && "cursor-not-allowed opacity-50",
               )}
             >
-              Never
-            </span>
-          )}
-          {hasExpiry && <LiveTimestampDistance date={expiryDate} />}
-        </label>
+              <Checkbox
+                checked={hasExpiry}
+                onChange={() => setHasExpiry(!hasExpiry)}
+                disabled={!!disabled || isSaving}
+              />
+              <span>This deployment will expire at</span>
+              {hasExpiry ? (
+                <input
+                  type="datetime-local"
+                  value={toDateTimeLocalValue(expiryDate)}
+                  min={toDateTimeLocalValue(minExpiryDate)}
+                  max={
+                    maxExpiryDate
+                      ? toDateTimeLocalValue(maxExpiryDate)
+                      : undefined
+                  }
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      setExpiryDate(new Date(e.target.value));
+                    }
+                  }}
+                  disabled={!!disabled || isSaving}
+                  className={cn(
+                    "w-fit rounded-md border bg-background-secondary px-3 py-1.5 text-sm text-content-primary",
+                    "focus:border-border-selected focus:outline-none",
+                    "disabled:cursor-not-allowed disabled:opacity-50",
+                  )}
+                />
+              ) : (
+                <span
+                  className={cn(
+                    "w-fit rounded-md border bg-background-secondary px-3 py-1.5 text-sm text-content-secondary",
+                    "cursor-not-allowed",
+                  )}
+                >
+                  Never
+                </span>
+              )}
+              {hasExpiry && <LiveTimestampDistance date={expiryDate} />}
+            </label>
+          </Tooltip>
+        </div>
         {hasExpiry && !isExpiryValid && (
           <div className="flex w-fit items-center gap-2 rounded-lg border bg-background-error px-3 py-2 text-sm text-content-error">
             <ExclamationTriangleIcon className="size-4 shrink-0" />
@@ -485,7 +545,7 @@ function DeploymentExpirySheet({
         <div className="flex justify-start">
           <Button
             variant={hasExpiry ? "danger" : "primary"}
-            disabled={!isDirty || isSaving || disabled || !isExpiryValid}
+            disabled={!isDirty || isSaving || !!disabled || !isExpiryValid}
             loading={isSaving}
             onClick={handleSave}
           >

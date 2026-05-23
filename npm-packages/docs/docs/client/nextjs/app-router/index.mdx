@@ -66,8 +66,8 @@ example this is what the file would look like for Auth0:
 <Snippet title="app/ConvexClientProvider.tsx" source={Config} />
 
 Custom loading and logged out views can be built with the helper
-`Authenticated`, `Unauthenticated` and `AuthLoading` components from
-`convex/react`, see the
+`Authenticated`, `Unauthenticated`, `AuthLoading` and `AuthRefreshing`
+components from `convex/react`, see the
 [Convex Next.js demo](https://github.com/get-convex/convex-demos/tree/main/nextjs-pages-router/pages/_app.tsx)
 for an example.
 
@@ -99,9 +99,9 @@ Otherwise, follow the
 [Clerk Next.js quickstart](https://clerk.com/docs/quickstarts/nextjs), a guide
 from Clerk that includes steps for adding `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
 and `CLERK_SECRET_KEY` to the .env.local file. In Next.js 15, the
-`<ClerkProvider>` component imported from the `@clerk/nextjs` v6 package
-functions as both a client and a server context provider so you probably won't
-need the `ClerkProvider` from `@clerk/clerk-react`.
+`<ClerkProvider>` component imported from the `@clerk/nextjs` package functions
+as both a client and a server context provider so you probably won't need the
+`ClerkProvider` from `@clerk/react`.
 
 #### Auth0
 

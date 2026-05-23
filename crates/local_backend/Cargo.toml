@@ -14,13 +14,13 @@ testing = [
     "clusters/testing",
     "database/testing",
     "errors/testing",
+    "fivetran_destination/testing",
     "function_runner/testing",
+    "indexing/testing",
     "isolate/testing",
     "keybroker/testing",
     "metrics/testing",
     "model/testing",
-    "mysql/testing",
-    "postgres/testing",
     "runtime/testing",
     "search/testing",
     "storage/testing",
@@ -41,7 +41,6 @@ testing = [
 anyhow = { workspace = true }
 application = { workspace = true }
 async-broadcast = { workspace = true }
-async-trait = { workspace = true }
 authentication = { workspace = true }
 axum = { workspace = true }
 axum-extra = { workspace = true }
@@ -68,25 +67,21 @@ http = { workspace = true }
 http-body-util = { workspace = true }
 http_client = { workspace = true }
 hyper-util = { workspace = true }
+indexing = { workspace = true }
 isolate = { workspace = true }
 keybroker = { workspace = true }
 maplit = { workspace = true }
 metrics = { workspace = true }
 model = { workspace = true }
-mysql = { workspace = true }
 node_executor = { workspace = true }
 parking_lot = { workspace = true }
-postgres = { workspace = true }
-rand = { workspace = true }
 reqwest = { workspace = true }
 runtime = { workspace = true }
 search = { workspace = true }
 sentry = { workspace = true }
-sentry-tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
-sqlite = { workspace = true }
 storage = { workspace = true }
 sync = { workspace = true }
 sync_types = { workspace = true }
@@ -116,21 +111,21 @@ application = { workspace = true, features = ["testing"] }
 authentication = { workspace = true, features = ["testing"] }
 clusters = { workspace = true, features = ["testing"] }
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 database = { workspace = true, features = ["testing"] }
 db_connection = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 events = { workspace = true, features = ["testing"] }
 exports = { workspace = true, features = ["testing"] }
+fivetran_destination = { workspace = true, features = ["testing"] }
 function_runner = { workspace = true, features = ["testing"] }
+indexing = { workspace = true, features = ["testing"] }
 isolate = { workspace = true, features = ["testing"] }
 jsonschema = { workspace = true }
 keybroker = { workspace = true, features = ["testing"] }
 metrics = { workspace = true, features = ["testing"] }
 model = { workspace = true, features = ["testing"] }
-mysql = { workspace = true, features = ["testing"] }
 node_executor = { workspace = true, features = ["testing"] }
-postgres = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
 runtime = { workspace = true, features = ["testing"] }
 search = { workspace = true, features = ["testing"] }

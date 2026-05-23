@@ -133,7 +133,6 @@ pub enum ConflictStrategy {
 
 // When adding a new persistence global, make sure it's copied
 // or computed in migrate_db_cluster/text_index_worker.
-#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Sequence)]
 pub enum PersistenceGlobalKey {
     /// Minimum snapshot that is retained for indexes. Data in earlier snapshots
@@ -399,8 +398,6 @@ pub trait RetentionValidator: Sync + Send {
     async fn validate_document_snapshot(&self, ts: Timestamp) -> anyhow::Result<()>;
     async fn min_snapshot_ts(&self) -> anyhow::Result<RepeatableTimestamp>;
     async fn min_document_snapshot_ts(&self) -> anyhow::Result<RepeatableTimestamp>;
-
-    fn fail_if_falling_behind(&self) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -583,17 +580,6 @@ pub trait PersistenceReader: Send + Sync + 'static {
         Ok(vec![])
     }
 
-    /// Returns all timestamps and documents in ascending (ts, tablet_id, id)
-    /// order. Only should be used for testing
-    #[cfg(any(test, feature = "testing"))]
-    fn load_all_documents(&self) -> DocumentStream<'_> {
-        self.load_documents(
-            TimestampRange::all(),
-            Order::Asc,
-            *DEFAULT_DOCUMENTS_PAGE_SIZE,
-            Arc::new(NoopRetentionValidator),
-        )
-    }
 }
 
 /// Timestamp that is repeatable because the caller is holding the lease and
@@ -837,67 +823,6 @@ impl RetentionValidator for NoopRetentionValidator {
     async fn min_document_snapshot_ts(&self) -> anyhow::Result<RepeatableTimestamp> {
         Ok(RepeatableTimestamp::MIN)
     }
-
-    fn fail_if_falling_behind(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-pub mod fake_retention_validator {
-    use async_trait::async_trait;
-    use sync_types::Timestamp;
-
-    use super::RetentionValidator;
-    use crate::types::{
-        unchecked_repeatable_ts,
-        RepeatableTimestamp,
-    };
-
-    #[derive(Clone, Copy)]
-    pub struct FakeRetentionValidator {
-        pub min_index_ts: RepeatableTimestamp,
-        pub min_document_ts: RepeatableTimestamp,
-    }
-
-    impl FakeRetentionValidator {
-        pub fn new(min_index_ts: Timestamp, min_document_ts: Timestamp) -> Self {
-            Self {
-                min_index_ts: unchecked_repeatable_ts(min_index_ts),
-                min_document_ts: unchecked_repeatable_ts(min_document_ts),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl RetentionValidator for FakeRetentionValidator {
-        fn optimistic_validate_snapshot(&self, ts: Timestamp) -> anyhow::Result<()> {
-            anyhow::ensure!(ts >= self.min_index_ts);
-            Ok(())
-        }
-
-        async fn validate_snapshot(&self, ts: Timestamp) -> anyhow::Result<()> {
-            anyhow::ensure!(ts >= self.min_index_ts);
-            Ok(())
-        }
-
-        async fn validate_document_snapshot(&self, ts: Timestamp) -> anyhow::Result<()> {
-            anyhow::ensure!(ts >= self.min_document_ts);
-            Ok(())
-        }
-
-        async fn min_snapshot_ts(&self) -> anyhow::Result<RepeatableTimestamp> {
-            Ok(self.min_index_ts)
-        }
-
-        async fn min_document_snapshot_ts(&self) -> anyhow::Result<RepeatableTimestamp> {
-            Ok(self.min_document_ts)
-        }
-
-        fn fail_if_falling_behind(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -907,23 +832,4 @@ pub struct PersistenceTableSize {
     pub data_bytes: u64,
     pub index_bytes: u64,
     pub row_count: Option<u64>,
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-
-        #[test]
-        fn test_persistence_global_roundtrips(key in any::<PersistenceGlobalKey>()) {
-            let s: String = key.into();
-            let parse_key = s.parse().unwrap();
-            assert_eq!(key, parse_key);
-        }
-    }
 }

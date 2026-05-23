@@ -45,7 +45,6 @@ use common::{
     document::{
         CreationTime,
         DocumentUpdate,
-        InternalId,
         PackedDocument,
         ParseDocument,
         ParsedDocument,
@@ -111,6 +110,7 @@ use common::{
 use errors::{
     ErrorMetadata,
     ErrorMetadataAnyhowExt,
+    OccInfo,
 };
 use futures::{
     future::Either,
@@ -128,6 +128,7 @@ use indexing::{
         NoInMemoryIndexes,
         TimestampedIndexCache,
     },
+    index_cache::IndexCacheHandle,
     index_registry::IndexRegistry,
 };
 use itertools::Itertools;
@@ -199,6 +200,7 @@ use crate::{
         StreamingExportSelection,
     },
     subscription::{
+        InvalidationMetricCallback,
         Subscription,
         SubscriptionsClient,
         SubscriptionsWorker,
@@ -288,8 +290,10 @@ pub struct Database<RT: Runtime> {
     retention_workers: LeaderRetentionWorkers,
     pub searcher: Arc<dyn Searcher>,
     pub search_storage: Arc<OnceLock<Arc<dyn Storage>>>,
+    index_cache_handle: Option<IndexCacheHandle>,
     virtual_system_mapping: VirtualSystemMapping,
     pub bootstrap_metadata: BootstrapMetadata,
+    invalidation_callback: InvalidationMetricCallback,
     // Caches of snapshot TableMapping and by_id index ids, which are used repeatedly by
     // /api/list_snapshot.
     table_mapping_snapshot_cache: AsyncLru<RT, Timestamp, TableMapping>,
@@ -320,6 +324,7 @@ pub struct DatabaseSnapshot<RT: Runtime> {
     pub bootstrap_metadata: BootstrapMetadata,
     pub snapshot: Snapshot,
     pub persistence_snapshot: PersistenceSnapshot,
+    index_cache_handle: Option<IndexCacheHandle>,
 
     // To read lots of data at the snapshot, sometimes you need
     // to look at current data and walk backwards.
@@ -358,10 +363,6 @@ pub struct SnapshotPage {
     pub usage: FunctionUsageStats,
 }
 
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, Debug, PartialEq,)
-)]
 #[derive(Clone)]
 pub struct BootstrapMetadata {
     pub tables_by_id: IndexId,
@@ -488,13 +489,8 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
         .await?;
 
         let (table_mapping, table_states) = Self::table_mapping_and_states(parsed_table_documents);
-
-        let persistence_version = persistence_snapshot.persistence().version();
-        let index_registry = IndexRegistry::bootstrap(
-            &table_mapping,
-            parsed_index_documents.into_iter(),
-            persistence_version,
-        )?;
+        let index_registry =
+            IndexRegistry::bootstrap(&table_mapping, parsed_index_documents.into_iter())?;
         Ok((
             table_mapping,
             table_states,
@@ -507,16 +503,11 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
 
     #[fastrace::trace]
     pub fn load_table_registry(
-        persistence_snapshot: &PersistenceSnapshot,
         table_mapping: TableMapping,
         table_states: OrdMap<TabletId, TableState>,
         index_registry: &IndexRegistry,
     ) -> anyhow::Result<TableRegistry> {
-        let table_registry = TableRegistry::bootstrap(
-            table_mapping,
-            table_states,
-            persistence_snapshot.persistence().version(),
-        )?;
+        let table_registry = TableRegistry::bootstrap(table_mapping, table_states)?;
         Self::verify_invariants(&table_registry, index_registry)?;
         Ok(table_registry)
     }
@@ -762,18 +753,13 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
         };
         drop(load_indexes_into_memory_timer);
 
-        let search =
-            TextIndexManager::new(TextIndexManagerState::Bootstrapping, persistence.version());
+        let search = TextIndexManager::new(TextIndexManagerState::Bootstrapping);
         let vector = VectorIndexManager::bootstrap_index_metadata(&index_registry)?;
 
         // Step 3: Bootstrap our database metadata from the `_tables` documents
         tracing::info!("Bootstrapping table metadata...");
-        let table_registry = Self::load_table_registry(
-            &persistence_snapshot,
-            table_mapping.clone(),
-            table_states,
-            &index_registry,
-        )?;
+        let table_registry =
+            Self::load_table_registry(table_mapping.clone(), table_states, &index_registry)?;
 
         let mut schema_docs = BTreeMap::new();
         for namespace in table_mapping.namespaces_for_name(&SCHEMAS_TABLE) {
@@ -811,6 +797,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
                 vector_indexes: vector,
             },
             persistence_snapshot,
+            index_cache_handle: None,
 
             persistence_reader: persistence,
             retention_validator,
@@ -911,6 +898,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             Arc::new(NoInMemoryIndexes),
             self.snapshot.table_registry.table_mapping().clone(),
             Arc::new(self.persistence_snapshot.clone()),
+            self.index_cache_handle.clone(),
             None,
         );
 
@@ -933,7 +921,6 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             Arc::new(self.snapshot.table_summaries.clone()),
             self.runtime.clone(),
             usage_tracker,
-            self.retention_validator.clone(),
             virtual_system_mapping,
         ))
     }
@@ -968,6 +955,7 @@ impl<RT: Runtime> Database<RT> {
         searcher: Arc<dyn Searcher>,
         shutdown: ShutdownSignal,
         virtual_system_mapping: VirtualSystemMapping,
+        mut index_cache_handle: IndexCacheHandle,
         retention_rate_limiter: Arc<RateLimiter<RT>>,
         deleted_tablet_sender: mpsc::Sender<TabletId>,
     ) -> anyhow::Result<Self> {
@@ -1010,6 +998,7 @@ impl<RT: Runtime> Database<RT> {
             snapshot,
             persistence_reader: _,
             retention_validator: _,
+            ..
         } = db_snapshot;
 
         let snapshot_manager = SnapshotManager::new(*ts, snapshot);
@@ -1027,7 +1016,10 @@ impl<RT: Runtime> Database<RT> {
 
         let persistence_reader = persistence.reader();
         let (log_owner, log_reader, log_writer) = new_write_log(*ts);
-        let subscriptions = SubscriptionsWorker::start(log_owner, runtime.clone());
+        index_cache_handle.set_write_log_reader(Arc::new(log_reader.clone()));
+        let invalidation_callback = InvalidationMetricCallback::new();
+        let subscriptions =
+            SubscriptionsWorker::start(log_owner, runtime.clone(), invalidation_callback.clone());
         let committer = Committer::start(
             log_writer,
             snapshot_writer,
@@ -1036,6 +1028,7 @@ impl<RT: Runtime> Database<RT> {
             retention_manager.clone(),
             shutdown,
             virtual_system_mapping.clone(),
+            index_cache_handle.clone(),
         );
         let table_mapping_snapshot_cache =
             AsyncLru::new(runtime.clone(), 20, 2, "table_mapping_snapshot");
@@ -1056,8 +1049,10 @@ impl<RT: Runtime> Database<RT> {
             write_commits_since_load: Arc::new(AtomicUsize::new(0)),
             searcher,
             search_storage: Arc::new(OnceLock::new()),
+            index_cache_handle: Some(index_cache_handle),
             virtual_system_mapping,
             bootstrap_metadata,
+            invalidation_callback,
             table_mapping_snapshot_cache,
             by_id_indexes_snapshot_cache,
             component_paths_snapshot_cache,
@@ -1065,6 +1060,16 @@ impl<RT: Runtime> Database<RT> {
         };
 
         Ok(database)
+    }
+
+    /// Sets the invalidation callback for tracking which mutations invalidate
+    /// subscriptions. Must be called after `load` and before any subscriptions
+    /// are invalidated.
+    pub fn set_invalidation_callback(
+        &self,
+        callback: Arc<dyn Fn(Vec<crate::InvalidationEvent>) + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        self.invalidation_callback.set(callback)
     }
 
     pub fn set_search_storage(&self, search_storage: Arc<dyn Storage>) {
@@ -1086,13 +1091,6 @@ impl<RT: Runtime> Database<RT> {
         self.committer.finish_table_summary_bootstrap().await
     }
 
-    #[cfg(test)]
-    pub fn new_search_and_vector_bootstrap_worker_for_testing(
-        &self,
-    ) -> SearchIndexBootstrapWorker<RT> {
-        self.new_search_and_vector_bootstrap_worker()
-    }
-
     fn new_search_and_vector_bootstrap_worker(&self) -> SearchIndexBootstrapWorker<RT> {
         let (ts, snapshot) = self.snapshot_manager.lock().latest();
         let vector_persistence =
@@ -1110,6 +1108,9 @@ impl<RT: Runtime> Database<RT> {
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         self.committer.shutdown();
         self.subscriptions.shutdown();
+        if let Some(handle) = &self.index_cache_handle {
+            handle.remove_deployment();
+        }
         self.retention_workers.shutdown().await?;
         tracing::info!("Database shutdown");
         Ok(())
@@ -1411,7 +1412,7 @@ impl<RT: Runtime> Database<RT> {
 
             // Create the `by_creation_time` index for all tables except "_index", which can
             // only have the "by_id" index.
-            if table_name != &*INDEX_TABLE {
+            if table_name != &INDEX_TABLE {
                 let index_id = id_generator.generate_resolved(index_table_id);
                 let metadata = IndexMetadata::new_enabled(
                     GenericIndexName::by_creation_time(table_id.tablet_id),
@@ -1456,7 +1457,6 @@ impl<RT: Runtime> Database<RT> {
         let mut index_registry = IndexRegistry::bootstrap(
             &table_mapping,
             index_documents.iter().map(|(_, d)| d.clone()),
-            persistence.reader().version(),
         )?;
         let mut in_memory_indexes =
             BackendInMemoryIndexes::bootstrap(&index_registry, index_documents, ts)?;
@@ -1547,6 +1547,7 @@ impl<RT: Runtime> Database<RT> {
             Arc::new(snapshot.in_memory_indexes),
             snapshot.table_registry.table_mapping().clone(),
             Arc::new(persistence_snapshot),
+            self.index_cache_handle.clone(),
             None,
         );
         let (results, cursor) = db_index_snapshot
@@ -1805,6 +1806,7 @@ impl<RT: Runtime> Database<RT> {
                     )
                     .read_snapshot(repeatable_ts)?,
                 ),
+                self.index_cache_handle.clone(),
                 index_cache,
             ),
             Arc::new(TextIndexManagerSnapshot::new(
@@ -1826,7 +1828,6 @@ impl<RT: Runtime> Database<RT> {
             count_snapshot,
             self.runtime.clone(),
             usage_tracker,
-            self.retention_manager.clone(),
             self.virtual_system_mapping.clone(),
         );
         Ok(tx)
@@ -1869,19 +1870,17 @@ impl<RT: Runtime> Database<RT> {
             bootstrap_metadata: self.bootstrap_metadata.clone(),
             snapshot,
             persistence_snapshot: repeatable_persistence.read_snapshot(ts)?,
+            index_cache_handle: self.index_cache_handle.clone(),
             persistence_reader: self.reader.clone(),
             retention_validator: self.retention_validator(),
         })
     }
 
     pub fn check_write_throughput_limit(&self) -> anyhow::Result<()> {
-        self.snapshot_manager.lock().check_write_throughput_limit()
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn commit(&self, transaction: Transaction<RT>) -> anyhow::Result<Timestamp> {
-        self.commit_with_write_source(transaction, WriteSource::unknown())
-            .await
+        let ts = self.runtime.generate_timestamp()?;
+        self.snapshot_manager
+            .lock()
+            .check_write_throughput_limit(ts)
     }
 
     #[fastrace::trace]
@@ -1908,11 +1907,6 @@ impl<RT: Runtime> Database<RT> {
         tables: BTreeSet<TableName>,
     ) -> anyhow::Result<()> {
         self.committer.load_indexes_into_memory(tables).await
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn bump_max_repeatable_ts(&self) -> anyhow::Result<Timestamp> {
-        self.committer.bump_max_repeatable_ts().await
     }
 
     pub fn write_commits_since_load(&self) -> usize {
@@ -2312,16 +2306,11 @@ impl<RT: Runtime> Database<RT> {
             ),
             PageResult::TableDone(table_iterator) => match tablet_ids.get(1) {
                 Some(&next_tablet_id) => {
-                    // TODO(lee) just use DeveloperDocumentId::min() once we no longer
-                    // need to be rollback-safe.
-                    let next_table_number = table_mapping.tablet_number(next_tablet_id)?;
                     let next_by_id = *by_id_indexes.get(&next_tablet_id).ok_or_else(|| {
                         anyhow::anyhow!("by_id index for {next_tablet_id:?} missing")
                     })?;
-                    let next_cursor = ResolvedDocumentId::new(
-                        next_tablet_id,
-                        DeveloperDocumentId::new(next_table_number, InternalId::MIN),
-                    );
+                    let next_cursor =
+                        ResolvedDocumentId::new(next_tablet_id, DeveloperDocumentId::MIN);
                     let next_document_stream = table_iterator
                         .into_stream_documents_in_table(
                             next_tablet_id,
@@ -2357,21 +2346,6 @@ impl<RT: Runtime> Database<RT> {
             has_more,
             usage: usage.gather_user_stats(),
         })
-    }
-
-    #[cfg(test)]
-    pub fn table_names(&self, identity: Identity) -> anyhow::Result<BTreeSet<TableName>> {
-        if !(identity.is_admin() || identity.is_system()) {
-            anyhow::bail!(unauthorized_error("table_names"));
-        }
-        Ok(self
-            .snapshot_manager
-            .lock()
-            .latest_snapshot()
-            .table_registry
-            .user_table_names()
-            .map(|(_, name)| name.clone())
-            .collect())
     }
 
     /// Attempt to pull a token forward to a given timestamp, returning `Err`
@@ -2587,32 +2561,52 @@ pub struct ConflictingReadWithWriteSource {
 }
 
 impl ConflictingReadWithWriteSource {
-    pub fn into_error(self, mapping: &TableMapping, current_writer: &WriteSource) -> anyhow::Error {
+    pub fn into_error(
+        self,
+        mapping: &TableMapping,
+        component_registry: &ComponentRegistry,
+        current_writer: &WriteSource,
+    ) -> anyhow::Error {
         let write_ts_val = Some(u64::from(self.write_ts));
         let table_name = mapping.tablet_name(*self.read.index.table());
 
         let Ok(table_name) = table_name else {
-            let metadata = ErrorMetadata::user_occ(None, None, None, None, write_ts_val);
+            let metadata = ErrorMetadata::user_occ(None, None, write_ts_val);
             return anyhow::anyhow!(metadata);
         };
 
+        // Resolve the component path for the table's namespace.
+        let component_path_str = mapping
+            .tablet_namespace(*self.read.index.table())
+            .ok()
+            .and_then(|ns| {
+                let component_id = ComponentId::from(ns);
+                let path = component_registry
+                    .get_component_path(component_id, &mut TransactionReadSet::new());
+                path.and_then(|p| p.serialize())
+            });
+
         // We want to show the document's ID only if we know which mutation changed it,
         // so use it only if we have a write source.
-        let occ_msg = self.write_source.0.as_deref().map(|write_source| {
+        let occ_msg = self.write_source.display_name().map(|write_source| {
             occ_write_source_string(
-                write_source,
+                &write_source,
                 self.read.id.to_string(),
                 *current_writer == self.write_source,
             )
         });
 
-        let write_source = self.write_source.0.as_ref().map(|s| s.to_string());
+        let write_source = self.write_source.display_name();
 
         if !table_name.is_system() {
             let metadata = ErrorMetadata::user_occ(
-                Some(table_name.into()),
-                Some(self.read.id.developer_id.encode()),
-                write_source,
+                Some(OccInfo {
+                    table_name: Some(table_name.into()),
+                    document_id: Some(self.read.id.developer_id.encode()),
+                    write_source,
+                    component_path: component_path_str,
+                    ..Default::default()
+                }),
                 occ_msg,
                 write_ts_val,
             );
@@ -2625,7 +2619,10 @@ impl ConflictingReadWithWriteSource {
         let index = format!("{table_name}.{}", self.read.index.descriptor());
         let msg = format!(
             "{msg}(conflicts with read of system table {index} in this writer \"{}\")",
-            current_writer.0.as_deref().unwrap_or("unknownwriter")
+            current_writer
+                .display_name()
+                .as_deref()
+                .unwrap_or("unknownwriter")
         );
 
         let formatted = format!(

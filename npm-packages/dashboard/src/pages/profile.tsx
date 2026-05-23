@@ -21,6 +21,7 @@ import { MemberResponse } from "generatedApi";
 import { LoadingTransition } from "@ui/Loading";
 import { useTheme } from "next-themes";
 import { ConnectedIdentities } from "components/profile/ConnectedIdentities";
+import { PersonalAccessTokens } from "components/profile/PersonalAccessTokens";
 
 export { getServerSideProps } from "lib/ssr";
 
@@ -67,6 +68,8 @@ function Profile() {
               <Emails emails={emails} />
 
               <ConnectedIdentities />
+
+              <PersonalAccessTokens />
 
               <ToggleDarkMode />
               <DiscordAccounts />

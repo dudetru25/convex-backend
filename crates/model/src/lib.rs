@@ -35,6 +35,10 @@ use std::{
     sync::LazyLock,
 };
 
+use audit_log_config::{
+    AuditLogConfigTable,
+    AUDIT_LOG_CONFIG_TABLE,
+};
 use auth::AUTH_TABLE;
 use aws_lambda_versions::{
     AwsLambdaVersionsTable,
@@ -82,7 +86,6 @@ use cron_jobs::{
     CRON_NEXT_RUN_INDEX_BY_CRON_JOB_ID,
     CRON_NEXT_RUN_INDEX_BY_NEXT_TS,
     CRON_NEXT_RUN_TABLE,
-    DEPRECATED_CRON_JOBS_INDEX_BY_NEXT_TS,
 };
 pub use database::system_tables::{
     SystemIndex,
@@ -209,6 +212,7 @@ use crate::{
 };
 
 pub mod airbyte_import;
+pub mod audit_log_config;
 pub mod auth;
 pub mod aws_lambda_versions;
 pub mod backend_info;
@@ -234,9 +238,6 @@ pub mod session_requests;
 pub mod snapshot_imports;
 pub mod source_packages;
 pub mod udf_config;
-
-#[cfg(any(test, feature = "testing"))]
-pub mod test_helpers;
 
 /// Default best effort table number when creating the table. If it is taken
 /// already, another number is selected. Legacy deployments don't
@@ -275,9 +276,10 @@ enum DefaultTableNumber {
     IndexBackfills = 36,
     SchemaValidationProgress = 37,
     ScheduledJobArgs = 38,
+    AuditLogConfig = 39,
     // Keep this number and your user name up to date. The number makes it easy to know
     // what to use next. The username on the same line detects merge conflicts
-    // Next Number - 39 - emma
+    // Next Number - 40 - reece
 }
 
 impl From<DefaultTableNumber> for TableNumber {
@@ -322,6 +324,7 @@ impl From<DefaultTableNumber> for &'static dyn ErasedSystemTable {
             DefaultTableNumber::IndexBackfills => &IndexBackfillTable,
             DefaultTableNumber::SchemaValidationProgress => &SchemaValidationProgressTable,
             DefaultTableNumber::ScheduledJobArgs => &ScheduledJobArgsTable,
+            DefaultTableNumber::AuditLogConfig => &AuditLogConfigTable,
         }
     }
 }
@@ -359,7 +362,6 @@ static SYSTEM_INDEXES_WITHOUT_CREATION_TIME: LazyLock<BTreeSet<IndexName>> = Laz
     btreeset! {
         BY_COMPONENT_PATH_INDEX.name(),
         CRON_JOBS_INDEX_BY_NAME.name(),
-        DEPRECATED_CRON_JOBS_INDEX_BY_NEXT_TS.name(),
         CRON_JOB_LOGS_INDEX_BY_NAME_TS.name(),
         CRON_NEXT_RUN_INDEX_BY_NEXT_TS.name(),
         CRON_NEXT_RUN_INDEX_BY_CRON_JOB_ID.name(),
@@ -557,6 +559,7 @@ pub fn app_system_tables() -> Vec<&'static dyn ErasedSystemTable> {
         &FunctionHandlesTable,
         &CanonicalUrlsTable,
         &LogSinksTable,
+        &AuditLogConfigTable,
         &AwsLambdaVersionsTable,
         &BackendInfoTable,
     ];
@@ -644,6 +647,7 @@ pub static FIRST_SEEN_TABLE: LazyLock<BTreeMap<TableName, DatabaseVersion>> = La
         INDEX_BACKFILLS_TABLE.clone() => 120,
         SCHEMA_VALIDATION_PROGRESS_TABLE.clone() => 122,
         SCHEDULED_JOBS_ARGS_TABLE.clone() => 123,
+        AUDIT_LOG_CONFIG_TABLE.clone() => 124,
     }
 });
 
@@ -655,7 +659,6 @@ pub static FIRST_SEEN_INDEX: LazyLock<BTreeMap<IndexName, DatabaseVersion>> = La
         SCHEDULED_JOBS_INDEX_BY_UDF_PATH.name() => 44,
         SESSION_REQUESTS_INDEX.name() => 44,
         FILE_STORAGE_ID_INDEX.name() => 44,
-        DEPRECATED_CRON_JOBS_INDEX_BY_NEXT_TS.name() => 47,
         CRON_JOBS_INDEX_BY_NAME.name() => 49,
         CRON_JOB_LOGS_INDEX_BY_NAME_TS.name() => 51,
         CRON_NEXT_RUN_INDEX_BY_NEXT_TS.name() => 118,
@@ -673,220 +676,3 @@ pub static FIRST_SEEN_INDEX: LazyLock<BTreeMap<IndexName, DatabaseVersion>> = La
         SCHEMA_VALIDATION_PROGRESS_BY_SCHEMA_ID.name() => 122,
     }
 });
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::BTreeSet,
-        sync::Arc,
-    };
-
-    use common::{
-        components::{
-            CanonicalizedComponentFunctionPath,
-            ComponentPath,
-        },
-        document::{
-            ParseDocument,
-            ParsedDocument,
-        },
-        execution_context::ExecutionContext,
-        runtime::UnixTimestamp,
-        testing::TestPersistence,
-    };
-    use database::{
-        defaults::DEFAULT_BOOTSTRAP_TABLE_NUMBERS,
-        test_helpers::{
-            DbFixtures,
-            DbFixturesArgs,
-        },
-        TableUsage,
-        TablesUsage,
-        TestFacingModel,
-        UserFacingModel,
-    };
-    use maplit::btreemap;
-    use migrations_model::DATABASE_VERSION;
-    use pretty_assertions::assert_eq;
-    use runtime::testing::TestRuntime;
-    use value::{
-        assert_obj,
-        ConvexArray,
-        TableNamespace,
-    };
-
-    use crate::{
-        app_system_tables,
-        scheduled_jobs::{
-            types::ScheduledJobMetadata,
-            SchedulerModel,
-        },
-        test_helpers::DbFixturesWithModel,
-        virtual_system_mapping,
-        DEFAULT_TABLE_NUMBERS,
-        FIRST_SEEN_INDEX,
-        FIRST_SEEN_TABLE,
-    };
-
-    #[test]
-    fn test_ensure_consistent() {
-        // Ensure consistent with the bootstrap model defaults
-        for (bootstrap_table_name, bootstrap_table_number) in DEFAULT_BOOTSTRAP_TABLE_NUMBERS.iter()
-        {
-            assert!(
-                DEFAULT_TABLE_NUMBERS.contains_key(bootstrap_table_name),
-                "{bootstrap_table_name} missing from DEFAULT_TABLE_NUMBERS"
-            );
-            assert_eq!(
-                DEFAULT_TABLE_NUMBERS[bootstrap_table_name],
-                *bootstrap_table_number
-            );
-        }
-    }
-
-    #[test]
-    fn test_ensure_defaults() {
-        for table in app_system_tables() {
-            let table_name = table.table_name();
-            assert!(
-                DEFAULT_TABLE_NUMBERS.contains_key(table_name),
-                "{table_name} missing from DEFAULT_TABLE_NUMBERS"
-            );
-        }
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_initialize_model(rt: TestRuntime) -> anyhow::Result<()> {
-        let args = DbFixturesArgs {
-            tp: Some(Arc::new(TestPersistence::new())),
-            virtual_system_mapping: virtual_system_mapping().clone(),
-            ..Default::default()
-        };
-        // Initialize
-        DbFixtures::new_with_model_and_args(&rt, args.clone()).await?;
-        // Reinitialize (should work a second time - simulating a restart)
-        DbFixtures::new_with_model_and_args(&rt, args).await?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_first_seen() -> anyhow::Result<()> {
-        let tables: BTreeSet<_> = app_system_tables()
-            .into_iter()
-            .map(|table| table.table_name())
-            .collect();
-        let first_seen: BTreeSet<_> = FIRST_SEEN_TABLE.keys().collect();
-        assert_eq!(tables, first_seen);
-        let max_first_seen = *FIRST_SEEN_TABLE.values().max().unwrap();
-        println!("max_first_seen: {max_first_seen}");
-        assert!(max_first_seen <= DATABASE_VERSION);
-        Ok(())
-    }
-
-    #[test]
-    fn test_first_seen_indexes() -> anyhow::Result<()> {
-        let tables: BTreeSet<_> = app_system_tables()
-            .into_iter()
-            .flat_map(|table| table.indexes())
-            .map(|index| index.name)
-            .collect();
-        let first_seen: BTreeSet<_> = FIRST_SEEN_INDEX.keys().cloned().collect();
-        assert_eq!(tables, first_seen);
-        let max_first_seen = *FIRST_SEEN_INDEX.values().max().unwrap();
-        assert!(max_first_seen <= DATABASE_VERSION);
-        Ok(())
-    }
-
-    /// Easier to put this test in model - so it tests the actual virtual tables
-    #[convex_macro::test_runtime]
-    async fn test_get_document_and_index_storage(rt: TestRuntime) -> anyhow::Result<()> {
-        let args = DbFixturesArgs {
-            tp: Some(Arc::new(TestPersistence::new())),
-            virtual_system_mapping: virtual_system_mapping().clone(),
-            ..Default::default()
-        };
-        let DbFixtures { db, .. } = DbFixtures::new_with_model_and_args(&rt, args.clone()).await?;
-
-        let t1 = "usertable".parse()?;
-        let obj = assert_obj!("name" => "Nipunn" );
-        let mut tx = db.begin_system().await?;
-        let id = TestFacingModel::new(&mut tx)
-            .insert(&t1, obj.clone())
-            .await?;
-        let doc = tx.get(id).await?.unwrap();
-
-        let path = CanonicalizedComponentFunctionPath {
-            component: ComponentPath::root(),
-            udf_path: "scheduler:test_get_document_and_index_storage".parse()?,
-        };
-        let id = SchedulerModel::new(&mut tx, TableNamespace::Global)
-            .schedule(
-                path,
-                ConvexArray::empty(),
-                UnixTimestamp::from_millis(15),
-                ExecutionContext::new_for_test(),
-            )
-            .await?;
-        let scheduled_job_doc = tx.get(id).await?.unwrap();
-        let scheduled_job_metadata_size = scheduled_job_doc.size();
-        let scheduled_job_metadata: ParsedDocument<ScheduledJobMetadata> =
-            scheduled_job_doc.parse()?;
-        let scheduled_job_args = UserFacingModel::new(&mut tx, TableNamespace::Global)
-            .get(scheduled_job_metadata.args_id.unwrap(), None)
-            .await?
-            .unwrap();
-        db.commit(tx).await?;
-
-        let expected_user_usage = TableUsage {
-            document_size: doc.size() as u64,
-            index_size: 0,
-            system_index_size: 2 * doc.size() as u64,
-        };
-        let expected_scheduled_jobs_usage = TableUsage {
-            document_size: scheduled_job_metadata_size as u64,
-            index_size: 0,
-            system_index_size: 5 * scheduled_job_metadata_size as u64,
-        };
-        let expected_scheduled_job_args_usage = TableUsage {
-            document_size: scheduled_job_args.size() as u64,
-            index_size: 0,
-            system_index_size: 2 * scheduled_job_args.size() as u64,
-        };
-        let expected_scheduled_functions_usage = TableUsage {
-            document_size: scheduled_job_metadata_size as u64 + scheduled_job_args.size() as u64,
-            index_size: 0,
-            system_index_size: 5 * scheduled_job_metadata_size as u64
-                + 2 * scheduled_job_args.size() as u64, /* by_id and by_creation_time indexes
-                                                         * defined on both tables + 3 indexes on
-                                                         * _scheduled_jobs table */
-        };
-
-        let snapshot = db.latest_snapshot()?;
-        let TablesUsage {
-            user_tables,
-            system_tables,
-            virtual_tables,
-            orphaned_tables,
-        } = snapshot.get_document_and_index_storage()?;
-        assert_eq!(
-            user_tables,
-            btreemap! {
-                (TableNamespace::Global, t1) => (expected_user_usage, ComponentPath::root())
-            }
-        );
-        assert_eq!(
-            system_tables[&(TableNamespace::Global, "_scheduled_jobs".parse()?)],
-            (expected_scheduled_jobs_usage, ComponentPath::root())
-        );
-        assert_eq!(
-            system_tables[&(TableNamespace::Global, "_scheduled_job_args".parse()?)],
-            (expected_scheduled_job_args_usage, ComponentPath::root())
-        );
-        assert_eq!(
-            virtual_tables[&(TableNamespace::Global, "_scheduled_functions".parse()?)],
-            (expected_scheduled_functions_usage, ComponentPath::root())
-        );
-        assert_eq!(orphaned_tables, btreemap! {});
-        Ok(())
-    }
-}

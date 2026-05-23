@@ -73,8 +73,7 @@ pub mod types;
 pub mod user_error;
 
 /// Table name for user modules.
-pub static MODULES_TABLE: LazyLock<TableName> =
-    LazyLock::new(|| "_modules".parse().expect("Invalid built-in module table"));
+pub static MODULES_TABLE: TableName = TableName::const_new("_modules");
 
 /// Field for a module's path in `ModuleMetadata`.
 static PATH_FIELD: LazyLock<FieldPath> =
@@ -257,7 +256,7 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
     pub async fn get_metadata_for_function(
         &mut self,
         path: CanonicalizedComponentFunctionPath,
-    ) -> anyhow::Result<Option<ParsedDocument<ModuleMetadata>>> {
+    ) -> anyhow::Result<Option<Arc<ParsedDocument<ModuleMetadata>>>> {
         let module_path = BootstrapComponentsModel::new(self.tx).function_path_to_module(&path)?;
         let module_metadata = self.get_metadata(module_path).await?;
         Ok(module_metadata)
@@ -266,7 +265,7 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
     pub async fn get_metadata_for_function_by_id(
         &mut self,
         path: &ResolvedComponentFunctionPath,
-    ) -> anyhow::Result<Option<ParsedDocument<ModuleMetadata>>> {
+    ) -> anyhow::Result<Option<Arc<ParsedDocument<ModuleMetadata>>>> {
         let module_path = CanonicalizedComponentModulePath {
             component: path.component,
             module_path: path.udf_path.module().clone(),
@@ -279,7 +278,7 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
     pub async fn get_metadata(
         &mut self,
         path: CanonicalizedComponentModulePath,
-    ) -> anyhow::Result<Option<ParsedDocument<ModuleMetadata>>> {
+    ) -> anyhow::Result<Option<Arc<ParsedDocument<ModuleMetadata>>>> {
         let timer = get_module_metadata_timer();
 
         let is_system = path.module_path.is_system();
@@ -381,7 +380,7 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
     async fn module_metadata(
         &mut self,
         path: CanonicalizedComponentModulePath,
-    ) -> anyhow::Result<Option<ParsedDocument<ModuleMetadata>>> {
+    ) -> anyhow::Result<Option<Arc<ParsedDocument<ModuleMetadata>>>> {
         let namespace = path.component.into();
         let module_document = self
             .tx
@@ -389,8 +388,7 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
             .eq(&[path.module_path.as_str()])?
             .unique()
             .await?;
-        // TODO: thread Arc out of this function
-        Ok(module_document.map(Arc::unwrap_or_clone))
+        Ok(module_document)
     }
 
     // Helper method that returns the AnalyzedFunction for the specified path.
@@ -474,7 +472,7 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
     pub async fn get_http(
         &mut self,
         component: ComponentId,
-    ) -> anyhow::Result<Option<ParsedDocument<ModuleMetadata>>> {
+    ) -> anyhow::Result<Option<Arc<ParsedDocument<ModuleMetadata>>>> {
         let path = CanonicalizedComponentModulePath {
             component,
             module_path: HTTP_MODULE_PATH.clone(),

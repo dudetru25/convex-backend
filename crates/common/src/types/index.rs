@@ -9,12 +9,14 @@ use std::{
 };
 
 use anyhow::Context;
+use compact_str::CompactString;
 use sync_types::identifier::{
     check_valid_identifier,
     MIN_IDENTIFIER,
 };
 use value::{
     heap_size::HeapSize,
+    identifier::is_valid_identifier,
     FieldName,
     InternalId,
     ResolvedDocumentId,
@@ -34,10 +36,10 @@ use crate::{
 /// Descriptor for an index, e.g., "by_email".
 #[derive(Clone, derive_more::Deref, derive_more::Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[display("{_0}")]
-pub struct IndexDescriptor(Cow<'static, str>);
+pub struct IndexDescriptor(CompactString);
 
 impl IndexDescriptor {
-    pub const MIN: Self = IndexDescriptor(Cow::Borrowed(MIN_IDENTIFIER));
+    pub const MIN: Self = IndexDescriptor(CompactString::const_new(MIN_IDENTIFIER));
 
     pub fn is_reserved(&self) -> bool {
         *self == INDEX_BY_ID_DESCRIPTOR
@@ -49,7 +51,21 @@ impl IndexDescriptor {
         let cow: Cow<'static, str> = s.into();
         check_valid_identifier(&cow)
             .with_context(|| index_validation_error::invalid_index_name(&cow))?;
-        Ok(Self(cow))
+        Ok(Self(match cow {
+            Cow::Borrowed(s) => CompactString::const_new(s),
+            Cow::Owned(s) => s.into(),
+        }))
+    }
+
+    /// Creates an IndexDescriptor from a string literal, panicking if invalid.
+    /// This should only be used in a const context.
+    ///
+    /// Use [IndexDescriptor::new] for runtime input.
+    pub const fn const_new(s: &'static str) -> Self {
+        if !is_valid_identifier(s) {
+            panic!("IndexDescriptor is not a valid identifier");
+        }
+        Self(CompactString::const_new(s))
     }
 
     pub fn as_str(&self) -> &str {
@@ -78,21 +94,6 @@ impl HeapSize for IndexDescriptor {
 impl From<IndexDescriptor> for FieldName {
     fn from(desc: IndexDescriptor) -> Self {
         desc.0.parse().expect("IndexDescriptor not valid FieldName")
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for IndexDescriptor {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = IndexDescriptor>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        use crate::identifier::arbitrary_regexes::USER_IDENTIFIER_REGEX;
-        USER_IDENTIFIER_REGEX
-            .prop_filter_map("Invalid IndexDescriptor", |s| IndexDescriptor::new(s).ok())
     }
 }
 
@@ -181,7 +182,6 @@ impl<T: IndexTableIdentifier + FromStr<Err = anyhow::Error>> FromStr for Generic
 ///
 /// Note that this is unrelated to the storage state
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct IndexDiff {
     /// missing -> exists
     /// missing -> staged
@@ -219,9 +219,9 @@ impl<T: IndexTableIdentifier> fmt::Debug for GenericIndexName<T> {
     }
 }
 
-pub const INDEX_BY_ID_DESCRIPTOR: IndexDescriptor = IndexDescriptor(Cow::Borrowed("by_id"));
+pub const INDEX_BY_ID_DESCRIPTOR: IndexDescriptor = IndexDescriptor::const_new("by_id");
 pub const INDEX_BY_CREATION_TIME_DESCRIPTOR: IndexDescriptor =
-    IndexDescriptor(Cow::Borrowed("by_creation_time"));
+    IndexDescriptor::const_new("by_creation_time");
 
 impl<T: IndexTableIdentifier> GenericIndexName<T> {
     /// Create a new index name for the table and given descriptor,
@@ -246,7 +246,7 @@ impl<T: IndexTableIdentifier> GenericIndexName<T> {
 
     /// The index that exists for all tables which indexes no fields except the
     /// implicitly-included `_id`.
-    pub fn by_id(table: T) -> Self {
+    pub const fn by_id(table: T) -> Self {
         Self {
             table,
             descriptor: INDEX_BY_ID_DESCRIPTOR,
@@ -254,7 +254,7 @@ impl<T: IndexTableIdentifier> GenericIndexName<T> {
     }
 
     /// The index that exists for all tables which indexes `_creationTime`.
-    pub fn by_creation_time(table: T) -> Self {
+    pub const fn by_creation_time(table: T) -> Self {
         Self {
             table,
             descriptor: INDEX_BY_CREATION_TIME_DESCRIPTOR,
@@ -333,22 +333,6 @@ impl IndexName {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl<T: IndexTableIdentifier + proptest::arbitrary::Arbitrary> proptest::arbitrary::Arbitrary
-    for GenericIndexName<T>
-{
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = GenericIndexName<T>>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        any::<(T, IndexDescriptor)>().prop_filter_map("Invalid IndexName", |(t, d)| {
-            GenericIndexName::new(t, d).ok()
-        })
-    }
-}
-
 pub type IndexId = InternalId;
 
 #[derive(Eq, PartialEq, Clone, Debug, Ord, PartialOrd)]
@@ -373,32 +357,5 @@ pub enum DatabaseIndexValue {
 impl DatabaseIndexValue {
     pub fn is_delete(&self) -> bool {
         matches!(self, DatabaseIndexValue::Deleted)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    mod test_min_index_descriptor {
-        use cmd_util::env::env_config;
-        use proptest::prelude::*;
-
-        use super::super::IndexDescriptor;
-
-        proptest! {
-            #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-            #[test]
-            fn proptest(index_name in any::<IndexDescriptor>()) {
-                assert!(IndexDescriptor::MIN <= index_name);
-            }
-        }
-
-        #[test]
-        fn proptest_trophies() {
-            // #2716: `IndexDescriptor::min` was "a", where "A" < "a".
-            assert!(IndexDescriptor::MIN <= IndexDescriptor::new("B").unwrap());
-        }
     }
 }

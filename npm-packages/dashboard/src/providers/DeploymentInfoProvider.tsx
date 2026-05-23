@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/router";
 import {
   captureException,
@@ -11,13 +12,17 @@ import { reportHttpError } from "hooks/fetching";
 import {
   DeploymentInfo,
   DeploymentInfoContext,
-  LocalDeploymentDisconnectOverlay,
-  CloudDisconnectOverlay,
   ConnectedDeployment,
 } from "@common/lib/deploymentContext";
+import { LocalDeploymentDisconnectOverlay } from "@common/features/disconnectOverlay/LocalDeploymentDisconnectOverlay";
+import { CloudDisconnectOverlay } from "@common/features/disconnectOverlay/CloudDisconnectOverlay";
 import { useCurrentTeam, useTeamEntitlements, useTeamMembers } from "api/teams";
 import { useCurrentDeployment } from "api/deployments";
 import { useHasProjectAdminPermissions } from "api/roles";
+import {
+  useIsOperationAllowed,
+  useHasCustomRole,
+} from "hooks/useDeploymentPermissions";
 import { useCurrentUsageBanner } from "components/header/UsageBanner";
 import { useIsDeploymentPaused } from "hooks/useIsDeploymentPaused";
 import { CloudImport } from "elements/BackupIdentifier";
@@ -50,6 +55,7 @@ import {
 import { useSupportFormOpen } from "elements/SupportWidget";
 import { useConvexStatus } from "hooks/useConvexStatus";
 import { ConvexStatusWidget } from "lib/ConvexStatusWidget";
+import { deploymentAuth } from "lib/deploymentAuth";
 
 // A silly, standard hack to dodge warnings about useLayoutEffect on the server.
 const useIsomorphicLayoutEffect =
@@ -174,6 +180,8 @@ export function DeploymentInfoProvider({
         useTeamMembers,
         useTeamEntitlements,
         useHasProjectAdminPermissions,
+        useHasCustomRole: useHasCustomRole,
+        useIsOperationAllowed: useIsOperationAllowed,
         useProjectEnvironmentVariables,
         useIsDeploymentPaused,
         useLogDeploymentEvent,
@@ -195,6 +203,7 @@ export function DeploymentInfoProvider({
           useProvisionProjectWorkOSEnvironment,
           useDeleteProjectWorkOSEnvironment,
         },
+        Link,
         TeamMemberLink,
         CloudImport,
         ErrorBoundary: DeploymentErrorBoundary,
@@ -232,39 +241,3 @@ export function DeploymentInfoProvider({
     <>{children}</>
   );
 }
-
-const deploymentAuthInner = async (
-  deploymentName: string,
-  authHeader: string,
-  authMethod: string,
-): Promise<
-  | { deploymentUrl: string; adminKey: string; ok: true }
-  | { ok: false; errorMessage: string; errorCode: string }
-> => {
-  const resp = await fetch(
-    `${process.env.NEXT_PUBLIC_BIG_BRAIN_URL}/api/dashboard/instances/${deploymentName}/${authMethod}`,
-    {
-      method: "POST",
-      headers: { Authorization: authHeader },
-    },
-  );
-  const data = await resp.json();
-  if (!resp.ok) {
-    return { ok: false, errorCode: data.code, errorMessage: data.message };
-  }
-  const { adminKey, instanceUrl } = data;
-  const deploymentUrl = instanceUrl.endsWith("/")
-    ? instanceUrl.slice(0, -1)
-    : instanceUrl;
-  return { deploymentUrl, adminKey, ok: true };
-};
-
-// Obtain a deploy key to be displayed to the user for them to use
-// in machine based workflows like CI/CD.
-const deploymentAuth = async (
-  deploymentName: string,
-  authHeader: string,
-): Promise<
-  | { deploymentUrl: string; adminKey: string; ok: true }
-  | { ok: false; errorMessage: string; errorCode: string }
-> => deploymentAuthInner(deploymentName, authHeader, "auth");

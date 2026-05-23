@@ -1,4 +1,5 @@
 import { cn } from "@ui/cn";
+import { toDateTimeLocalValue } from "@common/lib/format";
 
 type DateTimePickerProps = {
   date: Date;
@@ -7,16 +8,7 @@ type DateTimePickerProps = {
   disabled?: boolean;
   autoFocus?: boolean;
   className?: string;
-};
-
-const toDateTimeLocalValue = (d: Date) => {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  const hours = String(d.getHours()).padStart(2, "0");
-  const minutes = String(d.getMinutes()).padStart(2, "0");
-  const seconds = String(d.getSeconds()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+  "aria-label": string;
 };
 
 export function DateTimePicker({
@@ -26,9 +18,11 @@ export function DateTimePicker({
   disabled = false,
   autoFocus = false,
   className,
+  "aria-label": ariaLabel,
 }: DateTimePickerProps) {
   return (
     <input
+      aria-label={ariaLabel}
       autoFocus={autoFocus}
       type="datetime-local"
       className={cn(
@@ -37,7 +31,7 @@ export function DateTimePicker({
       )}
       disabled={disabled}
       step={1}
-      defaultValue={toDateTimeLocalValue(date)}
+      defaultValue={toDateTimeLocalValue(date, { includeSeconds: true })}
       onChange={(d) => {
         if (d.target.value) {
           onChange(new Date(d.target.value));

@@ -9,10 +9,8 @@ export const flagDefaults: {
   enableNewDashboardVersionNotification: boolean;
   enableStatuspageWidget: boolean;
   connectionStateCheckIntervalMs: number;
-  deploymentList: boolean;
-  postHogIntegrations: boolean;
-  usageDashboardV2: boolean;
-  transferDeployment: boolean;
+  scopedDeployKeys: boolean;
+  customRoles: boolean;
 } = {
   commandPalette: false,
   commandPaletteDeleteProjects: false,
@@ -21,26 +19,12 @@ export const flagDefaults: {
   enableNewDashboardVersionNotification: false,
   enableStatuspageWidget: true,
   connectionStateCheckIntervalMs: 2500,
-  deploymentList: false,
-  postHogIntegrations: false,
-  usageDashboardV2: false,
-  transferDeployment: false,
+  scopedDeployKeys: false,
+  customRoles: false,
 };
-
-// Flag defaults need to be in the default kebab-case format:
-// https://docs.launchdarkly.com/sdk/client-side/react/react-web#configuring-the-react-sdk
-// Note: kebabCaseKeys uses lodash kebabCase which splits "V2" into "v-2".
-// We fix keys where this produces incorrect results.
-const KEBAB_CASE_OVERRIDES: Record<string, string> = {
-  usageDashboardV2: "usage-dashboard-v2",
-};
-
-function kebabCaseKey(key: string): string {
-  return KEBAB_CASE_OVERRIDES[key] ?? kebabCase(key);
-}
 
 export const flagDefaultsKebabCase = Object.entries(flagDefaults).reduce(
-  (carry, [key, value]) => ({ ...carry, [kebabCaseKey(key)]: value }),
+  (carry, [key, value]) => ({ ...carry, [kebabCase(key)]: value }),
   {} as { [key: string]: any },
 );
 

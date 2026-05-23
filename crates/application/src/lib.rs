@@ -32,6 +32,7 @@ use airbyte_import::{
     ValidatedAirbyteStream,
 };
 use anyhow::Context;
+use audit_logging::AuditLogClient;
 use authentication::{
     application_auth::ApplicationAuth,
     validate_id_token,
@@ -49,7 +50,10 @@ use common::{
         AuthInfo,
     },
     bootstrap_model::{
-        components::handles::FunctionHandle,
+        components::{
+            definition::EnvVarValidator,
+            handles::FunctionHandle,
+        },
         index::{
             database_index::IndexedFields,
             index_validation_error,
@@ -64,6 +68,7 @@ use common::{
     components::{
         CanonicalizedComponentFunctionPath,
         CanonicalizedComponentModulePath,
+        ComponentDefinitionId,
         ComponentDefinitionPath,
         ComponentId,
         ComponentPath,
@@ -91,6 +96,7 @@ use common::{
         APPLICATION_MAX_CONCURRENT_UPLOADS,
         ENABLE_INDEX_BACKFILL,
         ENV_VAR_LIMIT,
+        ENV_VAR_TOTAL_SIZE_LIMIT,
         MAX_JOBS_CANCEL_BATCH,
         MAX_USER_MODULES,
     },
@@ -123,9 +129,13 @@ use common::{
     types::{
         env_var_limit_met,
         env_var_name_not_unique,
+        env_var_total_size,
+        env_var_total_size_limit_met,
         AllowedVisibility,
         ConvexOrigin,
         ConvexSite,
+        DeploymentMetadata,
+        DeploymentType,
         EnvVarName,
         EnvVarValue,
         FullyQualifiedObjectKey,
@@ -135,17 +145,16 @@ use common::{
         ModuleEnvironment,
         NodeDependency,
         ObjectKey,
-        RegionName,
         RepeatableTimestamp,
         TableName,
         Timestamp,
         UdfType,
     },
+    RequestContext,
     RequestId,
 };
 use cron_jobs::CronJobExecutor;
 use database::{
-    unauthorized_error,
     BootstrapComponentsModel,
     Database,
     FastForwardIndexWorker,
@@ -195,8 +204,8 @@ use http_client::{
     CachedHttpClient,
     ClientPurpose,
 };
-use isolate::helpers::source_map_from_slice;
 use keybroker::{
+    DeploymentOp,
     Identity,
     KeyBroker,
 };
@@ -210,6 +219,7 @@ use model::{
         AirbyteImportModel,
         AIRBYTE_PRIMARY_KEY_INDEX_DESCRIPTOR,
     },
+    audit_log_config::AuditLogConfigModel,
     auth::AuthInfoModel,
     backend_info::BackendInfoModel,
     backend_state::BackendStateModel,
@@ -224,7 +234,6 @@ use model::{
         ComponentsModel,
     },
     config::{
-        module_loader::ModuleLoader,
         types::{
             ConfigFile,
             ConfigMetadata,
@@ -330,12 +339,12 @@ use storage::{
     Upload,
 };
 use sync_types::{
+    identifier::Identifier,
     types::SerializedArgs,
     AuthenticationToken,
     CanonicalizedModulePath,
     CanonicalizedUdfPath,
     FunctionName,
-    ModulePath,
     SerializedQueryJournal,
 };
 use system_table_cleanup::SystemTableCleanupWorker;
@@ -377,7 +386,11 @@ use vector::{
 use crate::{
     application_function_runner::ApplicationFunctionRunner,
     exports::worker::ExportWorker,
-    function_log::FunctionExecutionLog,
+    function_log::{
+        FunctionEntriesLog,
+        FunctionExecutionLog,
+        FunctionMetricsLog,
+    },
     log_visibility::LogVisibility,
     module_cache::ModuleCache,
     redaction::{
@@ -393,6 +406,7 @@ use crate::{
 pub mod airbyte_import;
 pub mod api;
 pub mod application_function_runner;
+pub mod audit_logging;
 mod cache;
 pub mod cron_jobs;
 pub mod deploy_config;
@@ -413,11 +427,6 @@ mod system_table_cleanup;
 mod table_summary_worker;
 pub mod valid_identifier;
 mod worker_handles;
-
-#[cfg(any(test, feature = "testing"))]
-pub mod test_helpers;
-#[cfg(test)]
-mod tests;
 
 pub use crate::cache::QueryCache;
 use crate::{
@@ -535,6 +544,31 @@ pub enum EnvVarChange {
     Set(EnvironmentVariable),
 }
 
+pub(crate) fn validate_env_var_values(
+    env_vars: &BTreeMap<EnvVarName, EnvVarValue>,
+    declarations: &BTreeMap<Identifier, EnvVarValidator>,
+) -> anyhow::Result<()> {
+    for (name, value) in env_vars {
+        let name_str = name.as_ref();
+        if let Ok(identifier) = name_str.parse::<Identifier>()
+            && let Some(env_var_validator) = declarations.get(&identifier)
+        {
+            env_var_validator
+                .check_provided_value(value.as_ref())
+                .map_err(|e| {
+                    ErrorMetadata::bad_request(
+                        "InvalidEnvironmentVariable",
+                        format!(
+                            "Environment variable {name_str} does not match its declared \
+                             validator: {e}"
+                        ),
+                    )
+                })?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct ApplicationStorage {
     pub files_storage: Arc<dyn Storage>,
@@ -555,13 +589,14 @@ pub struct Application<RT: Runtime> {
     usage_counter: UsageCounter,
     usage_event_logger: Arc<dyn UsageEventLogger>,
     key_broker: KeyBroker,
-    instance_name: String,
+    deployment: DeploymentMetadata,
     workers: WorkerHandles,
     log_visibility: Arc<dyn LogVisibility<RT>>,
     module_cache: ModuleCache<RT>,
     system_env_var_names: HashSet<EnvVarName>,
     app_auth: Arc<ApplicationAuth>,
     log_manager_client: LogManagerClient,
+    audit_log_client: AuditLogClient,
     oidc_http_client: CachedHttpClient,
 }
 
@@ -589,12 +624,12 @@ impl<RT: Runtime> Application<RT> {
         runtime: RT,
         database: &Database<RT>,
         storage_tag_initializer: StorageTagInitializer,
-        instance_name: String,
+        deployment_name: String,
     ) -> anyhow::Result<ApplicationStorage> {
         let storage_type = {
             let mut tx = database.begin_system().await?;
             let storage_type = DatabaseGlobalsModel::new(&mut tx)
-                .initialize_storage_tag(storage_tag_initializer, instance_name)
+                .initialize_storage_tag(storage_tag_initializer, deployment_name)
                 .await?;
             database
                 .commit_with_write_source(tx, "init_storage")
@@ -641,8 +676,7 @@ impl<RT: Runtime> Application<RT> {
         application_storage: ApplicationStorage,
         usage_event_logger: Arc<dyn UsageEventLogger>,
         key_broker: KeyBroker,
-        instance_name: String,
-        deployment_region: Option<RegionName>,
+        deployment: DeploymentMetadata,
         function_runner: Arc<dyn FunctionRunner<RT>>,
         convex_origin: ConvexOrigin,
         convex_site: ConvexSite,
@@ -660,6 +694,8 @@ impl<RT: Runtime> Application<RT> {
         deleted_tablet_receiver: tokio::sync::mpsc::Receiver<TabletId>,
         oidc_http_client: CachedHttpClient,
     ) -> anyhow::Result<Self> {
+        let deployment_name = deployment.name.clone();
+        let deployment_region = deployment.region.clone();
         let module_cache =
             ModuleCache::new(runtime.clone(), application_storage.modules_storage.clone()).await;
         let module_loader = Arc::new(module_cache.clone());
@@ -676,7 +712,7 @@ impl<RT: Runtime> Application<RT> {
                 persistence.clone(),
                 database.retention_validator(),
                 database.clone(),
-                instance_name.clone(),
+                deployment_name.clone(),
                 UsageCounter::new(usage_event_logger.clone()),
             );
             index_worker = Arc::new(Mutex::new(Some(
@@ -725,11 +761,11 @@ impl<RT: Runtime> Application<RT> {
         // entitlement in testing and in load generator. If not local, we
         // read the entitlement from the database.
         let mut tx = database.begin(Identity::system()).await?;
+        let mut bi = BackendInfoModel::new(&mut tx);
         let log_streaming_allowed = if let Some(path) = local_log_sink {
             add_local_log_sink_on_startup(database.clone(), path).await?;
             true
         } else {
-            let mut bi = BackendInfoModel::new(&mut tx);
             bi.is_log_streaming_allowed().await?
         };
 
@@ -738,18 +774,43 @@ impl<RT: Runtime> Application<RT> {
             runtime.clone(),
             database.clone(),
             fetch_client.clone(),
-            instance_name.clone(),
+            deployment_name.clone(),
             deployment_region.as_ref().map(|r| r.to_string()),
             log_streaming_allowed,
             usage_counter.clone(),
         )
         .await;
 
+        let is_dev_deployment = if let Some(doc) = bi.get().await? {
+            doc.deployment_type == DeploymentType::Dev
+        } else {
+            false
+        };
+        let firehose_stream_name = AuditLogConfigModel::new(&mut tx)
+            .get()
+            .await?
+            .and_then(|c| c.firehose_stream_name.clone());
+        let audit_log_client = AuditLogClient::new(
+            log_manager_client.clone(),
+            is_dev_deployment,
+            firehose_stream_name,
+            &deployment.name,
+        )
+        .await?;
+
         let function_log = FunctionExecutionLog::new(
             runtime.clone(),
             usage_counter.clone(),
             Arc::new(log_manager_client.clone()),
         );
+
+        {
+            let function_log = function_log.clone();
+            database.set_invalidation_callback(Arc::new(move |events| {
+                function_log.record_subscription_invalidations(events);
+            }))?;
+        }
+
         let runner = Arc::new(ApplicationFunctionRunner::new(
             runtime.clone(),
             database.clone(),
@@ -760,6 +821,7 @@ impl<RT: Runtime> Application<RT> {
             application_storage.modules_storage.clone(),
             module_loader,
             function_log.clone(),
+            audit_log_client.clone(),
             default_system_env_vars.clone(),
             cache,
         ));
@@ -767,7 +829,7 @@ impl<RT: Runtime> Application<RT> {
 
         let scheduled_job_runner = ScheduledJobRunner::start(
             runtime.clone(),
-            instance_name.clone(),
+            deployment_name.clone(),
             database.clone(),
             runner.clone(),
             function_log.clone(),
@@ -775,7 +837,7 @@ impl<RT: Runtime> Application<RT> {
 
         let cron_job_executor_fut = CronJobExecutor::run(
             runtime.clone(),
-            instance_name.clone(),
+            deployment_name.clone(),
             database.clone(),
             runner.clone(),
             function_log.clone(),
@@ -791,7 +853,7 @@ impl<RT: Runtime> Application<RT> {
             application_storage.files_storage.clone(),
             export_provider,
             usage_counter.clone(),
-            instance_name.clone(),
+            deployment_name.clone(),
         );
         let export_worker = Arc::new(Mutex::new(Some(
             runtime.spawn("export_worker", export_worker),
@@ -823,7 +885,7 @@ impl<RT: Runtime> Application<RT> {
             database.clone(),
             usage_event_logger.clone(),
             Arc::new(log_manager_client.clone()),
-            instance_name.clone(),
+            deployment_name.clone(),
         );
 
         let workers = WorkerHandles {
@@ -852,13 +914,14 @@ impl<RT: Runtime> Application<RT> {
             usage_event_logger,
             usage_counter,
             key_broker,
-            instance_name,
+            deployment,
             workers,
             log_visibility,
             module_cache,
             system_env_var_names: default_system_env_vars.into_keys().collect(),
             app_auth,
             log_manager_client,
+            audit_log_client,
             oidc_http_client,
         })
     }
@@ -883,38 +946,39 @@ impl<RT: Runtime> Application<RT> {
         self.runner.clone()
     }
 
-    pub fn function_log(
-        &self,
-        identity: Identity,
-        endpoint: &'static str,
-    ) -> anyhow::Result<&FunctionExecutionLog<RT>> {
-        anyhow::ensure!(
-            identity.is_admin() || identity.is_system(),
-            unauthorized_error(endpoint)
-        );
-        Ok(&self.function_log)
+    pub fn metrics_log(&self, identity: &Identity) -> anyhow::Result<FunctionMetricsLog<'_, RT>> {
+        identity.require_operation(DeploymentOp::ViewMetrics)?;
+        Ok(FunctionMetricsLog::new(&self.function_log))
+    }
+
+    pub fn function_log(&self, identity: &Identity) -> anyhow::Result<FunctionEntriesLog<'_, RT>> {
+        identity.require_operation(DeploymentOp::ViewLogs)?;
+        Ok(FunctionEntriesLog::new(&self.function_log))
     }
 
     pub fn log_manager_client(&self) -> &LogManagerClient {
         &self.log_manager_client
     }
 
+    pub fn audit_log_client(&self) -> &AuditLogClient {
+        &self.audit_log_client
+    }
+
     pub fn now_ts_for_reads(&self) -> RepeatableTimestamp {
         self.database.now_ts_for_reads()
     }
 
-    pub fn instance_name(&self) -> String {
-        self.instance_name.clone()
+    pub fn deployment_name(&self) -> String {
+        self.deployment.name.clone()
+    }
+
+    pub fn deployment(&self) -> &DeploymentMetadata {
+        &self.deployment
     }
 
     #[fastrace::trace]
     pub async fn begin(&self, identity: Identity) -> anyhow::Result<Transaction<RT>> {
         self.database.begin(identity).await
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn commit_test(&self, transaction: Transaction<RT>) -> anyhow::Result<Timestamp> {
-        self.commit(transaction, "test").await
     }
 
     #[fastrace::trace]
@@ -992,41 +1056,6 @@ impl<RT: Runtime> Application<RT> {
         self.database.vector_search(identity, query).await
     }
 
-    pub async fn get_source_code(
-        &self,
-        identity: Identity,
-        path: ModulePath,
-        component: ComponentId,
-    ) -> anyhow::Result<Option<String>> {
-        let mut tx = self.begin(identity).await?;
-        let path = CanonicalizedComponentModulePath {
-            component,
-            module_path: path.canonicalize(),
-        };
-        let Some(metadata) = ModuleModel::new(&mut tx).get_metadata(path.clone()).await? else {
-            return Ok(None);
-        };
-        let Some(analyze_result) = &metadata.analyze_result else {
-            return Ok(None);
-        };
-        let Some(source_index) = analyze_result.source_index else {
-            return Ok(None);
-        };
-        let Some(full_source) = self.module_cache.get_module(&mut tx, path).await? else {
-            return Ok(None);
-        };
-        let Some(source_map_str) = &full_source.source_map else {
-            return Ok(None);
-        };
-        let Some(source_map) = source_map_from_slice(source_map_str.as_bytes()) else {
-            return Ok(None);
-        };
-        let Some(source_map_content) = source_map.get_source_contents(source_index) else {
-            return Ok(None);
-        };
-        Ok(Some(source_map_content.to_owned()))
-    }
-
     pub async fn storage_generate_upload_url(
         &self,
         identity: Identity,
@@ -1050,21 +1079,21 @@ impl<RT: Runtime> Application<RT> {
 
     pub async fn read_only_udf(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
         caller: FunctionCaller,
     ) -> anyhow::Result<RedactedQueryReturn> {
         let ts = *self.now_ts_for_reads();
-        self.read_only_udf_at_ts(request_id, path, args, identity, ts, None, caller)
+        self.read_only_udf_at_ts(request_context, path, args, identity, ts, None, caller)
             .await
     }
 
     #[fastrace::trace]
     pub async fn read_only_udf_at_ts(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
@@ -1072,6 +1101,7 @@ impl<RT: Runtime> Application<RT> {
         journal: Option<Option<String>>,
         caller: FunctionCaller,
     ) -> anyhow::Result<RedactedQueryReturn> {
+        let request_id = request_context.request_id.clone();
         let persistence_version = self.database.persistence_version();
         let block_logging = self
             .log_visibility
@@ -1091,7 +1121,7 @@ impl<RT: Runtime> Application<RT> {
                 .transpose()?;
             self.runner
                 .run_query_at_ts(
-                    request_id.clone(),
+                    request_context.clone(),
                     path,
                     args,
                     identity,
@@ -1136,7 +1166,7 @@ impl<RT: Runtime> Application<RT> {
     #[fastrace::trace]
     pub async fn mutation_udf(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
@@ -1145,7 +1175,6 @@ impl<RT: Runtime> Application<RT> {
         caller: FunctionCaller,
         mutation_queue_length: Option<usize>,
     ) -> anyhow::Result<Result<RedactedMutationReturn, RedactedMutationError>> {
-        identity.ensure_can_run_function(UdfType::Mutation)?;
         let block_logging = self
             .log_visibility
             .should_redact_logs_and_error(
@@ -1154,10 +1183,11 @@ impl<RT: Runtime> Application<RT> {
                 caller.allowed_visibility(),
             )
             .await?;
+        let request_id = request_context.request_id.clone();
         let result = match self
             .runner
             .retry_mutation(
-                request_id.clone(),
+                request_context,
                 path,
                 args,
                 identity,
@@ -1202,14 +1232,12 @@ impl<RT: Runtime> Application<RT> {
     #[fastrace::trace]
     pub async fn action_udf(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         name: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
         caller: FunctionCaller,
     ) -> anyhow::Result<Result<RedactedActionReturn, RedactedActionError>> {
-        identity.ensure_can_run_function(UdfType::Action)?;
-
         let block_logging = self
             .log_visibility
             .should_redact_logs_and_error(
@@ -1221,13 +1249,13 @@ impl<RT: Runtime> Application<RT> {
 
         let should_spawn = caller.run_until_completion_if_cancelled();
         let runner: Arc<ApplicationFunctionRunner<RT>> = self.runner.clone();
-        let request_id_ = request_id.clone();
+        let request_id = request_context.request_id.clone();
         let span = SpanContext::current_local_parent()
             .map(|ctx| Span::root(format!("{}::actions_future", func_path!()), ctx))
             .unwrap_or(Span::noop());
         let run_action = async move {
             runner
-                .run_action(request_id_, name, args, identity, caller)
+                .run_action(request_context, name, args, identity, caller)
                 .in_span(span)
                 .await
         };
@@ -1269,13 +1297,12 @@ impl<RT: Runtime> Application<RT> {
     #[fastrace::trace]
     pub async fn http_action_udf(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         http_request: HttpActionRequest,
         identity: Identity,
         caller: FunctionCaller,
         mut response_streamer: HttpActionResponseStreamer,
     ) -> anyhow::Result<()> {
-        identity.ensure_can_run_function(UdfType::HttpAction)?;
         let block_logging = self
             .log_visibility
             .should_redact_logs_and_error(
@@ -1299,7 +1326,7 @@ impl<RT: Runtime> Application<RT> {
             .spawn_background("run_http_action", async move {
                 let result = runner
                     .run_http_action(
-                        request_id,
+                        request_context,
                         http_request,
                         response_streamer_,
                         identity,
@@ -1335,12 +1362,13 @@ impl<RT: Runtime> Application<RT> {
     /// Run a function of an arbitrary type from its name
     pub async fn any_udf(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: CanonicalizedComponentFunctionPath,
         args: SerializedArgs,
         identity: Identity,
         caller: FunctionCaller,
     ) -> anyhow::Result<Result<FunctionReturn, FunctionError>> {
+        let request_id = request_context.request_id.clone();
         let block_logging = self
             .log_visibility
             .should_redact_logs_and_error(
@@ -1382,12 +1410,10 @@ impl<RT: Runtime> Application<RT> {
             }));
         };
 
-        identity.ensure_can_run_function(analyzed_function.udf_type)?;
-
         match analyzed_function.udf_type {
             UdfType::Query => self
                 .read_only_udf(
-                    request_id,
+                    request_context,
                     PublicFunctionPath::Component(path),
                     args,
                     identity,
@@ -1406,7 +1432,7 @@ impl<RT: Runtime> Application<RT> {
                 ),
             UdfType::Mutation => self
                 .mutation_udf(
-                    request_id,
+                    request_context,
                     PublicFunctionPath::Component(path),
                     args,
                     identity,
@@ -1429,7 +1455,7 @@ impl<RT: Runtime> Application<RT> {
                 }),
             UdfType::Action => self
                 .action_udf(
-                    request_id,
+                    request_context,
                     PublicFunctionPath::Component(path),
                     args,
                     identity,
@@ -1465,10 +1491,7 @@ impl<RT: Runtime> Application<RT> {
         requestor: ExportRequestor,
         expiration_ts_ns: Option<u64>,
     ) -> anyhow::Result<DeveloperDocumentId> {
-        anyhow::ensure!(
-            identity.is_admin() || identity.is_system(),
-            unauthorized_error("request_export")
-        );
+        identity.require_operation(DeploymentOp::CreateBackups)?;
         if let Some(expiration_ts_ns) = expiration_ts_ns {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1512,7 +1535,26 @@ impl<RT: Runtime> Application<RT> {
                     )),
             ),
         }?;
-        self.commit(tx, "request_export").await?;
+        let component_id = component.serialize_to_string();
+        let component_path = tx.must_component_path(component)?;
+        let format_str = match &format {
+            ExportFormat::Zip { include_storage } if *include_storage => {
+                "zip_with_storage".to_string()
+            },
+            ExportFormat::Zip { .. } => "zip".to_string(),
+        };
+        self.commit_with_audit_log_events(
+            tx,
+            vec![DeploymentAuditLogEvent::RequestExport {
+                id: DeveloperDocumentId::from(snapshot_id).encode(),
+                component_id,
+                component: component_path,
+                format: format_str,
+                requestor: requestor.usage_tag().to_string(),
+            }],
+            "request_export",
+        )
+        .await?;
         Ok(snapshot_id.into())
     }
 
@@ -1565,7 +1607,7 @@ impl<RT: Runtime> Application<RT> {
         let filename = format!(
             // This should match the format in SnapshotExport.tsx.
             "snapshot_{}_{snapshot_ts}.zip",
-            self.instance_name
+            self.deployment.name
         );
         Ok((storage_get_stream, filename))
     }
@@ -1582,6 +1624,48 @@ impl<RT: Runtime> Application<RT> {
         tx: &mut Transaction<RT>,
         changes: Vec<EnvVarChange>,
     ) -> anyhow::Result<Vec<DeploymentAuditLogEvent>> {
+        let app_def = BootstrapComponentsModel::new(tx)
+            .load_definition_metadata(ComponentDefinitionId::Root)
+            .await?;
+
+        // Check which env vars are being deleted against required env vars.
+        let unset_names: Vec<_> = changes
+            .iter()
+            .filter_map(|c| match c {
+                EnvVarChange::Unset(name) => Some(name.to_string()),
+                EnvVarChange::Set(_) => None,
+            })
+            .collect();
+        if !unset_names.is_empty() {
+            let required_names = app_def.required_env_var_names();
+            let blocked: Vec<_> = unset_names
+                .iter()
+                .filter(|name| required_names.contains(name))
+                .cloned()
+                .collect();
+            if !blocked.is_empty() {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "RequiredEnvironmentVariable",
+                    format!(
+                        "Cannot delete required environment variables: {}. These are declared as \
+                         required in the app definition.",
+                        blocked.join(", ")
+                    )
+                ));
+            }
+        }
+
+        let set_vars: BTreeMap<EnvVarName, EnvVarValue> = changes
+            .iter()
+            .filter_map(|c| match c {
+                EnvVarChange::Set(env_var) => {
+                    Some((env_var.name().clone(), env_var.value().clone()))
+                },
+                EnvVarChange::Unset(_) => None,
+            })
+            .collect();
+        validate_env_var_values(&set_vars, &app_def.env_vars)?;
+
         let mut audit_events = vec![];
 
         let mut model = EnvironmentVariablesModel::new(tx);
@@ -1612,6 +1696,11 @@ impl<RT: Runtime> Application<RT> {
         let all_env_vars = model.get_all().await?;
 
         anyhow::ensure!(all_env_vars.len() <= *ENV_VAR_LIMIT, env_var_limit_met(),);
+        let total_size = env_var_total_size(&all_env_vars);
+        anyhow::ensure!(
+            total_size <= *ENV_VAR_TOTAL_SIZE_LIMIT,
+            env_var_total_size_limit_met(total_size),
+        );
 
         Self::reevaluate_existing_auth_config(self.runner().clone(), tx).await?;
 
@@ -1627,6 +1716,25 @@ impl<RT: Runtime> Application<RT> {
         anyhow::ensure!(
             environment_variables.len() + all_env_vars.len() <= *ENV_VAR_LIMIT,
             env_var_limit_met(),
+        );
+
+        let app_def = BootstrapComponentsModel::new(tx)
+            .load_definition_metadata(ComponentDefinitionId::Root)
+            .await?;
+        let new_vars: BTreeMap<EnvVarName, EnvVarValue> = environment_variables
+            .iter()
+            .map(|ev| (ev.name().clone(), ev.value().clone()))
+            .collect();
+        validate_env_var_values(&new_vars, &app_def.env_vars)?;
+
+        let mut all_env_vars_with_new = all_env_vars;
+        for ev in &environment_variables {
+            all_env_vars_with_new.insert(ev.name().clone(), ev.value().clone());
+        }
+        let total_size = env_var_total_size(&all_env_vars_with_new);
+        anyhow::ensure!(
+            total_size <= *ENV_VAR_TOTAL_SIZE_LIMIT,
+            env_var_total_size_limit_met(total_size),
         );
         for environment_variable in environment_variables.clone() {
             self.create_one_environment_variable(tx, environment_variable)
@@ -2261,12 +2369,7 @@ impl<RT: Runtime> Application<RT> {
         &self,
         identity: Identity,
     ) -> anyhow::Result<ClientDrivenUploadToken> {
-        if !identity.is_admin() {
-            anyhow::bail!(ErrorMetadata::forbidden(
-                "InvalidImport",
-                "Only an admin of the deployment can import"
-            ));
-        }
+        identity.require_operation(DeploymentOp::ImportBackups)?;
         let upload = self
             .application_storage
             .snapshot_imports_storage
@@ -2282,12 +2385,7 @@ impl<RT: Runtime> Application<RT> {
         part_number: u16,
         part: Bytes,
     ) -> anyhow::Result<ClientDrivenUploadPartToken> {
-        if !identity.is_admin() {
-            anyhow::bail!(ErrorMetadata::forbidden(
-                "InvalidImport",
-                "Only an admin of the deployment can import"
-            ));
-        }
+        identity.require_operation(DeploymentOp::ImportBackups)?;
         let part_token = self
             .application_storage
             .snapshot_imports_storage
@@ -2305,12 +2403,7 @@ impl<RT: Runtime> Application<RT> {
         upload_token: ClientDrivenUploadToken,
         part_tokens: Vec<ClientDrivenUploadPartToken>,
     ) -> anyhow::Result<DeveloperDocumentId> {
-        if !identity.is_admin() {
-            anyhow::bail!(ErrorMetadata::forbidden(
-                "InvalidImport",
-                "Only an admin of the deployment can import"
-            ));
-        }
+        identity.require_operation(DeploymentOp::ImportBackups)?;
         let object_key = self
             .application_storage
             .snapshot_imports_storage
@@ -2423,13 +2516,14 @@ impl<RT: Runtime> Application<RT> {
 
     pub async fn execute_standalone_module(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         module: ModuleConfig,
         args: SerializedArgs,
         identity: Identity,
         caller: FunctionCaller,
         component: ComponentId,
     ) -> anyhow::Result<Result<FunctionReturn, FunctionError>> {
+        let request_id = request_context.request_id.clone();
         let block_logging = self
             .log_visibility
             .should_redact_logs_and_error(
@@ -2555,7 +2649,7 @@ impl<RT: Runtime> Application<RT> {
         let (result, log_lines) = match analyzed_function.udf_type {
             UdfType::Query => {
                 self.runner
-                    .run_query_without_caching(request_id.clone(), tx, path, args, caller)
+                    .run_query_without_caching(request_context, tx, path, args, caller)
                     .await
             },
             UdfType::Mutation => {
@@ -2642,22 +2736,33 @@ impl<RT: Runtime> Application<RT> {
         &self,
         identity: &Identity,
         table_names: Vec<TableName>,
-        table_namespace: TableNamespace,
+        component_id: ComponentId,
     ) -> anyhow::Result<u64> {
+        let table_namespace = TableNamespace::from(component_id);
         let mut tx = self.begin(identity.clone()).await?;
         let mut count = 0;
-        for table_name in table_names {
+        for table_name in &table_names {
             anyhow::ensure!(
                 !table_name.is_system(),
                 "cannot delete system table {table_name}"
             );
             let mut table_model = TableModel::new(&mut tx);
-            count += table_model.must_count(table_namespace, &table_name).await?;
+            count += table_model.must_count(table_namespace, table_name).await?;
             table_model
-                .delete_active_table(table_namespace, table_name)
+                .delete_active_table(table_namespace, table_name.clone())
                 .await?;
         }
-        self.commit(tx, "delete_tables").await?;
+        let component = tx.must_component_path(component_id)?;
+        self.commit_with_audit_log_events(
+            tx,
+            vec![DeploymentAuditLogEvent::DeleteTables {
+                component_id: component_id.serialize_to_string(),
+                component,
+                table_names,
+            }],
+            "delete_tables",
+        )
+        .await?;
         Ok(count)
     }
 
@@ -2667,10 +2772,20 @@ impl<RT: Runtime> Application<RT> {
         component_id: ComponentId,
     ) -> anyhow::Result<()> {
         let mut tx = self.begin(identity.clone()).await?;
+        let cid = component_id.serialize_to_string();
+        let component = tx.must_component_path(component_id)?;
         ComponentConfigModel::new(&mut tx)
             .delete_component(component_id)
             .await?;
-        self.commit(tx, "delete_component").await?;
+        self.commit_with_audit_log_events(
+            tx,
+            vec![DeploymentAuditLogEvent::DeleteComponent {
+                component_id: cid,
+                component,
+            }],
+            "delete_component",
+        )
+        .await?;
         Ok(())
     }
 
@@ -2894,15 +3009,12 @@ impl<RT: Runtime> Application<RT> {
     ) -> anyhow::Result<Identity> {
         let identity = match token {
             AuthenticationToken::Admin(token, acting_as) => {
-                let admin_identity = self
-                    .app_auth()
-                    .check_key(token.to_string(), self.instance_name())
-                    .await?;
+                let admin_identity = self.app_auth().check_key(token.to_string()).await?;
 
                 match acting_as {
                     Some(acting_user) => {
                         // Act as the given user
-                        let Identity::InstanceAdmin(i) = admin_identity else {
+                        let Identity::DeploymentAdmin(i) = admin_identity else {
                             anyhow::bail!(
                                 "Admin identity returned from check_admin_key was not an admin."
                             );
@@ -2967,10 +3079,7 @@ impl<RT: Runtime> Application<RT> {
         identity: Identity,
         component_id: ComponentId,
     ) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            identity.is_admin() || identity.is_system(),
-            unauthorized_error("delete_scheduled_jobs_table")
-        );
+        identity.require_operation(DeploymentOp::WriteData)?;
         let mut tx = self.begin(identity).await?;
         let mut model = TableModel::new(&mut tx);
         model
@@ -2982,7 +3091,10 @@ impl<RT: Runtime> Application<RT> {
         let component = tx.must_component_path(component_id)?;
         self.commit_with_audit_log_events(
             tx,
-            vec![DeploymentAuditLogEvent::DeleteScheduledJobsTable { component }],
+            vec![DeploymentAuditLogEvent::DeleteScheduledJobsTable {
+                component_id: component_id.serialize_to_string(),
+                component,
+            }],
             "delete_scheduled_jobs_table",
         )
         .await?;
@@ -3033,7 +3145,16 @@ impl<RT: Runtime> Application<RT> {
         let count = SchedulerModel::new(tx, component_id.into())
             .cancel_all(path, max_jobs, start_next_ts, end_next_ts)
             .await?;
-        Ok((count, vec![]))
+        let component = tx.must_component_path(component_id)?;
+        let events = if count > 0 {
+            vec![DeploymentAuditLogEvent::CancelAllScheduledFunctions {
+                component_id: component_id.serialize_to_string(),
+                component,
+            }]
+        } else {
+            vec![]
+        };
+        Ok((count, events))
     }
 
     /// Commit a transaction and send audit log events to the log manager if the

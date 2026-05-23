@@ -15,10 +15,6 @@ use common::{
         MAX_USER_SIZE,
     },
     execution_context::ExecutionContext,
-    knobs::{
-        TRANSACTION_MAX_NUM_SCHEDULED,
-        TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
-    },
     maybe_val,
     query::{
         Expression,
@@ -81,24 +77,12 @@ use crate::{
 };
 
 pub mod args;
-#[cfg(any(test, feature = "testing"))]
-pub mod test_helpers;
-#[cfg(test)]
-mod tests;
 pub mod types;
 pub mod virtual_table;
 
-pub static SCHEDULED_JOBS_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_scheduled_jobs"
-        .parse()
-        .expect("_scheduled_jobs is not a valid system table name")
-});
+pub static SCHEDULED_JOBS_TABLE: TableName = TableName::const_new("_scheduled_jobs");
 
-pub static SCHEDULED_JOBS_VIRTUAL_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_scheduled_functions"
-        .parse()
-        .expect("_scheduled_functions is not a valid virtual table name")
-});
+pub static SCHEDULED_JOBS_VIRTUAL_TABLE: TableName = TableName::const_new("_scheduled_functions");
 
 static SCHEDULED_JOBS_INDEX_BY_ID: LazyLock<IndexName> =
     LazyLock::new(|| GenericIndexName::by_id(SCHEDULED_JOBS_TABLE.clone()));
@@ -178,26 +162,27 @@ impl<'a, RT: Runtime> SchedulerModel<'a, RT> {
 
     fn check_scheduling_limits(&mut self, args: &ConvexArray) -> anyhow::Result<()> {
         let size = args.size();
+        let max_scheduled = self.tx.transaction_limits().functions_scheduled;
+        let max_scheduled_bytes = self.tx.transaction_limits().scheduled_function_args_bytes;
         // Limit how much you can schedule from a single transaction.
         anyhow::ensure!(
-            self.tx.scheduled_size.num_writes < *TRANSACTION_MAX_NUM_SCHEDULED,
+            self.tx.scheduled_size.num_writes < max_scheduled,
             ErrorMetadata::bad_request(
                 "TooManyFunctionsScheduled",
                 format!(
                     "Too many functions scheduled by this mutation (limit: {})",
-                    *TRANSACTION_MAX_NUM_SCHEDULED,
+                    max_scheduled,
                 )
             )
         );
         anyhow::ensure!(
-            self.tx.scheduled_size.size + size
-                <= *TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
+            self.tx.scheduled_size.size + size <= max_scheduled_bytes,
             ErrorMetadata::bad_request(
                 "ScheduledFunctionsArgumentsTooLarge",
                 format!(
                     "Too large total size of the arguments of scheduled functions from this \
                      mutation (limit: {} bytes)",
-                    *TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
+                    max_scheduled_bytes,
                 )
             ),
         );
@@ -516,33 +501,6 @@ impl<'a, RT: Runtime> SchedulerModel<'a, RT> {
             count += 1;
         }
         Ok(count)
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn list(&mut self) -> anyhow::Result<Vec<ParsedDocument<ScheduledJobMetadata>>> {
-        let scheduled_query = Query::full_table_scan(SCHEDULED_JOBS_TABLE.clone(), Order::Asc);
-        let mut query_stream = ResolvedQuery::new(self.tx, self.namespace, scheduled_query)?;
-        let mut scheduled_jobs = Vec::new();
-        while let Some(job) = query_stream.next(self.tx, None).await? {
-            let job: ParsedDocument<ScheduledJobMetadata> = job.parse()?;
-            scheduled_jobs.push(job);
-        }
-        Ok(scheduled_jobs)
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn read_virtual_table(&mut self) -> anyhow::Result<()> {
-        use crate::scheduled_jobs::virtual_table::MIN_NPM_VERSION_SCHEDULED_JOBS_V1;
-        let scheduled_query =
-            Query::full_table_scan(SCHEDULED_JOBS_VIRTUAL_TABLE.clone(), Order::Asc);
-        let mut query_stream = ResolvedQuery::new_with_version(
-            self.tx,
-            TableNamespace::Global,
-            scheduled_query,
-            Some(MIN_NPM_VERSION_SCHEDULED_JOBS_V1.clone()),
-        )?;
-        while let Some(_job) = query_stream.next(self.tx, None).await? {}
-        Ok(())
     }
 
     /// Checks the status of the scheduled job. If it has been garbage collected

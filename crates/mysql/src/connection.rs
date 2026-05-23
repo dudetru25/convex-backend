@@ -3,6 +3,7 @@ use std::{
     mem,
     path::PathBuf,
     str::FromStr,
+    sync::Arc,
     time::Duration,
 };
 
@@ -63,7 +64,6 @@ use mysql_async::{
     PoolConstraints,
     PoolOpts,
     Row,
-    SslOpts,
     TxOpts,
     Value as MySqlValue,
 };
@@ -97,6 +97,7 @@ fn classify_mysql_error(e: mysql_async::Error) -> anyhow::Error {
             | 1290 // EROptionPreventsStatement "The MySQL server is running with the --read-only option so it cannot execute this statement"
             | 2013 // CRServerLost
             | 1053 // ERServerShutdown
+            | 1040 // ERConCount "Too many connections"
             , ..
         }) => {
             database_operational_error(e.into())
@@ -257,41 +258,65 @@ pub(crate) struct MySqlConnection<'a, RT: Runtime> {
     _timer: Timer<VMHistogramVec>,
 }
 
-async fn with_retries<R, RT: Runtime>(
+async fn handle_errors_with_retries<R, RT: Runtime>(
     conn: &mut Conn,
     pool: &ConvexMySqlPool<RT>,
-    f: impl AsyncFn(&mut Conn) -> anyhow::Result<R>,
+    mut f: impl AsyncFnMut(&mut Conn) -> anyhow::Result<R>,
+    max_retries: u32,
 ) -> anyhow::Result<R> {
-    for _ in 0..*MYSQL_MAX_QUERY_RETRIES {
-        match f(conn).await {
-            Err(e) if e.is::<DatabaseOperationalError>() => {
-                tracing::warn!("Retrying after MySQL error: {e:#}");
-            },
+    let mut attempt = 0;
+    loop {
+        let (e, should_retry) = match f(conn).await {
+            Err(e) if e.is::<DatabaseOperationalError>() => (e, attempt < max_retries),
             Err(e) if e.is::<DatabaseTimeoutError>() => {
+                // Don't retry here as we want the caller to receive some
+                // backpressure.
                 // The mysql protocol doesn't support cancellation, so if a
                 // query times out on the client, the connection can't be reused
                 // until the server responds to the query.
                 // So don't return the connection to the pool.
-                let old_conn = mem::replace(conn, pool.acquire_internal().await?);
-                tokio_spawn("disconnect_mysql_timeout_conn", async move {
-                    // Disconnecting the connection could take a long time as well,
-                    // so do it in the background.
-                    if let Err(e) = old_conn.disconnect().await {
-                        tracing::warn!("Error disconnecting timed out MySQL connection: {e}");
-                    }
-                });
-                // Don't retry here as we want the caller to receive some backpressure.
-                return Err(e);
+                (e, false)
             },
             r => return r,
+        };
+        if should_retry {
+            tracing::warn!("Retrying after MySQL error: {e:#}")
+        } else {
+            tracing::warn!("Discarding connection after MySQL error: {e:#}")
         }
         let old_conn = mem::replace(conn, pool.acquire_internal().await?);
-        if let Err(e) = old_conn.disconnect().await {
-            tracing::warn!("Error disconnecting MySQL connection: {e}");
+        if should_retry {
+            if let Err(e) = old_conn.disconnect().await {
+                tracing::warn!("Error disconnecting MySQL connection: {e}");
+            }
+            attempt += 1;
+            continue;
+        } else {
+            tokio_spawn("disconnect_mysql_conn", async move {
+                // Disconnecting the connection could take a long time as well,
+                // so do it in the background.
+                if let Err(e) = old_conn.disconnect().await {
+                    tracing::warn!("Error disconnecting MySQL connection: {e}");
+                }
+            });
+            return Err(e);
         }
-        // retry
     }
-    f(conn).await
+}
+
+async fn handle_errors<R, RT: Runtime>(
+    conn: &mut Conn,
+    pool: &ConvexMySqlPool<RT>,
+    f: impl AsyncFnOnce(&mut Conn) -> anyhow::Result<R>,
+) -> anyhow::Result<R> {
+    let mut f = Some(f);
+    handle_errors_with_retries(
+        conn,
+        pool,
+        async move |conn| f.take().expect("should never retry")(conn).await,
+        0, /* max_retries */
+    )
+    .await
 }
 
 impl<RT: Runtime> MySqlConnection<'_, RT> {
@@ -300,7 +325,11 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
     pub async fn execute_many(&mut self, query: &'static str) -> anyhow::Result<()> {
         log_execute(self.labels.clone());
         let statement = format_mysql_text_protocol(self.db_name, query, vec![], &self.labels)?;
-        with_timeout(self.conn.query_iter(statement)).await?;
+        handle_errors(&mut self.conn, self.pool, async move |conn| {
+            with_timeout(conn.query_iter(statement)).await?;
+            Ok(())
+        })
+        .await?;
         Ok(())
     }
 
@@ -314,16 +343,22 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         log_query(self.labels.clone());
         let row = if self.pool.use_prepared_statements {
             let statement = format_mysql_binary_protocol(self.db_name, statement)?;
-            with_retries(&mut self.conn, self.pool, async move |conn| {
-                with_timeout(conn.exec_first(&statement, params.clone())).await
-            })
+            handle_errors_with_retries(
+                &mut self.conn,
+                self.pool,
+                async move |conn| with_timeout(conn.exec_first(&statement, params.clone())).await,
+                *MYSQL_MAX_QUERY_RETRIES,
+            )
             .await?
         } else {
             let statement =
                 format_mysql_text_protocol(self.db_name, statement, params, &self.labels)?;
-            with_retries(&mut self.conn, self.pool, async move |conn| {
-                with_timeout(conn.query_first(&statement)).await
-            })
+            handle_errors_with_retries(
+                &mut self.conn,
+                self.pool,
+                async move |conn| with_timeout(conn.query_first(&statement)).await,
+                *MYSQL_MAX_QUERY_RETRIES,
+            )
             .await?
         };
         if let Some(row) = &row {
@@ -345,36 +380,48 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         log_query(labels.clone());
         if self.pool.use_prepared_statements {
             let statement = format_mysql_binary_protocol(self.db_name, statement)?;
-            assert_send(with_retries(&mut self.conn, self.pool, async move |conn| {
-                // Any error or dropped stream after this point leaves the connection
-                // open with MySQL sending data into it. In the worst case, the data
-                // will be consumed & dropped by the *next* client.acquire(), which can
-                // make it hard to attribute latency. Therefore we start a progress
-                // counter that will log if the stream is dropped before being consumed.
-                let progress_counter = query_progress_counter(size_hint, labels.clone());
-                Self::collect_query_stream(
-                    with_timeout(conn.exec_stream(&statement, Params::Positional(params.clone())))
+            assert_send(handle_errors_with_retries(
+                &mut self.conn,
+                self.pool,
+                async move |conn| {
+                    // Any error or dropped stream after this point leaves the connection
+                    // open with MySQL sending data into it. In the worst case, the data
+                    // will be consumed & dropped by the *next* client.acquire(), which can
+                    // make it hard to attribute latency. Therefore we start a progress
+                    // counter that will log if the stream is dropped before being consumed.
+                    let progress_counter = query_progress_counter(size_hint, labels.clone());
+                    Self::collect_query_stream(
+                        with_timeout(
+                            conn.exec_stream(&statement, Params::Positional(params.clone())),
+                        )
                         .await?,
-                    progress_counter,
-                    labels.clone(),
-                    &f,
-                )
-                .await
-            }))
+                        progress_counter,
+                        labels.clone(),
+                        &f,
+                    )
+                    .await
+                },
+                *MYSQL_MAX_QUERY_RETRIES,
+            ))
             .await
         } else {
             let statement =
                 format_mysql_text_protocol(self.db_name, statement, params, &self.labels)?;
-            assert_send(with_retries(&mut self.conn, self.pool, async move |conn| {
-                let progress_counter = query_progress_counter(size_hint, labels.clone());
-                Self::collect_query_stream(
-                    with_timeout(conn.query_stream(&statement)).await?,
-                    progress_counter,
-                    labels.clone(),
-                    &f,
-                )
-                .await
-            }))
+            assert_send(handle_errors_with_retries(
+                &mut self.conn,
+                self.pool,
+                async move |conn| {
+                    let progress_counter = query_progress_counter(size_hint, labels.clone());
+                    Self::collect_query_stream(
+                        with_timeout(conn.query_stream(&statement)).await?,
+                        progress_counter,
+                        labels.clone(),
+                        &f,
+                    )
+                    .await
+                },
+                *MYSQL_MAX_QUERY_RETRIES,
+            ))
             .await
         }
     }
@@ -412,15 +459,23 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         log_execute(self.labels.clone());
         let affected_rows = if self.pool.use_prepared_statements {
             let statement = format_mysql_binary_protocol(self.db_name, statement)?;
-            with_timeout(self.conn.exec_iter(statement, Params::Positional(params)))
-                .await?
-                .affected_rows()
+            handle_errors(&mut self.conn, self.pool, async move |conn| {
+                Ok(
+                    with_timeout(conn.exec_iter(statement, Params::Positional(params)))
+                        .await?
+                        .affected_rows(),
+                )
+            })
+            .await?
         } else {
             let statement =
                 format_mysql_text_protocol(self.db_name, statement, params, &self.labels)?;
-            with_timeout(self.conn.query_iter(statement))
-                .await?
-                .affected_rows()
+            handle_errors(&mut self.conn, self.pool, async move |conn| {
+                Ok(with_timeout(conn.query_iter(statement))
+                    .await?
+                    .affected_rows())
+            })
+            .await?
         };
         Ok(affected_rows)
     }
@@ -440,6 +495,10 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
             db_name: self.db_name,
             labels: &self.labels,
         })
+    }
+
+    pub async fn handle_errors<R>(&mut self, r: anyhow::Result<R>) -> anyhow::Result<R> {
+        handle_errors(&mut self.conn, self.pool, async move |_| r).await
     }
 }
 
@@ -543,6 +602,7 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
     pub fn new(
         url: &Url,
         use_prepared_statements: bool,
+        require_leader: bool,
         runtime: Option<RT>,
     ) -> anyhow::Result<Self> {
         let cluster_name = derive_cluster_name(url).to_owned();
@@ -560,9 +620,38 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
             .with_abs_conn_ttl(Some(*MYSQL_MAX_CONNECTION_LIFETIME))
             .with_abs_conn_ttl_jitter(Some(*MYSQL_MAX_CONNECTION_LIFETIME / 10))
             .with_reset_connection(false); // persist prepared statements
-        let mut opts = OptsBuilder::from_opts(Opts::from_str(url.as_ref())?).pool_opts(pool_opts);
+        let opts = Opts::from_str(url.as_ref())?;
+        let ssl_opts = opts.ssl_opts().cloned();
+        let mut opts = OptsBuilder::from_opts(opts).pool_opts(pool_opts);
+        if require_leader {
+            opts = opts.after_connect(Arc::new(|conn| {
+                async move {
+                    let readonly: Option<(bool,)> = conn
+                        .query_first("SELECT @@global.innodb_read_only OR @@global.read_only")
+                        .await?;
+                    let Some((readonly,)) = readonly else {
+                        return Err(mysql_async::Error::Other("expected a result".into()));
+                    };
+                    if readonly {
+                        return Err(mysql_async::Error::Other(
+                            database_operational_error(anyhow::anyhow!(
+                                "Connected to a read-only database"
+                            ))
+                            .into(),
+                        ));
+                    }
+                    Ok(())
+                }
+                .boxed()
+            }));
+        }
+        // The MYSQL_CA_FILE environment variable implicitly enables TLS unless
+        // the URL specifies require_ssl=false
         if let Some(ca_file_path) = env::var_os("MYSQL_CA_FILE")
             && !ca_file_path.is_empty()
+            && !url
+                .query_pairs()
+                .any(|(k, v)| k == "require_ssl" && v == "false")
         {
             let ca_file_path = PathBuf::from(ca_file_path);
             anyhow::ensure!(
@@ -570,7 +659,9 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
                 "MYSQL_CA_FILE does not exist: {}",
                 ca_file_path.display()
             );
-            let ssl_opts = SslOpts::default().with_root_certs(vec![ca_file_path.into()]);
+            let ssl_opts = ssl_opts
+                .unwrap_or_default()
+                .with_root_certs(vec![ca_file_path.into()]);
             opts = opts.ssl_opts(ssl_opts);
         }
         Ok(Self {
@@ -638,81 +729,5 @@ impl<RT: Runtime> Drop for ConvexMySqlPool<RT> {
             let _ = pool.disconnect().await;
             tracing::info!("ConvexMySqlPool pool successfully closed");
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mysql_async::Value as MySqlValue;
-
-    use crate::connection::{
-        derive_cluster_name,
-        format_mysql_binary_protocol,
-        format_mysql_text_protocol,
-    };
-
-    #[test]
-    fn test_format_mysql_text_protocol() -> anyhow::Result<()> {
-        let encoded = format_mysql_text_protocol(
-            "presley_db",
-            r#"
-    SELECT * FROM @db_name.indexes
-    WHERE (key, value) IN (?, ?)
-    AND deleted IS ?",
-"#,
-            vec![MySqlValue::from(-27), "!xa?)".into(), MySqlValue::NULL],
-            &[],
-        )?;
-        assert_eq!(
-            encoded,
-            r#"
-    SELECT * FROM `presley_db`.indexes
-    WHERE (key, value) IN (-27, x'2178613f29')
-    AND deleted IS NULL",
-"#,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_format_mysql_binary_protocol() -> anyhow::Result<()> {
-        let encoded = format_mysql_binary_protocol(
-            "presley_db",
-            r#"
-    SELECT * FROM @db_name.indexes
-    WHERE (key, value) IN (?, ?)
-    AND deleted IS ?",
-"#,
-        )?;
-        assert_eq!(
-            encoded,
-            r#"
-    SELECT * FROM `presley_db`.indexes
-    WHERE (key, value) IN (?, ?)
-    AND deleted IS ?",
-"#,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_derive_cluster_name() -> anyhow::Result<()> {
-        assert_eq!(
-            derive_cluster_name(
-                &"mysql://admin:pass@convex-customer-prod-762db212.cluster-ctfpoce735rh.us-east-1.\
-                  rds.amazonaws.com?sslrequired=true"
-                    .parse()?
-            ),
-            "convex-customer-prod-762db212"
-        );
-        assert_eq!(
-            derive_cluster_name(
-                &"mysql://admin:pass@convex-customer-prod-762db212-proxy.cluster-ctfpoce735rh.\
-                  us-east-1.rds.amazonaws.com?sslrequired=true"
-                    .parse()?
-            ),
-            "convex-customer-prod-762db212"
-        );
-        Ok(())
     }
 }

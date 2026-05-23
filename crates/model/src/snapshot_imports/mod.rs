@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use anyhow::Context;
 use common::{
     components::ComponentPath,
@@ -48,11 +46,7 @@ use crate::{
 
 pub mod types;
 
-pub static SNAPSHOT_IMPORTS_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_snapshot_imports"
-        .parse()
-        .expect("Invalid built-in snapshot imports table")
-});
+pub static SNAPSHOT_IMPORTS_TABLE: TableName = TableName::const_new("_snapshot_imports");
 
 pub struct SnapshotImportsTable;
 impl SystemTable for SnapshotImportsTable {
@@ -409,45 +403,5 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
             .await?
             .map(|doc| doc.parse())
             .transpose()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use anyhow::Context;
-    use common::components::ComponentPath;
-    use database::test_helpers::DbFixtures;
-    use runtime::testing::TestRuntime;
-
-    use super::types::ImportRequestor;
-    use crate::{
-        snapshot_imports::{
-            types::{
-                ImportFormat,
-                ImportMode,
-            },
-            SnapshotImportModel,
-        },
-        test_helpers::DbFixturesWithModel,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_start_get_list(rt: TestRuntime) -> anyhow::Result<()> {
-        let DbFixtures { db, .. } = DbFixtures::new_with_model(&rt).await?;
-        let mut tx = db.begin_system().await?;
-        let mut imports_model = SnapshotImportModel::new(&mut tx);
-
-        let id = imports_model
-            .start_import(
-                ImportFormat::Zip,
-                ImportMode::Replace,
-                ComponentPath::root(),
-                "objectkey".to_string().into(),
-                ImportRequestor::SnapshotImport,
-            )
-            .await?;
-        let doc = imports_model.get(id).await?.context("Doc missing?")?;
-        assert_eq!(imports_model.list().await?, vec![doc]);
-        Ok(())
     }
 }

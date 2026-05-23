@@ -35,6 +35,7 @@ export interface components {
             usageStats: components["schemas"]["UsageStatsJson"];
             /** Format: double */
             userExecutionTime?: number | null;
+            willRetry: boolean;
         } | {
             componentPath?: string | null;
             executionId: string;
@@ -60,9 +61,10 @@ export interface components {
             udfPath?: string | null;
         };
         OccInfoJson: {
+            componentPath?: string | null;
             documentId?: string | null;
             /** Format: int64 */
-            retryCount: number;
+            retryCount?: number | null;
             tableName?: string | null;
             writeSource?: string | null;
         };
@@ -89,6 +91,10 @@ export interface components {
         UdfTypeJson: "Query" | "Mutation" | "Action" | "HttpAction";
         UsageStatsJson: {
             /** Format: int64 */
+            databaseIoReadBytes: number;
+            /** Format: int64 */
+            databaseIoWriteBytes: number;
+            /** Format: int64 */
             databaseReadBytes: number;
             /** Format: int64 */
             databaseReadDocuments: number;
@@ -97,13 +103,23 @@ export interface components {
             /** Format: int64 */
             memoryUsedMb: number;
             /** Format: int64 */
+            networkEgressBytes: number;
+            /** Format: int64 */
             storageReadBytes: number;
             /** Format: int64 */
             storageWriteBytes: number;
             /** Format: int64 */
+            textIndexQueryBytes: number;
+            /** Format: int64 */
+            textIndexWriteQueryBytes: number;
+            /** Format: int64 */
             vectorIndexReadBytes: number;
             /** Format: int64 */
+            vectorIndexReadQueryBytes: number;
+            /** Format: int64 */
             vectorIndexWriteBytes: number;
+            /** Format: int64 */
+            vectorIndexWriteQueryBytes: number;
         };
         Value: unknown;
     };

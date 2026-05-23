@@ -15,7 +15,7 @@
    * path segment in the "$schema" field for all your Rush config files.  This will ensure
    * correct error-underlining and tab-completion for editors such as VS Code.
    */
-  "rushVersion": "5.147.1",
+  "rushVersion": "5.173.0",
   /**
    * The next field selects which package manager should be installed and determines its version.
    * Rush installs its own local copy of the package manager to ensure that your build process
@@ -24,7 +24,7 @@
    * Specify one of: "pnpmVersion", "npmVersion", or "yarnVersion".  See the Rush documentation
    * for details about these alternatives.
    */
-  "pnpmVersion": "10.11.0",
+  "pnpmVersion": "10.33.0",
   // "npmVersion": "4.5.0",
   // "yarnVersion": "1.9.4",
   /**
@@ -38,7 +38,7 @@
    * LTS schedule: https://nodejs.org/en/about/releases/
    * LTS versions: https://nodejs.org/en/download/releases/
    */
-  "nodeSupportedVersionRange": ">=18.0.0 <25.0.0",
+  "nodeSupportedVersionRange": ">=22.0.0 <25.0.0",
   /**
    * Odd-numbered major versions of Node.js are experimental.  Even-numbered releases
    * spend six months in a stabilization period before the first Long Term Support (LTS) version.
@@ -289,11 +289,11 @@
     },
     {
       "packageName": "publishing-tests",
-      "projectFolder": "publishing-tests"
+      "projectFolder": "tests/publishing-tests"
     },
     {
       "packageName": "package-tests",
-      "projectFolder": "package-tests"
+      "projectFolder": "tests/package-tests"
     },
     {
       "packageName": "@convex-dev/platform",
@@ -322,6 +322,14 @@
     {
       "packageName": "test-data",
       "projectFolder": "private-demos/test-data"
+    },
+    {
+      "packageName": "env-vars-playground",
+      "projectFolder": "private-demos/env-vars-playground"
+    },
+    {
+      "packageName": "private-demos-e2e",
+      "projectFolder": "private-demos/e2e"
     },
     {
       "packageName": "typescript-demo",
@@ -417,7 +425,7 @@
     },
     {
       "packageName": "js-integration-tests",
-      "projectFolder": "js-integration-tests"
+      "projectFolder": "tests/js-integration-tests"
     },
     {
       "packageName": "react-query-demo",
@@ -450,10 +458,6 @@
     {
       "packageName": "convex-analytics",
       "projectFolder": "convex-analytics"
-    },
-    {
-      "packageName": "convex-ai-chat",
-      "projectFolder": "convex-ai-chat"
     },
     {
       "packageName": "docs",
@@ -600,6 +604,14 @@
       "projectFolder": "private-demos/http"
     },
     {
+      "packageName": "ctx-meta",
+      "projectFolder": "private-demos/ctx-meta"
+    },
+    {
+      "packageName": "audit-logging",
+      "projectFolder": "private-demos/audit-logging"
+    },
+    {
       "packageName": "waitlist",
       "projectFolder": "private-demos/waitlist"
     },
@@ -633,7 +645,7 @@
     },
     {
       "packageName": "simulation",
-      "projectFolder": "simulation"
+      "projectFolder": "tests/simulation"
     },
     {
       "packageName": "system-udfs",
@@ -645,35 +657,55 @@
     },
     {
       "packageName": "udf-tests",
-      "projectFolder": "udf-tests"
+      "projectFolder": "tests/udf-tests"
     },
     {
       "packageName": "component-tests",
-      "projectFolder": "component-tests"
+      "projectFolder": "tests/component-tests"
     },
     {
       "packageName": "component-tests-empty",
-      "projectFolder": "component-tests/projects/empty"
+      "projectFolder": "tests/component-tests/projects/empty"
     },
     {
       "packageName": "component-tests-mounted",
-      "projectFolder": "component-tests/projects/mounted"
+      "projectFolder": "tests/component-tests/projects/mounted"
     },
     {
       "packageName": "component-tests-with-schema",
-      "projectFolder": "component-tests/projects/with-schema"
+      "projectFolder": "tests/component-tests/projects/with-schema"
     },
     {
       "packageName": "component-tests-schema-with-index",
-      "projectFolder": "component-tests/projects/schema_with_index"
+      "projectFolder": "tests/component-tests/projects/schema_with_index"
     },
     {
       "packageName": "component-tests-basic",
-      "projectFolder": "component-tests/projects/basic"
+      "projectFolder": "tests/component-tests/projects/basic"
     },
     {
       "packageName": "component-tests-http-actions",
-      "projectFolder": "component-tests/projects/http_actions"
+      "projectFolder": "tests/component-tests/projects/http_actions"
+    },
+    {
+      "packageName": "component-tests-http-mount-routing",
+      "projectFolder": "tests/component-tests/projects/http_mount_routing"
+    },
+    {
+      "packageName": "component-tests-http-prefix-and-mount-routing",
+      "projectFolder": "tests/component-tests/projects/http_prefix_and_mount_routing"
+    },
+    {
+      "packageName": "component-tests-http-legacy-routes",
+      "projectFolder": "tests/component-tests/projects/http_legacy_routes"
+    },
+    {
+      "packageName": "component-tests-http-no-prefix-mounting",
+      "projectFolder": "tests/component-tests/projects/http_no_prefix_mounting"
+    },
+    {
+      "packageName": "component-tests-env-vars",
+      "projectFolder": "tests/component-tests/projects/env_vars"
     },
     {
       "packageName": "scenario-runner",
@@ -685,7 +717,7 @@
     },
     {
       "packageName": "retention-tester",
-      "projectFolder": "retention-tester"
+      "projectFolder": "tests/retention-tester"
     },
     {
       "packageName": "shapes",
@@ -732,6 +764,62 @@
       "projectFolder": "private-demos/openauth-react"
     },
     {
+      "packageName": "quickstart-bun",
+      "projectFolder": "private-demos/quickstarts/bun"
+    },
+    {
+      "packageName": "quickstart-expo",
+      "projectFolder": "private-demos/quickstarts/expo"
+    },
+    {
+      "packageName": "quickstart-nextjs",
+      "projectFolder": "private-demos/quickstarts/nextjs"
+    },
+    {
+      "packageName": "quickstart-nextjs-app-dir",
+      "projectFolder": "private-demos/quickstarts/nextjs-app-dir"
+    },
+    {
+      "packageName": "quickstart-nextjs-app-dir-14",
+      "projectFolder": "private-demos/quickstarts/nextjs-app-dir-14"
+    },
+    {
+      "packageName": "quickstart-nextjs-app-dir-js",
+      "projectFolder": "private-demos/quickstarts/nextjs-app-dir-js"
+    },
+    {
+      "packageName": "quickstart-nodejs",
+      "projectFolder": "private-demos/quickstarts/nodejs"
+    },
+    {
+      "packageName": "quickstart-nuxt",
+      "projectFolder": "private-demos/quickstarts/nuxt"
+    },
+    {
+      "packageName": "quickstart-react-vite",
+      "projectFolder": "private-demos/quickstarts/react-vite"
+    },
+    {
+      "packageName": "quickstart-react-vite-ts",
+      "projectFolder": "private-demos/quickstarts/react-vite-ts"
+    },
+    {
+      "packageName": "quickstart-remix",
+      "projectFolder": "private-demos/quickstarts/remix"
+    },
+    {
+      "packageName": "quickstart-sveltekit",
+      "projectFolder": "private-demos/quickstarts/sveltekit"
+    },
+    {
+      "packageName": "quickstart-tanstack-start",
+      "projectFolder": "private-demos/quickstarts/tanstack-start"
+    },
+    {
+      "packageName": "quickstart-vue",
+      "projectFolder": "private-demos/quickstarts/vue"
+    },
+    {
       "packageName": "local-store",
       "projectFolder": "local-store"
     },
@@ -742,6 +830,14 @@
     {
       "packageName": "lint",
       "projectFolder": "lint"
+    },
+    {
+      "packageName": "demo_browser_tests",
+      "projectFolder": "demo_browser_tests"
+    },
+    {
+      "packageName": "react-native-demo",
+      "projectFolder": "demos/react-native"
     }
     // {
     //   /**

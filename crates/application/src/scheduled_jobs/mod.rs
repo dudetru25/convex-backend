@@ -30,7 +30,8 @@ use common::{
     },
     execution_context::{
         ExecutionContext,
-        ExecutionId,
+        RequestContext,
+        RequestMetadata,
     },
     fastrace_helpers::get_sampled_span,
     knobs::{
@@ -107,10 +108,7 @@ use parking_lot::Mutex;
 use sentry::SentryFutureExt;
 use sync_types::Timestamp;
 use tokio::sync::mpsc;
-use usage_tracking::{
-    FunctionUsageTracker,
-    OccInfo,
-};
+use usage_tracking::FunctionUsageTracker;
 use value::{
     ConvexValue,
     ResolvedDocumentId,
@@ -125,7 +123,8 @@ mod metrics;
 
 pub(crate) const SCHEDULED_JOB_EXECUTED: &str = "scheduled_job_executed";
 pub(crate) const SCHEDULED_JOB_COMMITTING: &str = "scheduled_job_committing";
-pub(crate) const SCHEDULED_JOB_MUTATION_ERROR: &str = "scheduled_job_mutation_error";
+pub(crate) const SCHEDULED_JOB_WRITE_THROUGHPUT_ERROR: &str =
+    "scheduled_job_write_throughput_error";
 pub(crate) const SCHEDULED_JOB_SUCCEEDED: &str = "scheduled_job_succeeded";
 pub(crate) const SCHEDULED_JOB_QUERIED: &str = "scheduled_job_queried";
 pub(crate) const SCHEDULER_STARTED: &str = "scheduler_started";
@@ -139,14 +138,14 @@ pub struct ScheduledJobRunner {
 impl ScheduledJobRunner {
     pub fn start<RT: Runtime>(
         rt: RT,
-        instance_name: String,
+        deployment_name: String,
         database: Database<RT>,
         runner: Arc<ApplicationFunctionRunner<RT>>,
         function_log: FunctionExecutionLog<RT>,
     ) -> Self {
         let executor_fut = ScheduledJobExecutor::run(
             rt.clone(),
-            instance_name,
+            deployment_name,
             database.clone(),
             runner,
             function_log,
@@ -171,7 +170,7 @@ impl ScheduledJobRunner {
 
 pub struct ScheduledJobExecutor<RT: Runtime> {
     context: ScheduledJobContext<RT>,
-    instance_name: String,
+    deployment_name: String,
     running_job_ids: HashSet<ResolvedDocumentId>,
     /// Some if there's at least one pending job. May be in the past!
     next_job_ready_time: Option<Timestamp>,
@@ -195,26 +194,12 @@ pub struct ScheduledJobContext<RT: Runtime> {
 }
 
 impl<RT: Runtime> ScheduledJobContext<RT> {
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new(
-        rt: RT,
-        database: Database<RT>,
-        runner: Arc<ApplicationFunctionRunner<RT>>,
-        function_log: FunctionExecutionLog<RT>,
-    ) -> Self {
-        ScheduledJobContext {
-            rt,
-            database,
-            runner,
-            function_log,
-        }
-    }
 }
 
 impl<RT: Runtime> ScheduledJobExecutor<RT> {
     pub async fn run(
         rt: RT,
-        instance_name: String,
+        deployment_name: String,
         database: Database<RT>,
         runner: Arc<ApplicationFunctionRunner<RT>>,
         function_log: FunctionExecutionLog<RT>,
@@ -228,7 +213,7 @@ impl<RT: Runtime> ScheduledJobExecutor<RT> {
                 runner,
                 function_log,
             },
-            instance_name,
+            deployment_name,
             running_job_ids: HashSet::new(),
             next_job_ready_time: None,
             job_finished_tx,
@@ -291,7 +276,7 @@ impl<RT: Runtime> ScheduledJobExecutor<RT> {
             // Great! we have enough remaining concurrency and our backend is running, start
             // new job(s) if we can and update our next ready time.
             let root = get_sampled_span(
-                &self.instance_name,
+                &self.deployment_name,
                 "scheduler/query_and_start_jobs",
                 &mut self.context.rt.rng(),
             );
@@ -422,7 +407,7 @@ impl<RT: Runtime> ScheduledJobExecutor<RT> {
             let tx = self.job_finished_tx.clone();
 
             let root = get_sampled_span(
-                &self.instance_name,
+                &self.deployment_name,
                 "scheduler/execute_job",
                 &mut self.context.rt.rng(),
             );
@@ -461,7 +446,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
         let namespaces: Vec<_> = tx
             .table_mapping()
             .iter()
-            .filter(|(_, _, _, name)| **name == *SCHEDULED_JOBS_TABLE)
+            .filter(|(_, _, _, name)| **name == SCHEDULED_JOBS_TABLE)
             .map(|(_, namespace, ..)| namespace)
             .collect();
         let index_query = Query::index_range(IndexRange {
@@ -623,7 +608,10 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 // NOTE: We didn't actually run anything, so we are creating a request context
                 // just report the error.
                 let request_id = RequestId::new();
-                let context = ExecutionContext::new(request_id, &caller);
+                let context = ExecutionContext::new(
+                    RequestContext::new_for_system_request(request_id),
+                    &caller,
+                );
                 // We don't know what the UdfType is since this is an invalid module.
                 // Log as mutation for now.
                 self.function_log
@@ -670,7 +658,10 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 // NOTE: We didn't actually run anything, so we are creating a request context
                 // just report the error.
                 let request_id = RequestId::new();
-                let context = ExecutionContext::new(request_id, &caller);
+                let context = ExecutionContext::new(
+                    RequestContext::new_for_system_request(request_id),
+                    &caller,
+                );
                 match udf_type {
                     UdfType::Query => {
                         self.function_log
@@ -740,7 +731,10 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 return Ok(());
             };
             let start = self.rt.monotonic_now();
-            let context = ExecutionContext::new(request_id.clone(), &caller);
+            let context = ExecutionContext::new(
+                RequestContext::new_for_system_request(request_id.clone()),
+                &caller,
+            );
             sentry::configure_scope(|scope| context.add_sentry_tags(scope));
             let identity = tx.inert_identity();
             let namespace = tx.table_mapping().tablet_namespace(job_id.tablet_id)?;
@@ -761,25 +755,41 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
             let (mut tx, mut outcome) = match result {
                 Ok(r) => r,
                 Err(e) => {
-                    self.function_log
-                        .log_mutation_system_error(
-                            &e,
-                            path,
-                            udf_args.clone(),
-                            identity,
-                            start,
-                            caller.clone(),
-                            context,
-                            None,
-                            mutation_retry_count,
-                        )
-                        .await?;
                     if e.short_msg() == "TooManyWrites" {
-                        pause_client.wait(SCHEDULED_JOB_MUTATION_ERROR).await;
+                        self.function_log
+                            .log_mutation_write_throughput_error(
+                                &e,
+                                path,
+                                udf_args.clone(),
+                                identity,
+                                start,
+                                caller.clone(),
+                                context,
+                                None,
+                                mutation_retry_count,
+                                true,
+                            )
+                            .await?;
+                        pause_client
+                            .wait(SCHEDULED_JOB_WRITE_THROUGHPUT_ERROR)
+                            .await;
                         let delay = backoff.fail(&mut self.rt.rng());
                         self.rt.wait(delay).await;
                         continue;
                     } else {
+                        self.function_log
+                            .log_mutation_system_error(
+                                &e,
+                                path,
+                                udf_args.clone(),
+                                identity,
+                                start,
+                                caller.clone(),
+                                context,
+                                None,
+                                mutation_retry_count,
+                            )
+                            .await?;
                         // Only retry in this loop on write throughput errors and OCC errors on
                         // commit (below), other system errors should cause
                         // the mutation to be rescheduled.
@@ -807,29 +817,22 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 if let Err(err) = commit_result {
                     if err.is_deterministic_user_error() {
                         outcome.result = Err(JsError::from_error(err));
-                    } else if err.is_occ() || err.short_msg() == "TooManyWrites" {
+                    } else if let Some(occ_info) = err.occ_info() {
                         metrics::log_scheduled_job_failure(&err, mutation_retry_count as u32);
-                        if let Some((table_name, document_id, write_source)) = err.occ_info() {
-                            // TODO log errors on write throughput limit too
-                            self.function_log
-                                .log_mutation_occ_error(
-                                    outcome,
-                                    stats,
-                                    execution_time,
-                                    caller.clone(),
-                                    usage_tracker,
-                                    context,
-                                    OccInfo {
-                                        table_name,
-                                        document_id,
-                                        write_source,
-                                        retry_count: mutation_retry_count as u64,
-                                    },
-                                    None,
-                                    mutation_retry_count,
-                                )
-                                .await;
-                        }
+                        self.function_log
+                            .log_mutation_occ_error(
+                                outcome,
+                                stats,
+                                execution_time,
+                                caller.clone(),
+                                usage_tracker,
+                                context,
+                                occ_info,
+                                None,
+                                mutation_retry_count,
+                                true,
+                            )
+                            .await;
                         let delay = backoff.fail(&mut self.rt.rng());
                         self.rt.wait(delay).await;
                         continue;
@@ -899,14 +902,17 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
             ScheduledJobState::Pending => {
                 // Create a new request & execution ID
                 let request_id = RequestId::new();
-                let context = ExecutionContext::new(request_id, &caller);
+                let context = ExecutionContext::new(
+                    RequestContext::new_for_system_request(request_id),
+                    &caller,
+                );
                 sentry::configure_scope(|scope| context.add_sentry_tags(scope));
 
                 // Set state to in progress
                 let mut updated_job = metadata.clone();
                 updated_job.state = ScheduledJobState::InProgress {
-                    request_id: Some(context.request_id.clone()),
-                    execution_id: Some(context.execution_id),
+                    request_id: context.request_id.clone(),
+                    execution_id: context.execution_id,
                 };
                 SchedulerModel::new(&mut tx, namespace)
                     .replace(job_id, updated_job.clone())
@@ -968,10 +974,11 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                     .await?;
                 // Restore the request & execution ID of the failed execution.
                 let context = ExecutionContext::new_from_parts(
-                    request_id.clone().unwrap_or_else(RequestId::new),
-                    (*execution_id).unwrap_or_else(ExecutionId::new),
+                    request_id.clone(),
+                    *execution_id,
                     caller.parent_scheduled_job(),
                     caller.is_root(),
+                    RequestMetadata::system(),
                 );
                 sentry::configure_scope(|scope| context.add_sentry_tags(scope));
                 let path = job.path.clone();

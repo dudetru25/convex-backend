@@ -5,6 +5,7 @@
 import { performOp } from "udf-syscall-ffi";
 import { copyBuffer } from "./helpers.js";
 import inspect from "object-inspect";
+import { TransformStream } from "./06_streams.js";
 
 class TextEncoder {
   get encoding() {
@@ -99,6 +100,7 @@ class TextDecoder {
     } finally {
       if (!stream && this.#rid !== null) {
         performOp("textEncoder/cleanup", this.#rid);
+        this.#rid = null;
       }
     }
   }

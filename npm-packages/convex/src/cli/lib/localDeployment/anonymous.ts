@@ -35,7 +35,7 @@ import { handlePotentialUpgrade } from "./upgrade.js";
 import {
   isOffline,
   generateInstanceSecret,
-  choosePorts,
+  chooseLocalBackendPorts,
   LOCAL_BACKEND_INSTANCE_SECRET,
 } from "./utils.js";
 import { handleDashboard } from "./dashboard.js";
@@ -48,17 +48,15 @@ import { nodeFs } from "../../../bundler/fs.js";
 import { doInitConvexFolder } from "../codegen.js";
 import { readProjectConfig } from "../config.js";
 import { functionsDir } from "../utils/utils.js";
-import { maybeSetupAiFiles } from "../aiFiles/index.js";
+import { attemptSetupAiFiles } from "../aiFiles/index.js";
 
 export async function handleAnonymousDeployment(
   ctx: Context,
   options: {
-    ports?:
-      | {
-          cloud: number;
-          site: number;
-        }
-      | undefined;
+    ports: {
+      cloud: number | undefined;
+      site: number | undefined;
+    };
     backendVersion?: string | undefined;
     dashboardVersion?: string | undefined;
     forceUpgrade: boolean;
@@ -147,10 +145,10 @@ export async function handleAnonymousDeployment(
     adminKey = data.adminKey;
   }
 
-  const [cloudPort, sitePort] = await choosePorts(ctx, {
-    count: 2,
-    startPort: 3210,
-    requestedPorts: [options.ports?.cloud ?? null, options.ports?.site ?? null],
+  const { cloudPort, sitePort } = await chooseLocalBackendPorts(ctx, {
+    requestedPorts: options.ports,
+    suggestedPorts:
+      deployment.kind === "existing" ? deployment.config.ports : undefined,
   });
   const onActivity = async (isOffline: boolean, _wasOffline: boolean) => {
     await ensureBackendRunning(ctx, {
@@ -174,6 +172,8 @@ export async function handleAnonymousDeployment(
     adminKey,
     instanceSecret,
     forceUpgrade: options.forceUpgrade,
+    // Anonymous deployments aren't registered against a cloud project.
+    cloudProjectId: undefined,
   });
 
   const cleanupFunc = ctx.removeCleanup(cleanupHandle);
@@ -188,12 +188,19 @@ export async function handleAnonymousDeployment(
     const { configPath, projectConfig } = await readProjectConfig(ctx);
     const convexDir = path.resolve(functionsDir(configPath, projectConfig));
     const projectDir = path.resolve(path.dirname(configPath));
-    await maybeSetupAiFiles({ ctx, convexDir, projectDir });
+    await attemptSetupAiFiles({
+      ctx,
+      aiFilesConfig: projectConfig.aiFiles,
+      convexDir,
+      projectDir,
+    });
   }
   return {
     adminKey,
     deploymentName: deployment.deploymentName,
     deploymentUrl: localDeploymentUrl(cloudPort),
+    reference: null,
+    isDefault: false,
     onActivity,
   };
 }
@@ -420,6 +427,7 @@ export async function handleLinkToProject(
   args: {
     deploymentName: string;
     teamSlug: string;
+    teamId: number;
     projectSlug: string | null;
   },
 ): Promise<{
@@ -453,7 +461,7 @@ export async function handleLinkToProject(
     projectSlug = args.projectSlug;
   } else {
     const { projectSlug: newProjectSlug } = await createProject(ctx, {
-      teamSlug: args.teamSlug,
+      teamId: args.teamId,
       projectName,
       deploymentToProvision: null,
     });
@@ -461,15 +469,16 @@ export async function handleLinkToProject(
   }
   logVerbose(`Creating local deployment in project ${projectSlug}`);
   // Register it in big brain
-  const { deploymentName: localDeploymentName, adminKey } = await bigBrainStart(
-    ctx,
-    {
-      port: config.ports.cloud,
-      projectSlug,
-      teamSlug: args.teamSlug,
-      instanceName: null,
-    },
-  );
+  const {
+    deploymentName: localDeploymentName,
+    adminKey,
+    projectId,
+  } = await bigBrainStart(ctx, {
+    port: config.ports.cloud,
+    projectSlug,
+    teamSlug: args.teamSlug,
+    instanceName: null,
+  });
   const localConfig = loadDeploymentConfig(ctx, "local", localDeploymentName);
   if (localConfig !== null) {
     return ctx.crash({
@@ -495,6 +504,7 @@ export async function handleLinkToProject(
     adminKey,
     backendVersion: config.backendVersion,
     ports: config.ports,
+    cloudProjectId: projectId,
   });
   await bigBrainPause(ctx, {
     projectSlug,

@@ -24,13 +24,14 @@ import { useReferralState } from "api/referrals";
 import { ProjectDetails, TeamResponse } from "generatedApi";
 import { ReferralsBanner } from "components/referral/ReferralsBanner";
 import { useCreateProjectModal } from "hooks/useCreateProjectModal";
+import { useHasCustomRolePermission } from "api/roles";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { withAuthenticatedPage } from "lib/withAuthenticatedPage";
 import Head from "next/head";
 import { useState, useEffect } from "react";
 import { useDebounce } from "react-use";
 import { cn } from "@ui/cn";
 import { SegmentedControl } from "@ui/SegmentedControl";
-import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { EmptySection } from "@common/elements/EmptySection";
 import { OpenInVercel } from "components/OpenInVercel";
 import { LoadingLogo } from "@ui/Loading";
@@ -39,10 +40,9 @@ import { useRouter } from "next/router";
 
 export { getServerSideProps } from "lib/ssr";
 
-export default withAuthenticatedPage(() => {
+export function TeamIndexPage() {
   const team = useCurrentTeam();
   const router = useRouter();
-  const { deploymentList: deploymentListEnabled } = useLaunchDarkly();
   const referralState = useReferralState(team?.id);
   const { subscription } = useTeamOrbSubscription(team?.id);
   const isFreePlan =
@@ -51,7 +51,7 @@ export default withAuthenticatedPage(() => {
     useGlobalLocalStorage("prefersReferralsBannerHidden", false);
 
   const viewFromQuery = (router.query.view as string | undefined) ?? "projects";
-  const currentView = deploymentListEnabled ? viewFromQuery : "projects";
+  const currentView = viewFromQuery;
   const isDeploymentsView = currentView === "deployments";
   const projectFilter = router.query.projectId
     ? Number(router.query.projectId)
@@ -80,7 +80,6 @@ export default withAuthenticatedPage(() => {
                   isDeploymentsView={isDeploymentsView}
                   currentView={currentView}
                   onViewChange={handleViewChange}
-                  deploymentListEnabled={deploymentListEnabled}
                   projectFilter={projectFilter}
                   referralState={referralState}
                   isFreePlan={isFreePlan}
@@ -96,7 +95,9 @@ export default withAuthenticatedPage(() => {
       </div>
     </>
   );
-});
+}
+
+export default withAuthenticatedPage(TeamIndexPage);
 
 const VIEW_OPTIONS = [
   { label: "Projects", value: "projects" },
@@ -108,7 +109,6 @@ function TeamContent({
   isDeploymentsView,
   currentView,
   onViewChange,
-  deploymentListEnabled,
   projectFilter,
   referralState,
   isFreePlan,
@@ -119,7 +119,6 @@ function TeamContent({
   isDeploymentsView: boolean;
   currentView: string;
   onViewChange: (view: string) => void;
-  deploymentListEnabled: boolean;
   projectFilter?: number;
   referralState: any;
   isFreePlan: boolean | undefined;
@@ -154,20 +153,11 @@ function TeamContent({
       )}
       <div className="mb-4 flex w-full animate-fadeInFromLoading flex-col gap-3">
         <div className="flex items-center gap-4">
-          {deploymentListEnabled ? (
-            <SegmentedControl
-              options={[...VIEW_OPTIONS]}
-              value={currentView}
-              onChange={onViewChange}
-            />
-          ) : (
-            <h3
-              // eslint-disable-next-line no-restricted-syntax
-              className="text-lg font-semibold"
-            >
-              Projects
-            </h3>
-          )}
+          <SegmentedControl
+            options={[...VIEW_OPTIONS]}
+            value={currentView}
+            onChange={onViewChange}
+          />
           {!isDeploymentsView && <ProjectActions team={team} />}
         </div>
         {!isDeploymentsView && (
@@ -234,15 +224,32 @@ function DeploymentsView({
 
 function ProjectActions({ team }: { team: TeamResponse }) {
   const [createProjectModal, showCreateProjectModal] = useCreateProjectModal();
+  // Built-in admin/developer members can always create projects; custom-role
+  // members need an explicit `project:create` grant.
+  const canCreateCustom = useHasCustomRolePermission(
+    team.id,
+    "project:create",
+    { segments: [{ kind: "project", id: 0, slug: "" }] },
+    true,
+  );
+  const canCreate = canCreateCustom !== false;
   return (
-    <>
+    <div className="ml-auto flex items-center gap-2">
       {!team.managedBy && (
         <Button
           onClick={() => showCreateProjectModal()}
           variant="neutral"
           size="sm"
           icon={<PlusIcon />}
-          className="ml-auto"
+          disabled={!canCreate}
+          tip={
+            !canCreate
+              ? permissionDeniedTip(
+                  "You do not have permission to create projects in this team.",
+                  "project:create",
+                )
+              : undefined
+          }
         >
           Create Project
         </Button>
@@ -257,7 +264,7 @@ function ProjectActions({ team }: { team: TeamResponse }) {
         Start Tutorial
       </Button>
       {createProjectModal}
-    </>
+    </div>
   );
 }
 

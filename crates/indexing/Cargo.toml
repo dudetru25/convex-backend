@@ -21,19 +21,24 @@ testing = [
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 common = { workspace = true }
+dashmap = { workspace = true }
 derive_more = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
 futures = { workspace = true }
+futures-async-stream = { workspace = true }
 imbl = { workspace = true }
+interval_map = { workspace = true }
 itertools = { workspace = true }
 metrics = { workspace = true }
+moka = { workspace = true }
+parking_lot = { workspace = true }
 tracing = { workspace = true }
 value = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 divan = { workspace = true }
 errors = { workspace = true, features = ["testing"] }
 maplit = { workspace = true }

@@ -6,7 +6,10 @@ import udfs from "@common/udfs";
 import { UdfType } from "system-udfs/convex/_system/frontend/common";
 import { CopyTextButton } from "@common/elements/CopyTextButton";
 import { FunctionRunnerDisabledWhilePaused } from "@common/features/functions/components/FunctionRunnerDisabledWhilePaused";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
 import { useShowGlobalRunner } from "@common/features/functionRunner/lib/functionRunner";
 import { ModuleFunction } from "@common/lib/functions/types";
 import { Loading } from "@ui/Loading";
@@ -25,20 +28,32 @@ export function FunctionSummary({
   const npmPackageVersion = useQuery(udfs.getVersion.default);
   const versionTooOld = !!npmPackageVersion && lt(npmPackageVersion, "0.13.0");
 
-  const {
-    useCurrentDeployment,
-    useHasProjectAdminPermissions,
-    useIsDeploymentPaused,
-  } = useContext(DeploymentInfoContext);
+  const { useIsDeploymentPaused } = useContext(DeploymentInfoContext);
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
 
-  const deployment = useCurrentDeployment();
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
-  const isProd = deployment?.deploymentType === "prod";
-  const canRunFunction =
-    // TODO(ENG-10284) Make this depend on permissions, not deployment type
-    currentOpenFunction.udfType === "Query" || !isProd || hasAdminPermissions;
+  const udfType = currentOpenFunction.udfType;
+  const canRunInternalQueries = useIsOperationAllowed("RunInternalQueries");
+  const canRunInternalMutations = useIsOperationAllowed("RunInternalMutations");
+  const canRunInternalActions = useIsOperationAllowed("RunInternalActions");
+  const canViewData = useIsOperationAllowed("ViewData");
+  const canWriteData = useIsOperationAllowed("WriteData");
+
+  const isInternal = currentOpenFunction.visibility?.kind === "internal";
+  const isInComponent = !!currentOpenFunction.componentPath;
+
+  const canRunFunction = (() => {
+    if (isInternal) {
+      return udfType === "Query"
+        ? canRunInternalQueries
+        : udfType === "Mutation"
+          ? canRunInternalMutations
+          : canRunInternalActions;
+    }
+    if (isInComponent) {
+      return udfType === "Query" ? canViewData : canWriteData;
+    }
+    return true;
+  })();
 
   const showGlobalRunner = useShowGlobalRunner();
   const showFunctionRunner = () => {
@@ -90,7 +105,7 @@ export function FunctionSummary({
             <Button
               tip={
                 !canRunFunction ? (
-                  "You do not have permission to run this function in production."
+                  "You do not have permission to run this function in this deployment."
                 ) : isPaused ? (
                   <FunctionRunnerDisabledWhilePaused />
                 ) : (

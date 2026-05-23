@@ -1,14 +1,14 @@
 /* stylelint-disable docusaurus/copyright-header */
 
+/* Customize the search button in nav and modal */
+@import url("./search.css");
+
 /* @import "tailwindcss"; but without preflight */
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
 @source "../**/*.{js,jsx,ts,tsx}";
-
-/* Customize the search button in nav and modal */
-@import url("./search.css");
 
 @theme {
   --color-neutral-white: #ffffff;
@@ -892,10 +892,6 @@ html[data-theme="dark"] .convex-menu-header {
   --convex-icon: url("../../static/img/sidebar-icons/grid.svg");
 }
 
-.convex-sidebar-chef {
-  --convex-icon: url("../../static/img/sidebar-icons/chef.svg");
-}
-
 .convex-sidebar-production {
   --convex-icon: url("../../static/img/sidebar-icons/paper-plane.svg");
 }
@@ -961,7 +957,8 @@ html[data-theme="dark"] .convex-menu-header {
 }
 
 .convex-sidebar-cli .menu__list li:first-child .menu__link:after,
-.convex-sidebar-cli .menu__list li:nth-child(2) .menu__link:after {
+.convex-sidebar-cli .menu__list li:nth-child(2) .menu__link:after,
+.convex-sidebar-beta-badge > .menu__link:after {
   font-weight: 400;
   font-size: 0.6em;
   margin-left: 1em;
@@ -970,6 +967,11 @@ html[data-theme="dark"] .convex-menu-header {
   border: solid 1px gray;
   padding: 2px 8px;
   float: right;
+}
+
+.convex-sidebar-beta-badge > .menu__link--active:after {
+  /* shift left to compensate for text to the left being bold */
+  margin-left: 0.7em;
 }
 
 .convex-sidebar-cli .menu__list li:first-child .menu__link--active:after {
@@ -1016,6 +1018,10 @@ html[data-theme="dark"] .convex-menu-header {
 
 .convex-sidebar-cli {
   --convex-icon: url("../../static/img/sidebar-icons/keyboard.svg");
+}
+
+.convex-sidebar-team-management {
+  --convex-icon: url(heroicons/24/outline/user-group.svg);
 }
 
 .convex-sidebar-convex-api {
@@ -1644,4 +1650,10 @@ a.video-card h2 {
   to {
     transform: translateY(0);
   }
+}
+
+table > caption {
+  font-weight: 500;
+  font-size: 105%;
+  margin-bottom: 0.5em;
 }

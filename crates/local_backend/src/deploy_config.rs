@@ -51,10 +51,7 @@ use value::{
 };
 
 use crate::{
-    admin::{
-        must_be_admin_from_key,
-        must_be_admin_with_write_access,
-    },
+    admin::must_be_admin_from_key,
     EmptyResponse,
     LocalAppState,
 };
@@ -195,6 +192,7 @@ pub async fn get_config(
         req.admin_key,
     )
     .await?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
 
     let mut tx = st.application.begin(identity).await?;
     let component = ComponentId::Root; // This endpoint is only used pre-components.
@@ -224,6 +222,7 @@ pub async fn get_config_hashes(
         req.admin_key,
     )
     .await?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
 
     let mut tx = st.application.begin(identity).await?;
     let component = ComponentId::Root; // This endpoint is not used in components push.
@@ -274,11 +273,11 @@ pub async fn push_config_handler(
 ) -> anyhow::Result<(Identity, PushAnalytics, PushMetrics)> {
     let identity = application
         .app_auth()
-        .check_key(config.admin_key, application.instance_name())
+        .check_key(config.admin_key)
         .await
         .context("bad admin key error")?;
 
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
 
     let modules: Vec<ModuleConfig> = config
         .modules

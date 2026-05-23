@@ -32,7 +32,7 @@ import {
   instantiateNoopLogger,
   Logger,
 } from "../browser/logging.js";
-import { ConvexQueryOptions } from "../browser/query_options.js";
+import type { QueryOptions } from "../browser/query_options.js";
 import { LoadMoreOfPaginatedQuery } from "../browser/sync/pagination.js";
 import {
   PaginatedQueryClient,
@@ -404,10 +404,12 @@ export class ConvexReactClient {
    * when the user's rights were permanently revoked.
    * @param fetchToken - an async function returning the JWT-encoded OpenID Connect Identity Token
    * @param onChange - a callback that will be called when the authentication status changes
+   * @param onRefreshChange - a callback called with `true` when the socket is paused to fetch a replacement token after a server rejection, and `false` when refresh completes
    */
   setAuth(
     fetchToken: AuthTokenFetcher,
     onChange?: (isAuthenticated: boolean) => void,
+    onRefreshChange?: (isRefreshing: boolean) => void,
   ) {
     if (typeof fetchToken === "string") {
       throw new Error(
@@ -421,6 +423,7 @@ export class ConvexReactClient {
         (() => {
           // Do nothing
         }),
+      onRefreshChange,
     );
   }
 
@@ -537,9 +540,7 @@ export class ConvexReactClient {
    * an optional extendSubscriptionFor for how long to subscribe to the query.
    */
   prewarmQuery<Query extends FunctionReference<"query">>(
-    queryOptions: ConvexQueryOptions<Query> & {
-      extendSubscriptionFor?: number;
-    },
+    queryOptions: QueryOptions<Query> & { extendSubscriptionFor?: number },
   ) {
     const extendSubscriptionFor =
       queryOptions.extendSubscriptionFor ?? DEFAULT_EXTEND_SUBSCRIPTION_FOR;
@@ -802,6 +803,25 @@ export type OptionalRestArgsOrSkip<FuncRef extends FunctionReference<any>> =
     : [args: FuncRef["_args"] | "skip"];
 
 /**
+ * Result returned by object-form {@link useQuery_experimental}.
+ *
+ * @public
+ */
+export type UseQueryResult<QueryResult, ThrowOnError extends boolean = false> =
+  | { status: "pending" }
+  | { status: "success"; data: QueryResult }
+  | (ThrowOnError extends true ? never : { status: "error"; error: Error });
+
+type UseQueryOptions<
+  Query extends FunctionReference<"query">,
+  ThrowOnError extends boolean,
+> = {
+  query: Query;
+  args: FunctionArgs<Query> | "skip";
+  throwOnError?: ThrowOnError;
+};
+
+/**
  * Load a reactive query within a React component.
  *
  * This React hook subscribes to a Convex query and causes a rerender whenever
@@ -850,7 +870,6 @@ export function useQuery<Query extends FunctionReference<"query">>(
 ): Query["_returnType"] | undefined {
   const skip = args[0] === "skip";
   const argsObject = args[0] === "skip" ? {} : parseArgs(args[0]);
-
   const queryReference =
     typeof query === "string"
       ? makeFunctionReference<"query", any, any>(query)
@@ -871,10 +890,102 @@ export function useQuery<Query extends FunctionReference<"query">>(
 
   const results = useQueries(queries);
   const result = results["query"];
+
   if (result instanceof Error) {
     throw result;
   }
   return result;
+}
+
+/**
+ * Load a reactive query within a React component using an options object.
+ *
+ * This is an experimental form of {@link useQuery} that accepts a single
+ * {@link UseQueryOptions} object instead of positional arguments.
+ *
+ * Consumers are expected to check the returned object `status` field to
+ * make proper use of the result. If an error occurs, it will be present
+ * in the result object unless `throwOnError` is `true`, in which case
+ * the error will be thrown instead.
+ *
+ * @example
+ * ```tsx
+ * import { useQuery_experimental as useQuery } from "convex/react";
+ * import { api } from "../convex/_generated/api";
+ *
+ * function TaskList() {
+ *   const state = useQuery({ query: api.tasks.list, args: { completed: false } });
+ *
+ *   if (state.status === "pending") return <div>Loading...</div>;
+ *   if (state.status === "error") return <div>Error: {state.error.message}</div>;
+ *   return state.data.map((task) => <div key={task._id}>{task.text}</div>);
+ * }
+ * ```
+ *
+ * @param options - Query options. Pass `args: "skip"` to disable the query.
+ * @returns the current query state as a {@link UseQueryResult} object.
+ *
+ * @see https://docs.convex.dev/client/react#fetching-data
+ * @public
+ */
+export function useQuery_experimental<
+  Query extends FunctionReference<"query">,
+  ThrowOnError extends boolean = false,
+>(
+  options: UseQueryOptions<Query, ThrowOnError>,
+): UseQueryResult<Query["_returnType"], ThrowOnError>;
+
+export function useQuery_experimental<
+  Query extends FunctionReference<"query">,
+  ThrowOnError extends boolean = false,
+>(
+  options: UseQueryOptions<Query, ThrowOnError>,
+): UseQueryResult<Query["_returnType"], false> {
+  const throwOnError = options.throwOnError ?? false;
+  const queryReference =
+    typeof options.query === "string"
+      ? (makeFunctionReference<"query", any, any>(options.query) as Query)
+      : options.query;
+  const skip = options.args === "skip";
+  const argsObject = !skip
+    ? parseArgs(options.args as Record<string, Value>)
+    : {};
+
+  const queryName = getFunctionName(queryReference);
+  const queries = useMemo(
+    () =>
+      skip
+        ? ({} as RequestForQueries)
+        : { query: { query: queryReference, args: argsObject } },
+    // Stringify args so args that are semantically the same don't trigger a
+    // rerender. Saves developers from adding `useMemo` on every args usage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(convexToJson(argsObject)), queryName, skip],
+  );
+
+  const results = useQueries(queries);
+  const result = results["query"];
+
+  if (result instanceof Error) {
+    if (throwOnError) {
+      throw result;
+    }
+    return {
+      error: result,
+      status: "error",
+    };
+  }
+
+  if (result === undefined) {
+    return {
+      status: "pending",
+    };
+  }
+
+  return {
+    data: result,
+    status: "success",
+  };
 }
 
 /**

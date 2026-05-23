@@ -3,7 +3,7 @@ import { queryPrivateSystem } from "../secretSystemTables";
 
 // This query returns a new result every time
 // the given table's document change in any way.
-export default queryPrivateSystem({
+export default queryPrivateSystem("ViewEnvironmentVariables")({
   args: {},
   handler: async ({ db }) => {
     return await db
@@ -14,7 +14,7 @@ export default queryPrivateSystem({
   },
 });
 
-export const get = queryPrivateSystem({
+export const get = queryPrivateSystem("ViewEnvironmentVariables")({
   args: {
     name: v.string(),
   },
