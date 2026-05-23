@@ -15,7 +15,7 @@ the project's namespace to prevent conflicts.
 Deploy a project as a namespaced additional project using the CLI:
 
 ```bash
-# Deploy with a namespace (tables get prefixed: ECommerce_users, ECommerce_orders, etc.)
+# Deploy with a namespace (tables get prefixed: ECommerce/users, ECommerce/orders, etc.)
 npx convex deploy --namespace ECommerce --project-id my-ecommerce-app
 
 # Or during development
@@ -35,7 +35,7 @@ Or set it permanently in `convex.json`:
 ## How it works
 
 1. **Namespace prefixing**: When deploying with `--namespace ECommerce`, a table
-   named `users` in your schema becomes `ECommerce_users` in the database.
+   named `users` in your schema becomes `ECommerce/users` in the database.
 2. **Ownership by project_id**: A namespace is tied to a `project_id`. Any
    developer using the same `project_id` can deploy to that namespace -- there
    is no single-user lock. A different `project_id` attempting to claim an

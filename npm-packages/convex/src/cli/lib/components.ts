@@ -183,6 +183,124 @@ export function partitionModulesByChanges(
   return { unchangedModuleHashes, changedModules };
 }
 
+const DEPLOYMENT_NAMESPACE_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+type MultiProjectOptions = {
+  namespace?: string | undefined;
+  projectId?: string | undefined;
+};
+
+type MultiProjectProjectConfig = {
+  functions: string;
+  namespace?: string | undefined;
+  projectId?: string | undefined;
+};
+
+export function resolveMultiProjectOptions(
+  options: MultiProjectOptions,
+  projectConfig: MultiProjectProjectConfig,
+): MultiProjectOptions {
+  const namespace = options.namespace ?? projectConfig.namespace;
+  const projectId =
+    options.projectId ??
+    projectConfig.projectId ??
+    (namespace ? projectConfig.functions : undefined);
+  return {
+    ...(namespace ? { namespace } : {}),
+    ...(projectId ? { projectId } : {}),
+  };
+}
+
+export function validateDeploymentNamespace(namespace: string): string | null {
+  if (DEPLOYMENT_NAMESPACE_PATTERN.test(namespace)) {
+    return null;
+  }
+  return (
+    `Invalid namespace "${namespace}". Namespaces must start with a letter, ` +
+    `contain only letters, digits, and underscores, and be at most 64 characters.`
+  );
+}
+
+export function extractTableNamesFromSchemaSource(schemaSource: string) {
+  const tableNames = new Set<string>();
+  const tableNamePattern =
+    /(?:^|[{,]\s*)(?:(["'])([A-Za-z_][A-Za-z0-9_]*)\1|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*defineTable\s*\(/gm;
+  let match: RegExpExecArray | null;
+  while ((match = tableNamePattern.exec(schemaSource)) !== null) {
+    const tableName = match[2] ?? match[3];
+    if (tableName !== undefined && !tableName.startsWith("_")) {
+      tableNames.add(tableName);
+    }
+  }
+  return [...tableNames];
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function prefixConvexTableReferencesInSource(
+  source: string,
+  namespace: string,
+  tableNames: string[],
+) {
+  let rewritten = source;
+  for (const tableName of tableNames) {
+    const tableNameLiteral = new RegExp(
+      `(["'])${escapeRegExp(tableName)}\\1`,
+      "g",
+    );
+    rewritten = rewritten.replace(
+      tableNameLiteral,
+      (_match, quote: string) => `${quote}${namespace}/${tableName}${quote}`,
+    );
+  }
+  return rewritten;
+}
+
+function shouldPrefixModulePath(modulePath: string) {
+  return (
+    modulePath !== "http.js" &&
+    modulePath !== "crons.js" &&
+    modulePath !== "auth.config.js"
+  );
+}
+
+export function applyNamespaceToPushArtifacts(args: {
+  namespace: string;
+  tableNames: string[];
+  appSchema?: { source: string } | undefined;
+  changedModules: Array<{ path: string; source: string }>;
+  unchangedModuleHashes: Array<{ path: string }>;
+}) {
+  if (args.appSchema !== undefined) {
+    args.appSchema.source = prefixConvexTableReferencesInSource(
+      args.appSchema.source,
+      args.namespace,
+      args.tableNames,
+    );
+  }
+
+  for (const mod of args.changedModules) {
+    if (!mod.path.startsWith("_deps/")) {
+      mod.source = prefixConvexTableReferencesInSource(
+        mod.source,
+        args.namespace,
+        args.tableNames,
+      );
+    }
+    if (shouldPrefixModulePath(mod.path)) {
+      mod.path = `${args.namespace}/${mod.path}`;
+    }
+  }
+
+  for (const hashMod of args.unchangedModuleHashes) {
+    if (shouldPrefixModulePath(hashMod.path)) {
+      hashMod.path = `${args.namespace}/${hashMod.path}`;
+    }
+  }
+}
+
 async function getUnchangedModuleHashesFromServer(
   ctx: Context,
   appImplementation: { functions: Bundle[] },
@@ -433,22 +551,19 @@ async function startComponentsPushAndCodegen(
       udfServerVersion,
     });
   }
-  // Resolve namespace: CLI flag takes priority, then convex.json config
-  const namespace = options.namespace ?? projectConfig.namespace;
-  const projectId =
-    options.projectId ??
-    projectConfig.projectId ??
-    (namespace ? projectConfig.functions : undefined);
+  const { namespace, projectId } = resolveMultiProjectOptions(
+    options,
+    projectConfig,
+  );
 
   // Validate namespace if provided
   if (namespace) {
-    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(namespace)) {
+    const validationError = validateDeploymentNamespace(namespace);
+    if (validationError !== null) {
       return await ctx.crash({
         exitCode: 1,
         errorType: "fatal",
-        printedMessage:
-          `Invalid namespace "${namespace}". Namespaces must start with a letter, ` +
-          `contain only letters, digits, and underscores, and be at most 64 characters.`,
+        printedMessage: validationError,
       });
     }
     logMessage(
@@ -468,45 +583,12 @@ async function startComponentsPushAndCodegen(
         ? schemaJs
         : null;
 
+    let tableNames: string[] = [];
     if (originalSchemaPath) {
       const originalSchema = nodeFs.readFileSync(originalSchemaPath, "utf-8");
-      const tableNamePattern = /([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*defineTable/g;
-      const tableNames: string[] = [];
-      let match;
-      while ((match = tableNamePattern.exec(originalSchema)) !== null) {
-        if (!match[1].startsWith("_")) {
-          tableNames.push(match[1]);
-        }
-      }
+      tableNames = extractTableNamesFromSchemaSource(originalSchema);
 
       if (tableNames.length > 0) {
-        const prefix = `${namespace}/`;
-        const rewriteSource = (src: string): string => {
-          for (const tableName of tableNames) {
-            src = src.replace(
-              new RegExp(`"${tableName}"`, "g"),
-              `"${prefix}${tableName}"`,
-            );
-            src = src.replace(
-              new RegExp(`'${tableName}'`, "g"),
-              `'${prefix}${tableName}'`,
-            );
-          }
-          return src;
-        };
-
-        if (appImplementation.schema) {
-          appImplementation.schema.source = rewriteSource(
-            appImplementation.schema.source,
-          );
-        }
-
-        for (const mod of changedModules) {
-          if (mod.path.startsWith("_deps/")) {
-            continue;
-          }
-          mod.source = rewriteSource(mod.source);
-        }
         logMessage(
           chalkStderr.gray(
             `  Prefixed ${tableNames.length} table names: ${tableNames.join(", ")}`,
@@ -515,27 +597,15 @@ async function startComponentsPushAndCodegen(
       }
     }
 
-    // Prefix function module paths so each namespace gets its own function
-    // space and deploying one service doesn't overwrite another's functions.
-    // e.g. "products.js" → "Catalog/products.js" so the endpoint becomes
-    // "Catalog/products:list" instead of "products:list".
-    const pathPrefix = `${namespace}/`;
-    const skipPathPrefix = (p: string) =>
-      p === "http.js" || p === "crons.js" || p === "auth.config.js";
-    for (const mod of changedModules) {
-      if (skipPathPrefix(mod.path)) {
-        continue;
-      }
-      mod.path = `${pathPrefix}${mod.path}`;
-    }
-    for (const hashMod of unchangedModuleHashes) {
-      if (skipPathPrefix(hashMod.path)) {
-        continue;
-      }
-      hashMod.path = `${pathPrefix}${hashMod.path}`;
-    }
+    applyNamespaceToPushArtifacts({
+      namespace,
+      tableNames,
+      appSchema: appImplementation.schema ?? undefined,
+      changedModules,
+      unchangedModuleHashes,
+    });
     logMessage(
-      chalkStderr.gray(`  Prefixed function paths with "${pathPrefix}"`),
+      chalkStderr.gray(`  Prefixed function paths with "${namespace}/"`),
     );
   }
 

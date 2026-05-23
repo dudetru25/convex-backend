@@ -131,6 +131,29 @@ impl From<TableName> for FieldName {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn namespaced_table_name_parses_and_can_be_used_as_field_name() {
+        let table_name = TableName::from_str("Catalog/products").unwrap();
+        let field_name = FieldName::from(table_name);
+
+        assert_eq!(String::from(field_name), "Catalog/products");
+    }
+
+    #[test]
+    fn namespaced_table_name_rejects_empty_or_invalid_segments() {
+        assert!(TableName::from_str("/products").is_err());
+        assert!(TableName::from_str("Catalog/").is_err());
+        assert!(TableName::from_str("Catalog//products").is_err());
+        assert!(TableName::from_str("Catalog/product-name").is_err());
+    }
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, FromStr, Display, Hash)]
 pub struct TabletId(pub InternalId);
 

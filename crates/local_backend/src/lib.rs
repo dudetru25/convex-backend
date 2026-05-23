@@ -14,6 +14,7 @@ use ::authentication::{
     access_token_auth::NullAccessTokenAuth,
     application_auth::ApplicationAuth,
 };
+use anyhow::Context;
 use application::{
     self,
     api::ApplicationApi,
@@ -296,10 +297,8 @@ pub async fn make_app(
                 .to_path_buf()
         });
     let project_registry = Arc::new(
-        model::project_registry::ProjectRegistry::with_persistence(data_dir).unwrap_or_else(|e| {
-            tracing::warn!("Failed to load project registry, starting fresh: {}", e);
-            model::project_registry::ProjectRegistry::new()
-        }),
+        model::project_registry::ProjectRegistry::with_persistence(data_dir)
+            .context("failed to initialize project registry")?,
     );
 
     let app_state = LocalAppState {

@@ -404,7 +404,7 @@ Command.prototype.addDeployOptions = function () {
       new Option(
         "--namespace <namespace>",
         "Deploy as a namespaced additional project. Tables will be prefixed " +
-          "with this namespace (e.g. --namespace ECommerce creates ECommerce_users). " +
+          "with this namespace (e.g. --namespace ECommerce creates ECommerce/users). " +
           "Omit to deploy as the primary standalone project.",
       ),
     )

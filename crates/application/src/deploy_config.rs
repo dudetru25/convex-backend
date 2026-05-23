@@ -173,6 +173,53 @@ struct EvaluatedPushContents {
     app_functions: Vec<ModuleConfig>,
 }
 
+fn namespace_table_prefix(namespace: &str) -> String {
+    format!("{namespace}/")
+}
+
+fn prefix_schema_tables_for_namespace(
+    schema: &mut DatabaseSchema,
+    namespace: &str,
+) -> anyhow::Result<()> {
+    use std::str::FromStr;
+
+    use common::types::TableName;
+
+    let prefix = namespace_table_prefix(namespace);
+    let old_tables = std::mem::take(&mut schema.tables);
+    for (table_name, mut table_def) in old_tables {
+        let name_str = String::from(table_name.clone());
+        if name_str.starts_with(&prefix) {
+            schema.tables.insert(table_name, table_def);
+        } else {
+            let prefixed_name = TableName::from_str(&format!("{prefix}{name_str}"))?;
+            table_def.table_name = prefixed_name.clone();
+            schema.tables.insert(prefixed_name, table_def);
+        }
+    }
+    Ok(())
+}
+
+fn merge_schema_preserving_other_namespaces(
+    new_schema: &mut DatabaseSchema,
+    existing_schema: &DatabaseSchema,
+    namespace: &str,
+) {
+    let prefix = namespace_table_prefix(namespace);
+    for (table_name, table_def) in &existing_schema.tables {
+        let name_str = String::from(table_name.clone());
+        if !name_str.starts_with(&prefix) {
+            new_schema
+                .tables
+                .entry(table_name.clone())
+                .or_insert(table_def.clone());
+        }
+    }
+    if existing_schema.schema_validation {
+        new_schema.schema_validation = true;
+    }
+}
+
 impl<RT: Runtime> Application<RT> {
     #[fastrace::trace]
     pub async fn start_push(&self, config: &ProjectConfig) -> anyhow::Result<StartPushResult> {
@@ -480,27 +527,11 @@ impl<RT: Runtime> Application<RT> {
         // schema with the namespace, then merge with the existing active schema
         // to preserve tables from other namespaces.
         if let Some(ref namespace) = config.namespace {
-            use std::str::FromStr;
-
-            use common::types::TableName;
-
             if let Some(ref mut new_schema) = app_schema {
                 // Step 1: Prefix all tables that don't already have the namespace prefix.
                 // compose_namespaced_schemas handles additional_schemas, but the
                 // primary schema tables arrive unprefixed.
-                let prefix = format!("{}/", namespace);
-                let old_tables = std::mem::take(&mut new_schema.tables);
-                for (table_name, mut table_def) in old_tables {
-                    let name_str = String::from(table_name.clone());
-                    if name_str.starts_with(&prefix) {
-                        new_schema.tables.insert(table_name, table_def);
-                    } else {
-                        let prefixed_str = format!("{}{}", prefix, name_str);
-                        let prefixed_name = TableName::from_str(&prefixed_str)?;
-                        table_def.table_name = prefixed_name.clone();
-                        new_schema.tables.insert(prefixed_name, table_def);
-                    }
-                }
+                prefix_schema_tables_for_namespace(new_schema, namespace)?;
 
                 tracing::info!(
                     "Prefixed schema tables with namespace '{}': {} tables.",
@@ -516,18 +547,11 @@ impl<RT: Runtime> Application<RT> {
                     .await?;
                 drop(tx);
                 if let Some((_id, existing_schema)) = existing {
-                    for (table_name, table_def) in &existing_schema.tables {
-                        let name_str = String::from(table_name.clone());
-                        if name_str.starts_with(&prefix) == false {
-                            new_schema
-                                .tables
-                                .entry(table_name.clone())
-                                .or_insert(table_def.clone());
-                        }
-                    }
-                    if existing_schema.schema_validation {
-                        new_schema.schema_validation = true;
-                    }
+                    merge_schema_preserving_other_namespaces(
+                        new_schema,
+                        &existing_schema,
+                        namespace,
+                    );
                     tracing::info!(
                         "Merged existing tables from active schema (stripped '{}' prefix). Final \
                          schema has {} tables.",
@@ -1625,5 +1649,95 @@ impl From<ComponentSchemaStatus> for ComponentSchemaStatusJson {
             indexes_complete: value.indexes_complete,
             indexes_total: value.indexes_total,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use common::{
+        schemas::{
+            DatabaseSchema,
+            TableDefinition,
+        },
+        types::TableName,
+    };
+
+    use super::{
+        merge_schema_preserving_other_namespaces,
+        prefix_schema_tables_for_namespace,
+    };
+
+    fn table_definition(name: &str) -> TableDefinition {
+        let table_name: TableName = name.parse().unwrap();
+        TableDefinition {
+            table_name,
+            indexes: Default::default(),
+            staged_db_indexes: Default::default(),
+            text_indexes: Default::default(),
+            staged_text_indexes: Default::default(),
+            vector_indexes: Default::default(),
+            staged_vector_indexes: Default::default(),
+            document_type: None,
+        }
+    }
+
+    fn schema(names: &[&str], schema_validation: bool) -> DatabaseSchema {
+        let mut tables = BTreeMap::new();
+        for name in names {
+            let table_name: TableName = name.parse().unwrap();
+            tables.insert(table_name, table_definition(name));
+        }
+        DatabaseSchema {
+            tables,
+            schema_validation,
+        }
+    }
+
+    fn table_names(schema: &DatabaseSchema) -> Vec<String> {
+        schema.tables.keys().cloned().map(String::from).collect()
+    }
+
+    #[test]
+    fn prefix_schema_tables_for_namespace_updates_keys_and_definitions() {
+        let mut schema = schema(&["products", "Catalog/categories"], false);
+
+        prefix_schema_tables_for_namespace(&mut schema, "Catalog").unwrap();
+
+        assert_eq!(
+            table_names(&schema),
+            vec!["Catalog/categories", "Catalog/products"]
+        );
+        for (table_name, table_definition) in &schema.tables {
+            assert_eq!(table_name, &table_definition.table_name);
+        }
+    }
+
+    #[test]
+    fn merge_schema_preserves_other_namespaces_and_drops_stale_current_namespace() {
+        let existing = schema(
+            &[
+                "Catalog/old_products",
+                "Orders/orders",
+                "Orders/order_items",
+                "standalone",
+            ],
+            true,
+        );
+        let mut next = schema(&["Catalog/products"], false);
+
+        merge_schema_preserving_other_namespaces(&mut next, &existing, "Catalog");
+
+        assert_eq!(
+            table_names(&next),
+            vec![
+                "Catalog/products",
+                "Orders/order_items",
+                "Orders/orders",
+                "standalone",
+            ]
+        );
+        assert!(next.schema_validation);
     }
 }

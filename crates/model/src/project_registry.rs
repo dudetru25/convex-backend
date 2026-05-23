@@ -333,4 +333,16 @@ mod tests {
         assert_eq!(reg.project_id, "ecommerce-app");
         assert_eq!(reg.table_names, vec!["products".to_string()]);
     }
+
+    #[test]
+    fn test_corrupt_persistence_file_fails_to_load() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(REGISTRY_FILENAME), "{not-valid-json").unwrap();
+
+        let err = match ProjectRegistry::with_persistence(dir.path().to_path_buf()) {
+            Ok(_) => panic!("corrupt project registry should not load"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("parsing project registry"));
+    }
 }
